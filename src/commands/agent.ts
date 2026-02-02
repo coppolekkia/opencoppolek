@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("commands/agent");
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -366,7 +367,15 @@ export async function agentCommand(
       );
     }
   }
-  const agentCfg = cfg.agents?.defaults;
+  // Merge per-agent config (e.g. thinkingDefault) with global defaults.
+  // sessionAgentId / workspaceDir etc. are resolved later (line ~330).
+  const earlyAgentId = agentIdOverride ?? resolveAgentIdFromSessionKey(opts.sessionKey?.trim());
+  const perAgentConfig = resolveAgentConfig(cfg, earlyAgentId);
+  const agentCfg = perAgentConfig
+    ? Object.assign({}, cfg.agents?.defaults, {
+        thinkingDefault: perAgentConfig.thinkingDefault ?? cfg.agents?.defaults?.thinkingDefault,
+      })
+    : cfg.agents?.defaults;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
