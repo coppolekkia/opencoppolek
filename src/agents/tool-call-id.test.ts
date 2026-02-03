@@ -87,7 +87,14 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       const input = [
         {
           role: "assistant",
-          content: [{ type: "toolCall", id: "call|item:123", name: "read", arguments: {} }],
+          content: [
+            {
+              type: "toolCall",
+              id: "call|item:123",
+              name: "read",
+              arguments: {},
+            },
+          ],
         },
         {
           role: "toolResult",
@@ -207,8 +214,18 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         {
           role: "assistant",
           content: [
-            { type: "toolCall", id: "call_abc|item:123", name: "read", arguments: {} },
-            { type: "toolCall", id: "call_abc|item:456", name: "read", arguments: {} },
+            {
+              type: "toolCall",
+              id: "call_abc|item:123",
+              name: "read",
+              arguments: {},
+            },
+            {
+              type: "toolCall",
+              id: "call_abc|item:456",
+              name: "read",
+              arguments: {},
+            },
           ],
         },
         {
@@ -239,9 +256,16 @@ describe("normalizeToolCallArguments", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call1", name: "read", arguments: { path: "/tmp" } }],
+        content: [
+          {
+            type: "toolCall",
+            id: "call1",
+            name: "read",
+            arguments: { path: "/tmp" },
+          },
+        ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     expect(out).toBe(input);
@@ -260,13 +284,15 @@ describe("normalizeToolCallArguments", () => {
           },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     expect(out).not.toBe(input);
 
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const toolCall = assistant.content?.[0] as { arguments?: Record<string, unknown> };
+    const toolCall = assistant.content?.[0] as {
+      arguments?: Record<string, unknown>;
+    };
     expect(toolCall.arguments).toEqual({ command: "ls" });
     expect("timeout" in (toolCall.arguments ?? {})).toBe(false);
     expect("cwd" in (toolCall.arguments ?? {})).toBe(false);
@@ -287,13 +313,15 @@ describe("normalizeToolCallArguments", () => {
           },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     expect(out).not.toBe(input);
 
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const toolCall = assistant.content?.[0] as { arguments?: Record<string, unknown> };
+    const toolCall = assistant.content?.[0] as {
+      arguments?: Record<string, unknown>;
+    };
     // tags: null should be removed, leaving only message and recipient
     expect(toolCall.arguments).toEqual({ message: "hello", recipient: "Umut" });
     expect("tags" in (toolCall.arguments ?? {})).toBe(false);
@@ -303,15 +331,24 @@ describe("normalizeToolCallArguments", () => {
     const input = [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call1", name: "status", arguments: undefined }],
+        content: [
+          {
+            type: "toolCall",
+            id: "call1",
+            name: "status",
+            arguments: undefined,
+          },
+        ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     expect(out).not.toBe(input);
 
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const toolCall = assistant.content?.[0] as { arguments?: Record<string, unknown> };
+    const toolCall = assistant.content?.[0] as {
+      arguments?: Record<string, unknown>;
+    };
     expect(toolCall.arguments).toEqual({});
   });
 
@@ -321,13 +358,15 @@ describe("normalizeToolCallArguments", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call1", name: "status", arguments: null }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     expect(out).not.toBe(input);
 
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const toolCall = assistant.content?.[0] as { arguments?: Record<string, unknown> };
+    const toolCall = assistant.content?.[0] as {
+      arguments?: Record<string, unknown>;
+    };
     expect(toolCall.arguments).toEqual({});
   });
 
@@ -350,13 +389,15 @@ describe("normalizeToolCallArguments", () => {
           },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     expect(out).not.toBe(input);
 
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const toolCall = assistant.content?.[0] as { arguments?: Record<string, unknown> };
+    const toolCall = assistant.content?.[0] as {
+      arguments?: Record<string, unknown>;
+    };
     expect(toolCall.arguments).toEqual({
       settings: {
         enabled: true,
@@ -370,18 +411,32 @@ describe("normalizeToolCallArguments", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "call1", name: "read", arguments: { path: "/a", extra: null } },
-          { type: "toolCall", id: "call2", name: "write", arguments: { path: "/b" } },
+          {
+            type: "toolCall",
+            id: "call1",
+            name: "read",
+            arguments: { path: "/a", extra: null },
+          },
+          {
+            type: "toolCall",
+            id: "call2",
+            name: "write",
+            arguments: { path: "/b" },
+          },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     expect(out).not.toBe(input);
 
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const tc1 = assistant.content?.[0] as { arguments?: Record<string, unknown> };
-    const tc2 = assistant.content?.[1] as { arguments?: Record<string, unknown> };
+    const tc1 = assistant.content?.[0] as {
+      arguments?: Record<string, unknown>;
+    };
+    const tc2 = assistant.content?.[1] as {
+      arguments?: Record<string, unknown>;
+    };
     expect(tc1.arguments).toEqual({ path: "/a" });
     expect(tc2.arguments).toEqual({ path: "/b" });
   });
@@ -391,18 +446,32 @@ describe("normalizeToolCallArguments", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolUse", id: "call1", name: "read", arguments: { opt: null } },
-          { type: "functionCall", id: "call2", name: "write", arguments: { opt: null } },
+          {
+            type: "toolUse",
+            id: "call1",
+            name: "read",
+            arguments: { opt: null },
+          },
+          {
+            type: "functionCall",
+            id: "call2",
+            name: "write",
+            arguments: { opt: null },
+          },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     expect(out).not.toBe(input);
 
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const tc1 = assistant.content?.[0] as { arguments?: Record<string, unknown> };
-    const tc2 = assistant.content?.[1] as { arguments?: Record<string, unknown> };
+    const tc1 = assistant.content?.[0] as {
+      arguments?: Record<string, unknown>;
+    };
+    const tc2 = assistant.content?.[1] as {
+      arguments?: Record<string, unknown>;
+    };
     expect(tc1.arguments).toEqual({});
     expect(tc2.arguments).toEqual({});
   });
@@ -412,7 +481,14 @@ describe("normalizeToolCallArguments", () => {
       { role: "user", content: "hello" },
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call1", name: "read", arguments: { opt: null } }],
+        content: [
+          {
+            type: "toolCall",
+            id: "call1",
+            name: "read",
+            arguments: { opt: null },
+          },
+        ],
       },
       {
         role: "toolResult",
@@ -420,7 +496,7 @@ describe("normalizeToolCallArguments", () => {
         toolName: "read",
         content: [{ type: "text", text: "ok" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     expect(out[0]).toBe(input[0]);
@@ -433,14 +509,14 @@ describe("normalizeToolCallArguments", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call1", name: "status" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = normalizeToolCallArguments(input);
     // Should be unchanged - no arguments field added
     expect(out).toBe(input);
 
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-    const toolCall = assistant.content?.[0] as Record<string, unknown>;
+    const toolCall = assistant.content?.[0] as unknown as Record<string, unknown>;
     expect("arguments" in toolCall).toBe(false);
     expect("args" in toolCall).toBe(false);
   });
