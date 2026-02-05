@@ -93,7 +93,7 @@ export type HeartbeatSummary = {
   everyMs: number | null;
   prompt: string;
   target: string;
-  model?: string;
+  model?: string | AgentModelListConfig;
   ackMaxChars: number;
 };
 
