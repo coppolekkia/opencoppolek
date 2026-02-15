@@ -592,7 +592,7 @@ export async function runAgentTurnWithFallback(params: {
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
+        ? sanitizeUserFacingText(message, { errorContext: true, errorKind: "timeout" })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isContextOverflow

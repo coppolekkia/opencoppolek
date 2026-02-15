@@ -58,20 +58,22 @@ describe("sanitizeUserFacingText with errorKind", () => {
     expect(result).toContain("Message ordering conflict");
   });
 
-  it("falls through to regex for errorKind unknown", () => {
-    // Text contains billing keywords — regex fallback should fire
+  it("does not reclassify via regex for errorKind unknown", () => {
+    // Text contains billing keywords but errorKind says unknown — should NOT
+    // reclassify as billing. Formats as raw HTTP error instead.
     const result = sanitizeUserFacingText("Error: 402 payment required", {
       errorContext: true,
       errorKind: "unknown",
     });
-    expect(result).toContain("billing error");
+    expect(result).not.toContain("billing error");
   });
 
-  it("falls through to regex when errorKind is undefined", () => {
+  it("does not reclassify via regex when errorKind is undefined", () => {
+    // Same: no regex reclassification without structured errorKind.
     const result = sanitizeUserFacingText("Error: 402 payment required", {
       errorContext: true,
     });
-    expect(result).toContain("billing error");
+    expect(result).not.toContain("billing error");
   });
 
   it("prevents false positive: timeout errorKind with billing keywords returns timeout, not billing", () => {

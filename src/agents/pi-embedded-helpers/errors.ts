@@ -581,9 +581,9 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
-    // Structured errorKind fast-path: skip regex heuristics when the caller already
-    // knows the error classification, preventing false positives (e.g. a tool
-    // returning HTTP 402 being misclassified as an LLM billing error).
+    // Structured errorKind classification: the caller provides the error kind,
+    // preventing false positives (e.g. a tool returning HTTP 402 being
+    // misclassified as an LLM billing error).
     switch (opts?.errorKind) {
       case "billing":
         return BILLING_ERROR_USER_MESSAGE;
@@ -604,39 +604,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
           "Message ordering conflict - please try again. " +
           "If this persists, use /new to start a fresh session."
         );
-      // "unknown" and undefined fall through to existing regex logic
     }
 
-    if (/incorrect role information|roles must alternate/i.test(trimmed)) {
-      return (
-        "Message ordering conflict - please try again. " +
-        "If this persists, use /new to start a fresh session."
-      );
-    }
-
-    if (shouldRewriteContextOverflowText(trimmed)) {
-      return (
-        "Context overflow: prompt too large for the model. " +
-        "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-      );
-    }
-
-    if (isBillingErrorMessage(trimmed)) {
-      return BILLING_ERROR_USER_MESSAGE;
-    }
-
+    // For unclassified errors, format raw API payloads but don't reclassify via regex.
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
-      return formatRawAssistantErrorForUi(trimmed);
-    }
-
-    if (ERROR_PREFIX_RE.test(trimmed)) {
-      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
-      if (prefixedCopy) {
-        return prefixedCopy;
-      }
-      if (isTimeoutErrorMessage(trimmed)) {
-        return "LLM request timed out.";
-      }
       return formatRawAssistantErrorForUi(trimmed);
     }
   }
@@ -802,7 +773,19 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
     lower.includes("conversation id not found")
   );
 }
-
+export function deriveErrorKind(rawErrorMessage: string): ErrorKind {
+  if (isCompactionFailureError(rawErrorMessage)) {
+    return "compaction_failure";
+  }
+  if (isLikelyContextOverflowError(rawErrorMessage)) {
+    return "context_overflow";
+  }
+  const failoverReason = classifyFailoverReason(rawErrorMessage);
+  if (failoverReason && failoverReason !== "unknown") {
+    return failoverReason;
+  }
+  return "unknown";
+}
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
