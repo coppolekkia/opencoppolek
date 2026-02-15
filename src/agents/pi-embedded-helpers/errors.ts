@@ -12,7 +12,7 @@ import {
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
 } from "./failover-matches.js";
-import type { FailoverReason } from "./types.js";
+import type { ErrorKind, FailoverReason } from "./types.js";
 
 export {
   isAuthErrorMessage,
@@ -567,7 +567,7 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
+export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean; errorKind?: ErrorKind }): string {
   if (!text) {
     return text;
   }
@@ -581,6 +581,32 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
+    // Structured errorKind fast-path: skip regex heuristics when the caller already
+    // knows the error classification, preventing false positives (e.g. a tool
+    // returning HTTP 402 being misclassified as an LLM billing error).
+    switch (opts?.errorKind) {
+      case "billing":
+        return BILLING_ERROR_USER_MESSAGE;
+      case "rate_limit":
+        return RATE_LIMIT_ERROR_USER_MESSAGE;
+      case "overloaded":
+        return OVERLOADED_ERROR_USER_MESSAGE;
+      case "timeout":
+        return "LLM request timed out.";
+      case "context_overflow":
+      case "compaction_failure":
+        return (
+          "Context overflow: prompt too large for the model. " +
+          "Try /reset (or /new) to start a fresh session, or use a larger-context model."
+        );
+      case "role_ordering":
+        return (
+          "Message ordering conflict - please try again. " +
+          "If this persists, use /new to start a fresh session."
+        );
+      // "unknown" and undefined fall through to existing regex logic
+    }
+
     if (/incorrect role information|roles must alternate/i.test(trimmed)) {
       return (
         "Message ordering conflict - please try again. " +
