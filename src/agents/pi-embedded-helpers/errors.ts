@@ -780,6 +780,13 @@ export function deriveErrorKind(rawErrorMessage: string): ErrorKind {
   if (isLikelyContextOverflowError(rawErrorMessage)) {
     return "context_overflow";
   }
+  // Check overloaded before classifyFailoverReason, which conflates it with rate_limit.
+  if (isOverloadedErrorMessage(rawErrorMessage)) {
+    return "overloaded";
+  }
+  if (isImageDimensionErrorMessage(rawErrorMessage) || isImageSizeError(rawErrorMessage)) {
+    return "image_size";
+  }
   const failoverReason = classifyFailoverReason(rawErrorMessage);
   if (failoverReason && failoverReason !== "unknown") {
     return failoverReason;

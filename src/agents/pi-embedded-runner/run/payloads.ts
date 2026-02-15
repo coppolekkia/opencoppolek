@@ -6,13 +6,10 @@ import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
-  classifyFailoverReason,
   deriveErrorKind,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
-  isCompactionFailureError,
-  isLikelyContextOverflowError,
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
