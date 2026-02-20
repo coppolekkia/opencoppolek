@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { SubagentEndReason } from "../context-engine/types.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -10,6 +9,7 @@ import {
 } from "../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../context-engine/init.js";
 import { resolveContextEngine } from "../context-engine/registry.js";
+import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
