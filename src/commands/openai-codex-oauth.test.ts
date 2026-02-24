@@ -26,8 +26,8 @@ import { extractEmailFromCodexToken, loginOpenAICodexOAuth } from "./openai-code
 
 /** Build a minimal JWT with the given payload (no signature verification needed). */
 function buildJwt(payload: Record<string, unknown>): string {
-  const header = btoa(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const body = btoa(JSON.stringify(payload));
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${header}.${body}.fake-signature`;
 }
 
