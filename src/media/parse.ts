@@ -46,6 +46,12 @@ function isValidMedia(
   if (!opts?.allowSpaces && /\s/.test(candidate)) {
     return false;
   }
+  // Reject candidates containing JSON object syntax. LLMs sometimes echo tool
+  // results as text, producing paths concatenated with JSON like
+  // `/tmp/output.mp3{"results":[...]}`. Real file paths never contain braces.
+  if (candidate.includes("{") || candidate.includes("}")) {
+    return false;
+  }
   if (/^https?:\/\//i.test(candidate)) {
     return true;
   }

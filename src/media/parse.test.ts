@@ -50,4 +50,18 @@ describe("splitMediaFromOutput", () => {
     const result = splitMediaFromOutput("MEDIA:screenshot");
     expect(result.mediaUrls).toBeUndefined();
   });
+
+  it("rejects paths containing JSON object syntax from echoed tool results", () => {
+    // LLMs like Gemini Flash can echo tool results as text, producing lines like
+    // MEDIA: /path.mp3{"results":[...]} which should not be treated as media paths.
+    const jsonCases = [
+      'MEDIA: /tmp/tts/output.mp3{"results":[{"source":"MEMORY.md"}]}',
+      'MEDIA: /data/openclaw/context-{"query":"test","results":[]}',
+      'MEDIA: /tmp/audio.opus{"provider":"gemini","usage":{"tokens":5000}}',
+    ];
+    for (const input of jsonCases) {
+      const result = splitMediaFromOutput(input);
+      expect(result.mediaUrls).toBeUndefined();
+    }
+  });
 });
