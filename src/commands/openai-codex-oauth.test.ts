@@ -305,4 +305,13 @@ describe("extractEmailFromCodexToken", () => {
     expect(extractEmailFromCodexToken(token2)).toBe("user2@agency.com");
     expect(extractEmailFromCodexToken(token1)).not.toBe(extractEmailFromCodexToken(token2));
   });
+
+  it("handles unpadded base64url-encoded JWT payload", () => {
+    // Build a token with base64url encoding (no padding, url-safe chars)
+    const payload = { "https://api.openai.com/profile": { email: "unpadded@test.com" } };
+    const header = Buffer.from(JSON.stringify({ alg: "RS256" })).toString("base64url");
+    const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const token = `${header}.${body}.sig`;
+    expect(extractEmailFromCodexToken(token)).toBe("unpadded@test.com");
+  });
 });

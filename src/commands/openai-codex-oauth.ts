@@ -24,9 +24,8 @@ export function extractEmailFromCodexToken(accessToken: string): string | undefi
       return undefined;
     }
     const raw = parts[1] ?? "";
-    // base64url → standard base64 for atob compatibility
-    const base64 = raw.replace(/-/g, "+").replace(/_/g, "/");
-    const payload = JSON.parse(atob(base64)) as Record<string, unknown>;
+    // Node.js Buffer handles base64url natively (no manual padding needed).
+    const payload = JSON.parse(Buffer.from(raw, "base64url").toString()) as Record<string, unknown>;
 
     // OpenAI-specific namespaced claim (preferred)
     const profile = payload[OPENAI_PROFILE_CLAIM];
