@@ -60,7 +60,10 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
       key === "modelId" ||
       key === "outputFormat" ||
       key === "apiKey" ||
-      key === "baseUrl"
+      key === "baseUrl" ||
+      key === "model" ||
+      key === "voice" ||
+      key === "languageCode"
     ) {
       const normalized = normalizeString(raw);
       if (normalized) {
@@ -171,12 +174,42 @@ function legacyTalkFieldsFromProviderConfig(
   return legacy;
 }
 
+/**
+ * Merge typed provider shortcuts (`talk.elevenlabs`, `talk.openai`) into the
+ * `providers` record so downstream normalization treats them uniformly.
+ * Shortcut fields take priority over existing entries in `providers`.
+ */
+function mergeTypedProviderShortcuts(source: Record<string, unknown>): Record<string, unknown> {
+  const TYPED_PROVIDERS = ["elevenlabs", "openai"] as const;
+  let needsMerge = false;
+  for (const id of TYPED_PROVIDERS) {
+    if (isPlainObject(source[id])) {
+      needsMerge = true;
+      break;
+    }
+  }
+  if (!needsMerge) {
+    return source;
+  }
+
+  const providers = isPlainObject(source.providers) ? { ...source.providers } : {};
+
+  for (const id of TYPED_PROVIDERS) {
+    if (isPlainObject(source[id])) {
+      const existing = isPlainObject(providers[id]) ? providers[id] : {};
+      providers[id] = { ...existing, ...source[id] };
+    }
+  }
+
+  return { ...source, providers };
+}
+
 export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
 
-  const source = value as Record<string, unknown>;
+  const source = mergeTypedProviderShortcuts(value as Record<string, unknown>);
   const hasNormalizedShape = typeof source.provider === "string" || isPlainObject(source.providers);
   const normalized: TalkConfig = {};
   const legacy = normalizedLegacyTalkFields(source);
