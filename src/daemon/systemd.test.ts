@@ -40,6 +40,19 @@ describe("systemd availability", () => {
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
   });
+
+  it("returns true when systemctl exits non-zero without a known unavailable indicator", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      const err = new Error("exit status 1") as Error & {
+        stderr?: string;
+        code?: number;
+      };
+      err.stderr = "";
+      err.code = 1;
+      cb(err, "Failed to get D-Bus connection: No such unit", "");
+    });
+    await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
