@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
+import type {
+  SessionsUsageResult,
+  CostUsageSummary,
+  ProviderUsageSummary,
+  SessionUsageTimeSeries,
+} from "../types.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
 
 export type UsageState = {
@@ -8,6 +13,8 @@ export type UsageState = {
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
+  usageProviderSummary: ProviderUsageSummary | null;
+  usageProviderSummaryError: string | null;
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
@@ -199,6 +206,7 @@ export async function loadUsage(
   }
   state.usageLoading = true;
   state.usageError = null;
+  state.usageProviderSummaryError = null;
   try {
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
@@ -232,10 +240,22 @@ export async function loadUsage(
       }
     };
 
+    const loadProviderQuota = async () => {
+      try {
+        const quotaRes = await client.request("usage.status");
+        state.usageProviderSummary = quotaRes as ProviderUsageSummary;
+        state.usageProviderSummaryError = null;
+      } catch (err) {
+        state.usageProviderSummary = null;
+        state.usageProviderSummaryError = toErrorMessage(err);
+      }
+    };
+
     const includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
     try {
       const [sessionsRes, costRes] = await runUsageRequests(includeDateInterpretation);
       applyUsageResults(sessionsRes, costRes);
+      await loadProviderQuota();
     } catch (err) {
       if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
         // Older gateways reject `mode`/`utcOffset` in `sessions.usage`.
@@ -243,6 +263,7 @@ export async function loadUsage(
         rememberLegacyDateInterpretation(state);
         const [sessionsRes, costRes] = await runUsageRequests(false);
         applyUsageResults(sessionsRes, costRes);
+        await loadProviderQuota();
       } else {
         throw err;
       }

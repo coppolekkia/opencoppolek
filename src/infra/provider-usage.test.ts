@@ -118,6 +118,7 @@ describe("provider usage formatting", () => {
       ],
     };
     const lines = formatUsageReportLines(summary, { now });
+    expect(lines.join("\n")).toContain("20% used");
     expect(lines.join("\n")).toContain("resets 1m");
   });
 });
@@ -159,6 +160,20 @@ describe("provider usage loading", () => {
           },
         });
       }
+      if (url.includes("www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages")) {
+        return makeResponse(200, {
+          usages: [
+            {
+              detail: {
+                limit: "1000",
+                used: "300",
+                remaining: "700",
+                resetTime: "2026-01-07T04:00:00Z",
+              },
+            },
+          ],
+        });
+      }
       return makeResponse(404, "not found");
     });
 
@@ -166,17 +181,22 @@ describe("provider usage loading", () => {
       [
         { provider: "anthropic", token: "token-1" },
         { provider: "minimax", token: "token-1b" },
+        { provider: "moonshot", token: "token-kimi" },
         { provider: "zai", token: "token-2" },
       ],
       mockFetch,
     );
 
-    expect(summary.providers).toHaveLength(3);
+    expect(summary.providers).toHaveLength(4);
     const claude = summary.providers.find((p) => p.provider === "anthropic");
     const minimax = summary.providers.find((p) => p.provider === "minimax");
+    const kimi = summary.providers.find((p) => p.provider === "moonshot");
     const zai = summary.providers.find((p) => p.provider === "zai");
     expect(claude?.windows[0]?.label).toBe("5h");
     expect(minimax?.windows[0]?.usedPercent).toBe(75);
+    expect(kimi?.displayName).toBe("Kimi");
+    expect(kimi?.windows[0]?.label).toBe("Cycle");
+    expect(kimi?.windows[0]?.usedPercent).toBe(30);
     expect(zai?.plan).toBe("Pro");
     expect(mockFetch).toHaveBeenCalled();
   });

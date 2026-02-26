@@ -8,7 +8,7 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
-import { getCustomProviderApiKey } from "../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
@@ -85,6 +85,18 @@ function resolveMinimaxApiKey(): string | undefined {
   });
 }
 
+function resolveMoonshotApiKey(): string | undefined {
+  return resolveProviderApiKeyFromConfigAndStore({
+    providerId: "moonshot",
+    envDirect: [
+      process.env.KIMI_BALANCE_API_KEY,
+      process.env.MOONSHOT_API_KEY,
+      process.env.KIMI_API_KEY,
+      process.env.KIMICODE_API_KEY,
+    ],
+  });
+}
+
 function resolveXiaomiApiKey(): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
     providerId: "xiaomi",
@@ -99,6 +111,11 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
   const envDirect = params.envDirect.map(normalizeSecretInput).find(Boolean);
   if (envDirect) {
     return envDirect;
+  }
+
+  const envResolved = resolveEnvApiKey(params.providerId);
+  if (envResolved?.apiKey) {
+    return envResolved.apiKey;
   }
 
   const cfg = loadConfig();
@@ -230,6 +247,13 @@ export async function resolveProviderAuths(params: {
     }
     if (provider === "minimax") {
       const apiKey = resolveMinimaxApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+    if (provider === "moonshot") {
+      const apiKey = resolveMoonshotApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
