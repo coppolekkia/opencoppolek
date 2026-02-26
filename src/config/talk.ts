@@ -55,7 +55,13 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
       }
       continue;
     }
-    if (key === "voiceId" || key === "modelId" || key === "outputFormat" || key === "apiKey") {
+    if (
+      key === "voiceId" ||
+      key === "modelId" ||
+      key === "outputFormat" ||
+      key === "apiKey" ||
+      key === "baseUrl"
+    ) {
       const normalized = normalizeString(raw);
       if (normalized) {
         provider[key] = normalized;

@@ -627,6 +627,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.providers.*.modelId": "Talk Provider Model ID",
   "talk.providers.*.outputFormat": "Talk Provider Output Format",
   "talk.providers.*.apiKey": "Talk Provider API Key",
+  "talk.providers.*.baseUrl": "Talk Provider Base URL",
   "talk.apiKey": "Talk API Key",
   channels: "Channels",
   "channels.defaults": "Channel Defaults",

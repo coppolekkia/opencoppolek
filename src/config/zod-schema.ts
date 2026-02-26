@@ -486,6 +486,7 @@ export const OpenClawSchema = z
                 modelId: z.string().optional(),
                 outputFormat: z.string().optional(),
                 apiKey: z.string().optional().register(sensitive),
+                baseUrl: z.string().optional(),
               })
               .catchall(z.unknown()),
           )

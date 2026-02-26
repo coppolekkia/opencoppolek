@@ -57,6 +57,8 @@ export type TalkProviderConfig = {
   outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: string;
+  /** Custom base URL for the provider's TTS API (e.g. a self-hosted server). */
+  baseUrl?: string;
   /** Provider-specific extensions. */
   [key: string]: unknown;
 };
