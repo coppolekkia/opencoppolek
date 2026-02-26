@@ -7,6 +7,7 @@ import {
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
   normalizeIpAddress,
+  parseLooseIpAddress,
 } from "../shared/net/ip.js";
 
 /**
@@ -347,17 +348,59 @@ export function isLocalishHost(hostHeader?: string): boolean {
   return isLoopbackHost(host) || host.endsWith(".ts.net");
 }
 
+export type IsSecureWebSocketUrlOptions = {
+  /**
+   * DANGEROUS: When true, allows plaintext ws:// connections to non-loopback
+   * internal addresses (RFC1918 private IPs: 10.x.x.x, 172.16-31.x.x, 192.168.x.x,
+   * and CGNAT 100.64/10). This enables layered security where
+   * an external TLS gateway terminates encryption and forwards plaintext to
+   * internal OpenClaw gateways. Default: false.
+   */
+  dangerouslyAllowPlaintextInternal?: boolean;
+};
+
+/**
+ * Check if a hostname is a private/internal address that can safely use
+ * plaintext ws:// when dangerouslyAllowPlaintextInternal is enabled.
+ *
+ * Private/internal addresses include:
+ * - RFC1918 private IPs: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+ * - CGNAT: 100.64.x.x - 100.127.x.x
+ * - Link-local: 169.254.x.x
+ */
+function isPrivateOrInternalHost(hostname: string): boolean {
+  // Handle bracketed IPv6 addresses
+  const unbracket = hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname;
+
+  // Check if it's a valid IP address (IPv4 or IPv6)
+  const parsed = parseLooseIpAddress(unbracket);
+  if (!parsed) {
+    return false;
+  }
+
+  // Use the shared utility to check for private/loopback/linkLocal/carrierGradeNat
+  return isPrivateOrLoopbackIpAddress(unbracket);
+}
+
 /**
  * Security check for WebSocket URLs (CWE-319: Cleartext Transmission of Sensitive Information).
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is only secure for loopback addresses (localhost, 127.x.x.x, ::1)
+ * - ws:// is only secure for:
+ *   - loopback addresses (localhost, 127.x.x.x, ::1) - always allowed
+ *   - private/internal addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x, 100.64/10) -
+ *     only allowed when dangerouslyAllowPlaintextInternal is true
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
  */
-export function isSecureWebSocketUrl(url: string): boolean {
+export function isSecureWebSocketUrl(
+  url: string,
+  opts?: IsSecureWebSocketUrlOptions,
+): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -373,6 +416,16 @@ export function isSecureWebSocketUrl(url: string): boolean {
     return false;
   }
 
-  // ws:// is only secure for loopback addresses
-  return isLoopbackHost(parsed.hostname);
+  // ws:// is always secure for loopback addresses
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+
+  // When dangerouslyAllowPlaintextInternal is enabled, also allow ws:// to
+  // private/internal addresses (RFC1918, CGNAT, link-local)
+  if (opts?.dangerouslyAllowPlaintextInternal === true) {
+    return isPrivateOrInternalHost(parsed.hostname);
+  }
+
+  return false;
 }
