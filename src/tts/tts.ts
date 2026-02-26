@@ -46,6 +46,7 @@ import {
   summarizeText,
 } from "./tts-core.js";
 export {
+  minimaxTTS,
   MINIMAX_TTS_MODELS,
   MINIMAX_TTS_VOICES,
   OPENAI_TTS_MODELS,
