@@ -784,7 +784,10 @@ export async function textToSpeech(params: {
             : provider === "minimax"
               ? "mp3"
               : output.elevenlabs,
-        voiceCompatible: provider === "minimax" ? false : output.voiceCompatible,
+        voiceCompatible:
+          provider === "minimax"
+            ? isVoiceCompatibleAudio({ fileName: audioPath })
+            : output.voiceCompatible,
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
