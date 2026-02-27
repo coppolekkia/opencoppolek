@@ -32,9 +32,9 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 ## Sponsors
 
-| OpenAI                                                            | Blacksmith                                                                   |
-| ----------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| [![OpenAI](docs/assets/sponsors/openai.svg)](https://openai.com/) | [![Blacksmith](docs/assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) |
+| OpenAI                                                                                                                                                                                                                                                                                                           | Blacksmith                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <a href="https://openai.com/"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/sponsors/openai.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/sponsors/openai-dark.svg"><img alt="OpenAI" src="docs/assets/sponsors/openai-dark.svg" width="120"></picture></a> | <a href="https://blacksmith.sh/"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/sponsors/blacksmith.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/sponsors/blacksmith-dark.svg"><img alt="Blacksmith" src="docs/assets/sponsors/blacksmith-dark.svg" width="120"></picture></a> |
 
 **Subscriptions (OAuth):**
 
