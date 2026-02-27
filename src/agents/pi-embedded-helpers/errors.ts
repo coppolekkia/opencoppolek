@@ -776,16 +776,18 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
     lower.includes("conversation id not found")
   );
 }
+
+// Classifies a raw error message into a user-facing ErrorKind.
+// Intentionally decoupled from classifyFailoverReason (which collapses
+// transient 5xx into "timeout" for retry logic). User-facing classification
+// needs accurate diagnostics, so transient HTTP errors stay "unknown" and
+// get the raw-error formatting path instead of a misleading "timed out".
 export function deriveErrorKind(rawErrorMessage: string): ErrorKind {
   if (isCompactionFailureError(rawErrorMessage)) {
     return "compaction_failure";
   }
   if (isLikelyContextOverflowError(rawErrorMessage)) {
     return "context_overflow";
-  }
-  // Check overloaded before classifyFailoverReason, which conflates it with rate_limit.
-  if (isOverloadedErrorMessage(rawErrorMessage)) {
-    return "overloaded";
   }
   if (
     /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
@@ -794,25 +796,23 @@ export function deriveErrorKind(rawErrorMessage: string): ErrorKind {
   ) {
     return "role_ordering";
   }
+  if (isOverloadedErrorMessage(rawErrorMessage)) {
+    return "overloaded";
+  }
   if (isImageDimensionErrorMessage(rawErrorMessage) || isImageSizeError(rawErrorMessage)) {
     return "image_size";
   }
-  const failoverReason = classifyFailoverReason(rawErrorMessage);
-  const errorKindValues: ReadonlySet<string> = new Set<ErrorKind>([
-    "billing",
-    "rate_limit",
-    "timeout",
-    "auth",
-    "context_overflow",
-    "overloaded",
-    "format",
-    "compaction_failure",
-    "role_ordering",
-    "image_size",
-    "unknown",
-  ]);
-  if (failoverReason && failoverReason !== "unknown" && errorKindValues.has(failoverReason)) {
-    return failoverReason as ErrorKind;
+  if (isTimeoutErrorMessage(rawErrorMessage)) {
+    return "timeout";
+  }
+  if (isRateLimitErrorMessage(rawErrorMessage)) {
+    return "rate_limit";
+  }
+  if (isBillingErrorMessage(rawErrorMessage)) {
+    return "billing";
+  }
+  if (isAuthErrorMessage(rawErrorMessage)) {
+    return "auth";
   }
   return "unknown";
 }

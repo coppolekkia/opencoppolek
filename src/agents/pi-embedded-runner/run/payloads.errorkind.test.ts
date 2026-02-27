@@ -104,6 +104,22 @@ describe("buildEmbeddedRunPayloads errorKind derivation", () => {
     expect(errorPayload?.errorKind).toBe("role_ordering");
   });
 
+  it("does not classify transient 5xx errors as timeout", () => {
+    const lastAssistant = makeAssistant({ errorMessage: "500 Internal Server Error" });
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: [],
+      lastAssistant,
+      sessionKey: "session:test",
+      inlineToolResultsAllowed: false,
+      verboseLevel: "off",
+      reasoningLevel: "off",
+    });
+
+    const errorPayload = payloads.find((p) => p.isError);
+    expect(errorPayload?.errorKind).toBe("unknown");
+  });
+
   it("does not set errorKind when assistant did not error", () => {
     const lastAssistant = makeAssistant({
       stopReason: "stop",
