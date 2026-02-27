@@ -185,7 +185,7 @@ export function attachGatewayWsConnectionHandler(params: {
       }
     };
 
-    socket.once("error", (err) => {
+    socket.on("error", (err) => {
       logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
       close();
     });
