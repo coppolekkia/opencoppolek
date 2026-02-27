@@ -88,6 +88,22 @@ describe("buildEmbeddedRunPayloads errorKind derivation", () => {
     expect(errorPayload?.errorKind).toBe("context_overflow");
   });
 
+  it("derives errorKind role_ordering from role ordering error", () => {
+    const lastAssistant = makeAssistant({ errorMessage: "400 Incorrect role information" });
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: [],
+      lastAssistant,
+      sessionKey: "session:test",
+      inlineToolResultsAllowed: false,
+      verboseLevel: "off",
+      reasoningLevel: "off",
+    });
+
+    const errorPayload = payloads.find((p) => p.isError);
+    expect(errorPayload?.errorKind).toBe("role_ordering");
+  });
+
   it("does not set errorKind when assistant did not error", () => {
     const lastAssistant = makeAssistant({
       stopReason: "stop",

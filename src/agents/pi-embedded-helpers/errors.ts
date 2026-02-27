@@ -787,6 +787,13 @@ export function deriveErrorKind(rawErrorMessage: string): ErrorKind {
   if (isOverloadedErrorMessage(rawErrorMessage)) {
     return "overloaded";
   }
+  if (
+    /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
+      rawErrorMessage,
+    )
+  ) {
+    return "role_ordering";
+  }
   if (isImageDimensionErrorMessage(rawErrorMessage) || isImageSizeError(rawErrorMessage)) {
     return "image_size";
   }
