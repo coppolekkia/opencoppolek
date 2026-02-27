@@ -65,9 +65,14 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
-  it("rewrites billing error-shaped text with errorContext", () => {
+  it("rewrites billing error-shaped text only when errorKind is billing", () => {
     const text = "billing: please upgrade your plan";
-    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain("billing error");
+    // Without errorKind, regex-based reclassification is intentionally disabled.
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toBe(text);
+    // With errorKind: "billing", the structured path rewrites to a user-friendly message.
+    expect(sanitizeUserFacingText(text, { errorContext: true, errorKind: "billing" })).toContain(
+      "billing error",
+    );
   });
 
   it("sanitizes raw API error payloads", () => {
