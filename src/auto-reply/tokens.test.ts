@@ -21,9 +21,16 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText(text)).toBe(false);
   });
 
-  it("returns false for substantive text starting with token", () => {
+  it("returns false for substantive text starting with token on same line", () => {
     const text = "NO_REPLY but here is more content";
     expect(isSilentReplyText(text)).toBe(false);
+  });
+
+  it("returns true for token followed by trailing text on new lines (#28874)", () => {
+    expect(isSilentReplyText("NO_REPLY\n\nWhat's my favorite color?")).toBe(true);
+    expect(isSilentReplyText("NO_REPLY\nsome command")).toBe(true);
+    expect(isSilentReplyText("  NO_REPLY\n\nclear everything")).toBe(true);
+    expect(isSilentReplyText("NO_REPLY\n\n\nDelete Test User from contacts")).toBe(true);
   });
 
   it("returns false for token embedded in text", () => {

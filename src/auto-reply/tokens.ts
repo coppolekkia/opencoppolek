@@ -11,10 +11,11 @@ export function isSilentReplyText(
     return false;
   }
   const escaped = escapeRegExp(token);
-  // Match only the exact silent token with optional surrounding whitespace.
-  // This prevents
-  // substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return new RegExp(`^\\s*${escaped}\\s*$`).test(text);
+  // Match the silent token at the start (with optional leading whitespace) followed by
+  // either end-of-string or a newline. This suppresses the entire message when the model
+  // outputs e.g. "NO_REPLY\n\nsome trailing text" (#28874) while still allowing
+  // substantive replies that end with NO_REPLY to pass through (#19537).
+  return new RegExp(`^\\s*${escaped}\\s*$|^\\s*${escaped}\\s*\\n`).test(text);
 }
 
 export function isSilentReplyPrefixText(
