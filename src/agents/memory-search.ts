@@ -42,6 +42,7 @@ export type ResolvedMemorySearchConfig = {
   chunking: {
     tokens: number;
     overlap: number;
+    strategy: "token" | "section";
   };
   sync: {
     onSessionStart: boolean;
@@ -210,6 +211,7 @@ function mergeConfig(
   const chunking = {
     tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
     overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
+    strategy: overrides?.chunking?.strategy ?? defaults?.chunking?.strategy ?? "token",
   };
   const sync = {
     onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
@@ -309,7 +311,7 @@ function mergeConfig(
     model,
     local,
     store,
-    chunking: { tokens: Math.max(1, chunking.tokens), overlap },
+    chunking: { tokens: Math.max(1, chunking.tokens), overlap, strategy: chunking.strategy },
     sync: {
       ...sync,
       sessions: {

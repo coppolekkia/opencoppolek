@@ -50,6 +50,7 @@ type MemoryIndexMeta = {
   sources?: MemorySource[];
   chunkTokens: number;
   chunkOverlap: number;
+  chunkStrategy?: "token" | "section";
   vectorDims?: number;
 };
 
@@ -865,6 +866,7 @@ export abstract class MemoryManagerSyncOps {
       this.metaSourcesDiffer(meta, configuredSources) ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
+      (meta.chunkStrategy ?? "token") !== this.settings.chunking.strategy ||
       (vectorReady && !meta?.vectorDims);
     try {
       if (needsFullReindex) {
@@ -1068,6 +1070,7 @@ export abstract class MemoryManagerSyncOps {
         sources: this.resolveConfiguredSourcesForMeta(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
+        chunkStrategy: this.settings.chunking.strategy,
       };
       if (!nextMeta) {
         throw new Error("Failed to compute memory index metadata for reindexing.");
@@ -1139,6 +1142,7 @@ export abstract class MemoryManagerSyncOps {
       sources: this.resolveConfiguredSourcesForMeta(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
+      chunkStrategy: this.settings.chunking.strategy,
     };
     if (this.vector.available && this.vector.dims) {
       nextMeta.vectorDims = this.vector.dims;
