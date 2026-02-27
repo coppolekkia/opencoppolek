@@ -89,7 +89,7 @@ describe("buildEmbeddedRunPayloads errorKind derivation", () => {
 
   it("does not set errorKind when assistant did not error", () => {
     const lastAssistant = makeAssistant({
-      stopReason: "completed",
+      stopReason: "stop",
       errorMessage: undefined,
       content: [{ type: "text", text: "Hello" }],
     });

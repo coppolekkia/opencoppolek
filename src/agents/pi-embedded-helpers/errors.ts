@@ -788,8 +788,12 @@ export function deriveErrorKind(rawErrorMessage: string): ErrorKind {
     return "image_size";
   }
   const failoverReason = classifyFailoverReason(rawErrorMessage);
-  if (failoverReason && failoverReason !== "unknown") {
-    return failoverReason;
+  const errorKindValues: ReadonlySet<string> = new Set<ErrorKind>([
+    "billing", "rate_limit", "timeout", "auth", "context_overflow",
+    "overloaded", "format", "compaction_failure", "role_ordering", "image_size", "unknown",
+  ]);
+  if (failoverReason && failoverReason !== "unknown" && errorKindValues.has(failoverReason)) {
+    return failoverReason as ErrorKind;
   }
   return "unknown";
 }
