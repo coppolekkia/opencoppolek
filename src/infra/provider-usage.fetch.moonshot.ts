@@ -1,3 +1,5 @@
+import { loadConfig } from "../config/config.js";
+import { collectConfigRuntimeEnvVars } from "../config/env-vars.js";
 import { isRecord } from "../utils.js";
 import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
@@ -82,6 +84,18 @@ type MoonshotError = {
   message?: string;
   msg?: string;
 };
+
+function resolveMoonshotRuntimeEnvVar(name: string): string | undefined {
+  const direct = process.env[name]?.trim();
+  if (direct) {
+    return direct;
+  }
+  const fromConfig = collectConfigRuntimeEnvVars(loadConfig())[name]?.trim();
+  if (fromConfig) {
+    return fromConfig;
+  }
+  return undefined;
+}
 
 function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
   for (const key of keys) {
@@ -234,8 +248,9 @@ async function fetchKimiGatewayUsageRaw(
   fetchFn: typeof fetch,
 ): Promise<{ endpoint: string; response: Response }> {
   const kimiBearer =
-    process.env.KIMI_BILLING_BEARER_TOKEN?.trim() ||
-    process.env.KIMI_WEB_AUTH_TOKEN?.trim() ||
+    resolveMoonshotRuntimeEnvVar("KIMI_BILLING_BEARER_TOKEN") ||
+    resolveMoonshotRuntimeEnvVar("KIMI_WEB_AUTH_TOKEN") ||
+    resolveMoonshotRuntimeEnvVar("KIMI_BALANCE_API_KEY") ||
     apiKey;
   const response = await fetchJson(
     KIMI_BILLING_ENDPOINT,
@@ -258,40 +273,57 @@ async function fetchMoonshotUsageRaw(
   apiKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
-): Promise<{ endpoint: string; response: Response }> {
+): Promise<{
+  endpoint: string;
+  response: Response;
+  errors: Array<{ endpoint: string; error: unknown }>;
+}> {
   const attempts: Array<{ endpoint: string; response: Response }> = [];
+  const errors: Array<{ endpoint: string; error: unknown }> = [];
 
   // First try Kimi billing API endpoint.
-  const kimi = await fetchKimiGatewayUsageRaw(apiKey, timeoutMs, fetchFn);
-  attempts.push(kimi);
-  if (kimi.response.ok) {
-    return kimi;
+  try {
+    const kimi = await fetchKimiGatewayUsageRaw(apiKey, timeoutMs, fetchFn);
+    attempts.push(kimi);
+    if (kimi.response.ok) {
+      return { ...kimi, errors };
+    }
+  } catch (error) {
+    errors.push({ endpoint: KIMI_BILLING_ENDPOINT, error });
   }
 
   // Then fallback to Moonshot balance endpoints.
   for (const endpoint of MOONSHOT_USAGE_ENDPOINTS) {
-    const response = await fetchJson(
-      endpoint,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          Accept: "application/json",
+    try {
+      const response = await fetchJson(
+        endpoint,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            Accept: "application/json",
+          },
         },
-      },
-      timeoutMs,
-      fetchFn,
-    );
-    attempts.push({ endpoint, response });
+        timeoutMs,
+        fetchFn,
+      );
+      attempts.push({ endpoint, response });
 
-    if (response.ok) {
-      return { endpoint, response };
+      if (response.ok) {
+        return { endpoint, response, errors };
+      }
+    } catch (error) {
+      errors.push({ endpoint, error });
     }
+  }
+
+  if (attempts.length === 0) {
+    throw new Error(errors.map((entry) => `${entry.endpoint}: ${String(entry.error)}`).join(" | "));
   }
 
   // Prefer the most actionable non-404 failure if no endpoint succeeded.
   const prioritized = attempts.find((a) => a.response.status !== 404) ?? attempts[0];
-  return prioritized;
+  return { ...prioritized, errors };
 }
 
 export async function fetchMoonshotUsage(
@@ -299,7 +331,19 @@ export async function fetchMoonshotUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
-  const { endpoint, response } = await fetchMoonshotUsageRaw(apiKey, timeoutMs, fetchFn);
+  let endpoint: string;
+  let response: Response;
+  try {
+    ({ endpoint, response } = await fetchMoonshotUsageRaw(apiKey, timeoutMs, fetchFn));
+  } catch (error) {
+    return {
+      provider: "moonshot",
+      displayName: PROVIDER_LABELS.moonshot,
+      windows: [],
+      error: `Request failed: ${String(error)}`,
+      plan: "Unknown",
+    };
+  }
 
   if (!response.ok) {
     let message: string | undefined;
