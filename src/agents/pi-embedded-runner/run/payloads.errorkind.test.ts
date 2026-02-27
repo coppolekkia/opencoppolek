@@ -23,7 +23,8 @@ describe("buildEmbeddedRunPayloads errorKind derivation", () => {
   });
 
   it("derives errorKind billing from a 402 error", () => {
-    const billingError = '{"type":"error","error":{"type":"billing_error","message":"402 payment required"}}';
+    const billingError =
+      '{"type":"error","error":{"type":"billing_error","message":"402 payment required"}}';
     const lastAssistant = makeAssistant({ errorMessage: billingError });
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],

@@ -170,8 +170,7 @@ export function extractAssistantText(message: unknown): string | undefined {
   if (!joined) {
     return undefined;
   }
-  const errorKind = errorContext && typeof errorMessage === "string"
-    ? deriveErrorKind(errorMessage)
-    : undefined;
+  const errorKind =
+    errorContext && typeof errorMessage === "string" ? deriveErrorKind(errorMessage) : undefined;
   return sanitizeUserFacingText(joined, { errorContext, errorKind });
 }

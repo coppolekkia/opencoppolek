@@ -567,7 +567,10 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean; errorKind?: ErrorKind }): string {
+export function sanitizeUserFacingText(
+  text: string,
+  opts?: { errorContext?: boolean; errorKind?: ErrorKind },
+): string {
   if (!text) {
     return text;
   }
@@ -789,8 +792,17 @@ export function deriveErrorKind(rawErrorMessage: string): ErrorKind {
   }
   const failoverReason = classifyFailoverReason(rawErrorMessage);
   const errorKindValues: ReadonlySet<string> = new Set<ErrorKind>([
-    "billing", "rate_limit", "timeout", "auth", "context_overflow",
-    "overloaded", "format", "compaction_failure", "role_ordering", "image_size", "unknown",
+    "billing",
+    "rate_limit",
+    "timeout",
+    "auth",
+    "context_overflow",
+    "overloaded",
+    "format",
+    "compaction_failure",
+    "role_ordering",
+    "image_size",
+    "unknown",
   ]);
   if (failoverReason && failoverReason !== "unknown" && errorKindValues.has(failoverReason)) {
     return failoverReason as ErrorKind;

@@ -220,9 +220,8 @@ export function extractAssistantText(msg: AssistantMessage): string {
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
   const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
-  const errorKind = errorContext && msg.errorMessage
-    ? deriveErrorKind(msg.errorMessage)
-    : undefined;
+  const errorKind =
+    errorContext && msg.errorMessage ? deriveErrorKind(msg.errorMessage) : undefined;
   return sanitizeUserFacingText(extracted, { errorContext, errorKind });
 }
 
