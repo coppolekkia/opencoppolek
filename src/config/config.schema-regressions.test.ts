@@ -116,6 +116,24 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.list params overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "sonnet-long",
+            model: "anthropic/claude-sonnet-4-6",
+            params: {
+              cacheRetention: "long",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects relative iMessage attachment roots", () => {
     const res = validateConfigObject({
       channels: {
