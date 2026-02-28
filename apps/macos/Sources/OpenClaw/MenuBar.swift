@@ -458,7 +458,10 @@ private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
 private func makeUpdaterController() -> UpdaterProviding {
     let bundleURL = Bundle.main.bundleURL
     let isBundledApp = bundleURL.pathExtension == "app"
-    guard isBundledApp, isDeveloperIDSigned(bundleURL: bundleURL) else { return DisabledUpdaterController() }
+    // Also require a non-empty Sparkle feed URL; debug builds intentionally blank SUFeedURL
+    // and would otherwise trigger a Sparkle "Appcast feed is empty" error dialog (#29926).
+    let feedURL = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? ""
+    guard isBundledApp, !feedURL.isEmpty, isDeveloperIDSigned(bundleURL: bundleURL) else { return DisabledUpdaterController() }
 
     let defaults = UserDefaults.standard
     let autoUpdateKey = "autoUpdateEnabled"
