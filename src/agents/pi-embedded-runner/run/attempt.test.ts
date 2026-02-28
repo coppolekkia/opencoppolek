@@ -474,7 +474,6 @@ describe("prependSystemPromptAddition", () => {
   });
 });
 
-
 describe("buildAfterTurnLegacyCompactionParams", () => {
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
     const legacy = buildAfterTurnLegacyCompactionParams({
@@ -507,4 +506,3 @@ describe("buildAfterTurnLegacyCompactionParams", () => {
     });
   });
 });
-
