@@ -28,6 +28,13 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
     const id = trimmed.slice(1).trim();
     return id ? `channel:${id}` : undefined;
   }
+
+  // Unprefixed opaque ids are ambiguous (userId vs channelId). Keep them raw so
+  // the send logic can resolve them (user-first) with API access.
+  if (/^[a-z0-9]{8,}$/i.test(trimmed)) {
+    return trimmed;
+  }
+
   return `channel:${trimmed}`;
 }
 

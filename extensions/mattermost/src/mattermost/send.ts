@@ -6,6 +6,7 @@ import {
   createMattermostDirectChannel,
   createMattermostPost,
   fetchMattermostMe,
+  fetchMattermostUser,
   fetchMattermostUserByUsername,
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
@@ -34,6 +35,12 @@ type MattermostTarget =
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
 
+// Cache for ambiguous, unprefixed IDs:
+// - whether an opaque id resolved as a user
+// - DM channel ids per user
+const userIdResolutionCache = new Map<string, boolean>();
+const dmChannelCache = new Map<string, string>();
+
 const getCore = () => getMattermostRuntime();
 
 function cacheKey(baseUrl: string, token: string): string {
@@ -48,6 +55,29 @@ function normalizeMessage(text: string, mediaUrl?: string): string {
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
+}
+
+function isExplicitMattermostTarget(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/^(channel|user|mattermost):/i.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.startsWith("@")) {
+    return true;
+  }
+  return false;
+}
+
+function looksLikeOpaqueMattermostId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  // Mattermost ids are opaque; we use a conservative heuristic.
+  return /^[a-z0-9]{8,}$/i.test(trimmed);
 }
 
 function parseMattermostTarget(raw: string): MattermostTarget {
@@ -131,12 +161,20 @@ async function resolveTargetChannelId(params: {
         token: params.token,
         username: params.target.username ?? "",
       });
+
+  const dmKey = `${cacheKey(params.baseUrl, params.token)}::dm::${userId}`;
+  const cached = dmChannelCache.get(dmKey);
+  if (cached) {
+    return cached;
+  }
+
   const botUser = await resolveBotUser(params.baseUrl, params.token);
   const client = createMattermostClient({
     baseUrl: params.baseUrl,
     botToken: params.token,
   });
   const channel = await createMattermostDirectChannel(client, [botUser.id, userId]);
+  dmChannelCache.set(dmKey, channel.id);
   return channel.id;
 }
 
@@ -165,7 +203,34 @@ export async function sendMessageMattermost(
     );
   }
 
-  const target = parseMattermostTarget(to);
+  const trimmedTo = to?.trim() ?? "";
+
+  // Option A: User-first resolution for ambiguous, unprefixed opaque IDs.
+  // If `to` looks like an id and has no explicit prefix, try resolving it as a user first.
+  // If it exists as a user, we send via a direct channel (DM) resolved via `/channels/direct`.
+  let target: MattermostTarget;
+  if (!isExplicitMattermostTarget(trimmedTo) && looksLikeOpaqueMattermostId(trimmedTo)) {
+    const key = `${cacheKey(baseUrl, token)}::isUser::${trimmedTo}`;
+    const cached = userIdResolutionCache.get(key);
+    if (cached === true) {
+      target = { kind: "user", id: trimmedTo };
+    } else if (cached === false) {
+      target = { kind: "channel", id: trimmedTo };
+    } else {
+      const client = createMattermostClient({ baseUrl, botToken: token });
+      try {
+        await fetchMattermostUser(client, trimmedTo);
+        userIdResolutionCache.set(key, true);
+        target = { kind: "user", id: trimmedTo };
+      } catch {
+        userIdResolutionCache.set(key, false);
+        target = { kind: "channel", id: trimmedTo };
+      }
+    }
+  } else {
+    target = parseMattermostTarget(trimmedTo);
+  }
+
   const channelId = await resolveTargetChannelId({
     target,
     baseUrl,
