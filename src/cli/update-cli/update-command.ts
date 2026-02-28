@@ -11,6 +11,7 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -534,6 +535,10 @@ async function maybeRestartService(params: {
           }
         }
       }
+      // Proactively kill any stale gateway processes (e.g. bare-process nohup gateways)
+      // holding the port before we attempt the restart. Without this, the new process
+      // fails to bind the port and openclaw update leaves two conflicting gateway PIDs.
+      cleanStaleGatewayProcessesSync();
       if (params.restartScriptPath) {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
