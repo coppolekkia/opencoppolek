@@ -1,4 +1,4 @@
-import { resolveHumanDelayConfig } from "../../../agents/identity.js";
+import { resolveAgentIdentity, resolveHumanDelayConfig } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
@@ -11,6 +11,7 @@ import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
+import type { SlackSendIdentity } from "../../send.js";
 import {
   applyAppendOnlyStreamUpdate,
   buildStatusFinalPreviewText,
@@ -69,6 +70,22 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
+
+  // Resolve agent identity for chat:write.customize overrides.
+  const agentIdentity = resolveAgentIdentity(cfg, route.agentId);
+  const slackIdentity: SlackSendIdentity | undefined = (() => {
+    if (!agentIdentity) {
+      return undefined;
+    }
+    const username = agentIdentity.name?.trim() || undefined;
+    const iconUrl = agentIdentity.avatar?.trim() || undefined;
+    const rawEmoji = agentIdentity.emoji?.trim();
+    const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+    if (!username && !iconUrl && !iconEmoji) {
+      return undefined;
+    }
+    return { username, iconUrl, iconEmoji };
+  })();
 
   if (prepared.isDirectMessage) {
     const sessionCfg = cfg.session;
@@ -190,6 +207,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       textLimit: ctx.textLimit,
       replyThreadTs,
       replyToMode: ctx.replyToMode,
+      ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
     replyPlan.markSent();
   };
