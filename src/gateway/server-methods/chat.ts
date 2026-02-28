@@ -26,11 +26,7 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import {
-  cleanupPersistedWebchatUploads,
-  type ChatImageContent,
-  parseMessageWithAttachments,
-} from "../chat-attachments.js";
+import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -1114,7 +1110,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .finally(() => {
-          void cleanupPersistedWebchatUploads(parsedMediaPaths);
           context.chatAbortControllers.delete(clientRunId);
         });
     } catch (err) {
