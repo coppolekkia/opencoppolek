@@ -80,6 +80,19 @@ function looksLikeOpaqueMattermostId(raw: string): boolean {
   return /^[a-z0-9]{8,}$/i.test(trimmed);
 }
 
+function parseMattermostApiStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const msg = "message" in err ? String((err as any).message ?? "") : "";
+  const m = /Mattermost API (\d{3})\b/.exec(msg);
+  if (!m) {
+    return undefined;
+  }
+  const code = Number(m[1]);
+  return Number.isFinite(code) ? code : undefined;
+}
+
 function parseMattermostTarget(raw: string): MattermostTarget {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -222,8 +235,21 @@ export async function sendMessageMattermost(
         await fetchMattermostUser(client, trimmedTo);
         userIdResolutionCache.set(key, true);
         target = { kind: "user", id: trimmedTo };
-      } catch {
-        userIdResolutionCache.set(key, false);
+      } catch (err) {
+        const status = parseMattermostApiStatus(err);
+
+        // Only cache negative resolution for confirmed not-found.
+        // For transient errors (429/5xx/network), avoid poisoning the cache.
+        if (status === 404) {
+          userIdResolutionCache.set(key, false);
+        } else {
+          if (core.logging.shouldLogVerbose()) {
+            logger.debug?.(
+              `mattermost send: could not resolve ambiguous id as user (status=${status ?? "unknown"}); falling back to channel id`,
+            );
+          }
+        }
+
         target = { kind: "channel", id: trimmedTo };
       }
     }
