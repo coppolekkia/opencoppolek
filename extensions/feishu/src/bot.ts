@@ -863,6 +863,7 @@ export async function handleFeishuMessage(params: {
   event: FeishuMessageEvent;
   botOpenId?: string;
   botName?: string;
+  botOpenIdsByAccount?: Record<string, string | undefined>;
   runtime?: RuntimeEnv;
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;

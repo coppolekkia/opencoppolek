@@ -179,13 +179,38 @@ export async function dispatchReplyFromConfig(params: {
 
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetHook(
-      hookRunner.runMessageReceived(
-        toPluginMessageReceivedEvent(hookContext),
-        toPluginMessageContext(hookContext),
-      ),
-      "dispatch-from-config: message_received plugin hook failed",
-    );
+    void hookRunner
+      .runMessageReceived(
+        {
+          from: ctx.From ?? "",
+          content,
+          timestamp,
+          metadata: {
+            to: ctx.To,
+            provider: ctx.Provider,
+            surface: ctx.Surface,
+            threadId: ctx.MessageThreadId,
+            originatingChannel: ctx.OriginatingChannel,
+            originatingTo: ctx.OriginatingTo,
+            messageId: messageIdForHook,
+            channelData: ctx.ChannelData,
+            senderId: ctx.SenderId,
+            senderName: ctx.SenderName,
+            senderUsername: ctx.SenderUsername,
+            senderE164: ctx.SenderE164,
+            guildId: ctx.GroupSpace,
+            channelName: ctx.GroupChannel,
+          },
+        },
+        {
+          channelId,
+          accountId: ctx.AccountId,
+          conversationId,
+        },
+      )
+      .catch((err) => {
+        logVerbose(`dispatch-from-config: message_received plugin hook failed: ${String(err)}`);
+      });
   }
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
