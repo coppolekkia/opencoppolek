@@ -390,6 +390,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionId,
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,
+        effortLevel: entry?.effortLevel,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         systemSent: entry?.systemSent,
