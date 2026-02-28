@@ -23,6 +23,22 @@ function isToolCallBlock(block: unknown): block is ToolCallBlock {
   );
 }
 
+function stripToolUseBlocksFromAssistant(
+  msg: Extract<AgentMessage, { role: "assistant" }>,
+): AgentMessage {
+  if (!Array.isArray(msg.content)) {
+    return msg;
+  }
+  const filtered = msg.content.filter((block) => !isToolCallBlock(block));
+  if (filtered.length === msg.content.length) {
+    return msg;
+  }
+  if (filtered.length === 0) {
+    filtered.push({ type: "text", text: "(tool calls removed — incomplete)" } as never);
+  }
+  return { ...msg, content: filtered as typeof msg.content };
+}
+
 function hasToolCallInput(block: ToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
@@ -272,15 +288,16 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
 
-    // Skip tool call extraction for aborted or errored assistant messages.
-    // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
-    // (e.g., partialJson: true) and should not have synthetic tool_results created.
-    // Creating synthetic results for incomplete tool calls causes API 400 errors:
-    // "unexpected tool_use_id found in tool_result blocks"
-    // See: https://github.com/openclaw/openclaw/issues/4597
+    // For aborted or errored assistant messages, strip tool_use blocks from content
+    // instead of creating synthetic tool_results. Creating synthetic results for
+    // incomplete tool calls causes API 400 errors ("unexpected tool_use_id found in
+    // tool_result blocks") — see #4597. But leaving the tool_use blocks in place
+    // also causes 400 errors on Anthropic when switching providers, because Anthropic
+    // requires every tool_use to have an immediately following tool_result — see #28112.
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
-      out.push(msg);
+      out.push(stripToolUseBlocksFromAssistant(assistant));
+      changed = true;
       continue;
     }
 
