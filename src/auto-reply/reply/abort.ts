@@ -52,6 +52,11 @@ const ABORT_TRIGGERS = new Set([
   "останови",
   "остановить",
   "прекрати",
+  "그만",
+  "멈춰",
+  "중단",
+  "중지",
+  "정지",
   "halt",
   "anhalten",
   "aufhören",
@@ -73,6 +78,8 @@ const ABORT_TRIGGERS = new Set([
   "do not do that",
   "please stop",
   "stop please",
+  "cancel",
+  "quit",
 ]);
 const ABORT_MEMORY = new Map<string, boolean>();
 const ABORT_MEMORY_MAX = 2000;

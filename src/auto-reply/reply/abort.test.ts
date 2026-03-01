@@ -175,6 +175,13 @@ describe("abort detection", () => {
       "hoer auf",
       "stopp",
       "pare",
+      "그만",
+      "멈춰",
+      "중단",
+      "중지",
+      "정지",
+      "cancel",
+      "quit",
     ];
     for (const candidate of positives) {
       expect(isAbortTrigger(candidate)).toBe(true);
