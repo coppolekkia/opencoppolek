@@ -22,6 +22,8 @@ export type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  runTimeoutMs?: number;
+  needsScreenRecording?: boolean;
 };
 
 type ExecApprovalRequestToolParams = {
@@ -43,16 +45,16 @@ type ExecApprovalRequestToolParams = {
   turnSourceThreadId?: string | number;
   timeoutMs: number;
   twoPhase: true;
+  runTimeoutMs?: number;
+  needsScreenRecording?: boolean;
 };
 
 function buildExecApprovalRequestToolParams(
   params: RequestExecApprovalDecisionParams,
 ): ExecApprovalRequestToolParams {
-  return {
+  const requestParams: ExecApprovalRequestToolParams = {
     id: params.id,
     command: params.command,
-    commandArgv: params.commandArgv,
-    env: params.env,
     cwd: params.cwd,
     nodeId: params.nodeId,
     host: params.host,
@@ -68,6 +70,19 @@ function buildExecApprovalRequestToolParams(
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
     twoPhase: true,
   };
+  if (params.commandArgv) {
+    requestParams.commandArgv = params.commandArgv;
+  }
+  if (params.env && Object.keys(params.env).length > 0) {
+    requestParams.env = params.env;
+  }
+  if (typeof params.runTimeoutMs === "number" && Number.isFinite(params.runTimeoutMs)) {
+    requestParams.runTimeoutMs = Math.max(1, Math.floor(params.runTimeoutMs));
+  }
+  if (typeof params.needsScreenRecording === "boolean") {
+    requestParams.needsScreenRecording = params.needsScreenRecording;
+  }
+  return requestParams;
 }
 
 type ParsedDecision = { present: boolean; value: string | null };
@@ -169,6 +184,8 @@ export async function requestExecApprovalDecisionForHost(params: {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  runTimeoutMs?: number;
+  needsScreenRecording?: boolean;
 }): Promise<string | null> {
   return await requestExecApprovalDecision({
     id: params.approvalId,
@@ -187,6 +204,8 @@ export async function requestExecApprovalDecisionForHost(params: {
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    runTimeoutMs: params.runTimeoutMs,
+    needsScreenRecording: params.needsScreenRecording,
   });
 }
 
@@ -207,6 +226,8 @@ export async function registerExecApprovalRequestForHost(params: {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  runTimeoutMs?: number;
+  needsScreenRecording?: boolean;
 }): Promise<ExecApprovalRegistration> {
   return await registerExecApprovalRequest({
     id: params.approvalId,
@@ -225,5 +246,7 @@ export async function registerExecApprovalRequestForHost(params: {
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    runTimeoutMs: params.runTimeoutMs,
+    needsScreenRecording: params.needsScreenRecording,
   });
 }

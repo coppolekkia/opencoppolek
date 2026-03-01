@@ -199,7 +199,6 @@ export async function executeNodeHostCommand(
         approvalId,
         command: params.command,
         commandArgv: argv,
-        env: nodeEnv,
         workdir: params.workdir,
         host: "node",
         nodeId,
@@ -211,6 +210,9 @@ export async function executeNodeHostCommand(
         turnSourceTo: params.turnSourceTo,
         turnSourceAccountId: params.turnSourceAccountId,
         turnSourceThreadId: params.turnSourceThreadId,
+        env: nodeEnv,
+        runTimeoutMs:
+          typeof params.timeoutSec === "number" ? Math.max(1, params.timeoutSec * 1000) : undefined,
       });
       expiresAtMs = registration.expiresAtMs;
       preResolvedDecision = registration.finalDecision;

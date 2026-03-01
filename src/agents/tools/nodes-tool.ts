@@ -154,10 +154,6 @@ export function createNodesTool(options?: {
   config?: OpenClawConfig;
 }): AnyAgentTool {
   const sessionKey = options?.agentSessionKey?.trim() || undefined;
-  const turnSourceChannel = options?.agentChannel?.trim() || undefined;
-  const turnSourceTo = options?.currentChannelId?.trim() || undefined;
-  const turnSourceAccountId = options?.agentAccountId?.trim() || undefined;
-  const turnSourceThreadId = options?.currentThreadTs;
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
@@ -574,10 +570,9 @@ export function createNodesTool(options?: {
                 host: "node",
                 agentId,
                 sessionKey,
-                turnSourceChannel,
-                turnSourceTo,
-                turnSourceAccountId,
-                turnSourceThreadId,
+                env,
+                runTimeoutMs: commandTimeoutMs,
+                needsScreenRecording,
                 timeoutMs: APPROVAL_TIMEOUT_MS,
               },
             );
