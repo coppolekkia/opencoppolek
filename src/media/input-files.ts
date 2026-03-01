@@ -247,57 +247,63 @@ async function extractPdfContent(params: {
 }): Promise<{ text: string; images: InputImageContent[] }> {
   const { buffer, limits } = params;
   const { getDocument } = await loadPdfJsModule();
-  const pdf = await getDocument({
+  const loadingTask = getDocument({
     data: new Uint8Array(buffer),
     disableWorker: true,
-  }).promise;
-  const maxPages = Math.min(pdf.numPages, limits.pdf.maxPages);
-  const textParts: string[] = [];
-
-  for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item) => ("str" in item ? String(item.str) : ""))
-      .filter(Boolean)
-      .join(" ");
-    if (pageText) {
-      textParts.push(pageText);
-    }
-  }
-
-  const text = textParts.join("\n\n");
-  if (text.trim().length >= limits.pdf.minTextChars) {
-    return { text, images: [] };
-  }
-
-  let canvasModule: CanvasModule;
+  });
+  const pdf = await loadingTask.promise;
   try {
-    canvasModule = await loadCanvasModule();
-  } catch (err) {
-    logWarn(`media: PDF image extraction skipped; ${String(err)}`);
-    return { text, images: [] };
-  }
-  const { createCanvas } = canvasModule;
-  const images: InputImageContent[] = [];
-  for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
-    const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 1 });
-    const maxPixels = limits.pdf.maxPixels;
-    const pixelBudget = Math.max(1, maxPixels);
-    const pagePixels = viewport.width * viewport.height;
-    const scale = Math.min(1, Math.sqrt(pixelBudget / pagePixels));
-    const scaled = page.getViewport({ scale: Math.max(0.1, scale) });
-    const canvas = createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
-    await page.render({
-      canvas: canvas as unknown as HTMLCanvasElement,
-      viewport: scaled,
-    }).promise;
-    const png = canvas.toBuffer("image/png");
-    images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
-  }
+    const maxPages = Math.min(pdf.numPages, limits.pdf.maxPages);
+    const textParts: string[] = [];
 
-  return { text, images };
+    for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item) => ("str" in item ? String(item.str) : ""))
+        .filter(Boolean)
+        .join(" ");
+      if (pageText) {
+        textParts.push(pageText);
+      }
+    }
+
+    const text = textParts.join("\n\n");
+    if (text.trim().length >= limits.pdf.minTextChars) {
+      return { text, images: [] };
+    }
+
+    let canvasModule: CanvasModule;
+    try {
+      canvasModule = await loadCanvasModule();
+    } catch (err) {
+      logWarn(`media: PDF image extraction skipped; ${String(err)}`);
+      return { text, images: [] };
+    }
+    const { createCanvas } = canvasModule;
+    const images: InputImageContent[] = [];
+    for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1 });
+      const maxPixels = limits.pdf.maxPixels;
+      const pixelBudget = Math.max(1, maxPixels);
+      const pagePixels = viewport.width * viewport.height;
+      const scale = Math.min(1, Math.sqrt(pixelBudget / pagePixels));
+      const scaled = page.getViewport({ scale: Math.max(0.1, scale) });
+      const canvas = createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
+      await page.render({
+        canvas: canvas as unknown as HTMLCanvasElement,
+        viewport: scaled,
+      }).promise;
+      const png = canvas.toBuffer("image/png");
+      images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
+    }
+
+    return { text, images };
+  } finally {
+    // @ts-expect-error -- tsgo cannot resolve PDFDocumentLoadingTask.destroy() through pdfjs re-export
+    await loadingTask.destroy();
+  }
 }
 
 export async function extractImageContentFromSource(
