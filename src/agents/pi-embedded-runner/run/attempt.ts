@@ -128,7 +128,7 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
   runBeforePromptBuild: (
-    event: { prompt: string; messages: unknown[] },
+    event: { prompt: string; messages: unknown[]; systemPrompt?: string },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
   runBeforeAgentStart: (
@@ -427,6 +427,7 @@ export async function resolvePromptBuildHookResult(params: {
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  systemPrompt?: string;
 }): Promise<PluginHookBeforePromptBuildResult> {
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
@@ -434,6 +435,7 @@ export async function resolvePromptBuildHookResult(params: {
           {
             prompt: params.prompt,
             messages: params.messages,
+            systemPrompt: params.systemPrompt,
           },
           params.hookCtx,
         )
@@ -856,9 +858,8 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
-    // Preserve the original built-in system prompt before any plugin overrides.
-    // Both before_prompt_build and llm_input use this as the safe base for appendSystemPrompt,
-    // ensuring plugins can't nuke it via the deprecated systemPrompt field.
+    // Preserve the original built-in system prompt before any plugin modifications.
+    // Both before_prompt_build and llm_input use this as the base for appendSystemPrompt.
     const originalBuiltInSystemPrompt = systemPromptText;
 
     const sessionLock = await acquireSessionWriteLock({
@@ -1401,6 +1402,7 @@ export async function runEmbeddedAttempt(
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
+          systemPrompt: systemPromptText,
         });
         {
           if (hookResult?.prependContext) {
@@ -1416,8 +1418,7 @@ export async function runEmbeddedAttempt(
             systemPromptText = legacySystemPrompt;
             log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
           }
-          // Apply appendSystemPrompt from before_prompt_build (safe append, preserves built-in instructions)
-          // Uses the original built-in system prompt as base, not the potentially overridden one
+          // Apply appendSystemPrompt from before_prompt_build (appends to built-in system prompt)
           if (hookResult?.appendSystemPrompt) {
             const base = originalBuiltInSystemPrompt || systemPromptText;
             const newSystemPrompt = base
@@ -1524,7 +1525,6 @@ export async function runEmbeddedAttempt(
                 },
               );
               // Apply appendSystemPrompt if returned by any handler
-              // Uses originalBuiltInSystemPrompt as base (same override-resistance as before_prompt_build)
               if (llmInputResult?.appendSystemPrompt) {
                 const base = originalBuiltInSystemPrompt || systemPromptText;
                 const newSystemPrompt = base
