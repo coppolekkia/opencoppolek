@@ -907,6 +907,16 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.guardModel":
+    "Guard/safety model for screening LLM output before delivery (provider/model). Accepts string or {primary,fallbacks}.",
+  "agents.defaults.guardModel.primary": "Primary guard model (provider/model).",
+  "agents.defaults.guardModel.fallbacks": "Ordered fallback guard models (provider/model).",
+  "agents.defaults.guardModelAction":
+    'Action when guard flags content as unsafe: "block" (suppress reply, default), "redact" (replace with safe message), or "warn" (annotate reply with warning).',
+  "agents.defaults.guardModelOnError":
+    'Behavior on guard model API failure: "allow" (fail-open, default) or "block" (fail-closed).',
+  "agents.defaults.guardModelMaxInputChars":
+    "Maximum characters sent to guard model before truncation with a trailing [truncated] marker (default: 32000).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",

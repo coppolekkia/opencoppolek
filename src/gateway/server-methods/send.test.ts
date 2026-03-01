@@ -390,7 +390,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-explicit",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    const call = mocks.deliverOutboundPayloads.mock.calls.at(0)?.[0] as
+      | { agentId?: string; session?: { agentId?: string }; mirror?: { sessionKey?: string } }
+      | undefined;
+    expect(call).toEqual(
       expect.objectContaining({
         session: expect.objectContaining({
           agentId: "work",
@@ -402,6 +405,7 @@ describe("gateway send mirroring", () => {
         }),
       }),
     );
+    expect(call?.agentId ?? call?.session?.agentId).toBe("work");
   });
 
   it("uses sessionKey agentId when explicit agentId is omitted", async () => {
@@ -415,7 +419,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-session-agent",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    const call = mocks.deliverOutboundPayloads.mock.calls.at(0)?.[0] as
+      | { agentId?: string; session?: { agentId?: string }; mirror?: { sessionKey?: string } }
+      | undefined;
+    expect(call).toEqual(
       expect.objectContaining({
         session: expect.objectContaining({
           agentId: "work",
@@ -427,6 +434,7 @@ describe("gateway send mirroring", () => {
         }),
       }),
     );
+    expect(call?.agentId ?? call?.session?.agentId).toBe("work");
   });
 
   it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
@@ -441,7 +449,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-precedence",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    const call = mocks.deliverOutboundPayloads.mock.calls.at(0)?.[0] as
+      | { agentId?: string; session?: { agentId?: string }; mirror?: { sessionKey?: string } }
+      | undefined;
+    expect(call).toEqual(
       expect.objectContaining({
         session: expect.objectContaining({
           agentId: "work",
@@ -453,6 +464,7 @@ describe("gateway send mirroring", () => {
         }),
       }),
     );
+    expect(call?.agentId ?? call?.session?.agentId).toBe("work");
   });
 
   it("ignores blank explicit agentId and falls back to sessionKey agent", async () => {
@@ -467,7 +479,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-blank",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    const call = mocks.deliverOutboundPayloads.mock.calls.at(0)?.[0] as
+      | { agentId?: string; session?: { agentId?: string }; mirror?: { sessionKey?: string } }
+      | undefined;
+    expect(call).toEqual(
       expect.objectContaining({
         session: expect.objectContaining({
           agentId: "work",
@@ -479,6 +494,7 @@ describe("gateway send mirroring", () => {
         }),
       }),
     );
+    expect(call?.agentId ?? call?.session?.agentId).toBe("work");
   });
 
   it("forwards threadId to outbound delivery when provided", async () => {

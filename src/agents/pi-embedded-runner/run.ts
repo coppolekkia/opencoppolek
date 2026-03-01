@@ -23,6 +23,7 @@ import {
 } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { resolveGuardModelConfig, applyGuardToPayloads } from "../guard-model.js";
 import {
   ensureAuthProfileStore,
   getApiKeyForModel,
@@ -571,6 +572,8 @@ export async function runEmbeddedPiAgent(
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          const guardConfigForRun = resolveGuardModelConfig(params.config);
+          const suppressLiveStreaming = Boolean(guardConfigForRun);
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -616,16 +619,17 @@ export async function runEmbeddedPiAgent(
             abortSignal: params.abortSignal,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
+            onPartialReply: suppressLiveStreaming ? undefined : params.onPartialReply,
             onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
-            onBlockReplyFlush: params.onBlockReplyFlush,
+            onBlockReply: suppressLiveStreaming ? undefined : params.onBlockReply,
+            onBlockReplyFlush: suppressLiveStreaming ? undefined : params.onBlockReplyFlush,
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: params.onReasoningStream,
+            onReasoningStream: suppressLiveStreaming ? undefined : params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
+            suppressAssistantAgentEvents: suppressLiveStreaming,
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
@@ -1070,7 +1074,7 @@ export async function runEmbeddedPiAgent(
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
 
-          const payloads = buildEmbeddedRunPayloads({
+          let payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
@@ -1086,6 +1090,14 @@ export async function runEmbeddedPiAgent(
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
           });
+
+          // Guard model screening — evaluate payloads before delivery
+          if (guardConfigForRun && payloads.length > 0) {
+            payloads = await applyGuardToPayloads(payloads, guardConfigForRun, {
+              cfg: params.config,
+              agentDir: params.agentDir,
+            });
+          }
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so

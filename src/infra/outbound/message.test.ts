@@ -61,13 +61,17 @@ describe("sendMessage", () => {
       agentId: "work",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    const call = mocks.deliverOutboundPayloads.mock.calls.at(0)?.[0] as
+      | { channel?: string; to?: string; agentId?: string; session?: { agentId?: string } }
+      | undefined;
+    expect(call).toEqual(
       expect.objectContaining({
         session: expect.objectContaining({ agentId: "work" }),
         channel: "telegram",
         to: "123456",
       }),
     );
+    expect(call?.agentId ?? call?.session?.agentId).toBe("work");
   });
 
   it("recovers telegram plugin resolution so message/send does not fail with Unknown channel: telegram", async () => {

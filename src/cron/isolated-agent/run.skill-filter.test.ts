@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCliAgent } from "../../agents/cli-runner.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 
 // ---------- mocks ----------
@@ -64,6 +65,7 @@ vi.mock("../../agents/model-fallback.js", () => ({
 }));
 
 const runWithModelFallbackMock = vi.mocked(runWithModelFallback);
+const runCliAgentMock = vi.mocked(runCliAgent);
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: vi.fn().mockResolvedValue({
@@ -233,6 +235,18 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     resolveThinkingDefaultMock.mockReturnValue(undefined);
     getModelRefStatusMock.mockReturnValue({ allowed: false });
     isCliProviderMock.mockReturnValue(false);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "test output" }],
+      meta: {
+        durationMs: 5,
+        agentMeta: {
+          sessionId: "cli-session-id",
+          provider: "claude-cli",
+          model: "opus",
+          usage: { input: 10, output: 20 },
+        },
+      },
+    });
     logWarnMock.mockReset();
     // Fresh session object per test — prevents mutation leaking between tests
     resolveCronSessionMock.mockReturnValue({
@@ -348,6 +362,25 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
       forceNew: true,
     });
+  });
+
+  it("passes resolved agentDir to runCliAgent for CLI-provider fallback runs", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    runWithModelFallbackMock.mockImplementationOnce(async (params) => {
+      const result = await params.run("claude-cli", "opus");
+      return {
+        result,
+        provider: "claude-cli",
+        model: "opus",
+        attempts: [],
+      };
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.agentDir).toBe("/tmp/agent-dir");
   });
 
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {

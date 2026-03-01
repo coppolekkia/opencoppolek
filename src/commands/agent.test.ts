@@ -5,6 +5,7 @@ import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.j
 import "../cron/isolated-agent.mocks.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
@@ -133,6 +134,7 @@ function createTelegramOutboundPlugin() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(modelSelectionModule.isCliProvider).mockReturnValue(false);
   runCliAgentSpy.mockResolvedValue({
     payloads: [{ text: "ok" }],
     meta: {
@@ -204,6 +206,19 @@ describe("agentCommand", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
+    });
+  });
+
+  it("passes resolved agentDir to CLI runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      vi.mocked(modelSelectionModule.isCliProvider).mockReturnValue(true);
+
+      await agentCommand({ message: "run with cli provider", to: "+1222" }, runtime);
+
+      const callArgs = runCliAgentSpy.mock.calls.at(-1)?.[0];
+      expect(callArgs?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main", "agent"));
     });
   });
 

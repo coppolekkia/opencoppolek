@@ -122,6 +122,14 @@ export type AgentDefaultsConfig = {
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
+  /** Optional guard/safety model for content screening (provider/model). Accepts string or {primary,fallbacks}. */
+  guardModel?: AgentModelConfig;
+  /** Guard model behavior when content is flagged as unsafe (default: "block"). */
+  guardModelAction?: "block" | "redact" | "warn";
+  /** Guard model behavior on API failure (default: "allow" — fail open). */
+  guardModelOnError?: "allow" | "block";
+  /** Max characters sent to guard model for screening before truncation (default: 32000). */
+  guardModelMaxInputChars?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
