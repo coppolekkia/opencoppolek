@@ -242,4 +242,49 @@ describe("telegram text fragments", () => {
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "aggregates fragments when first part is ~3900 chars (below old 4000 threshold)",
+    async () => {
+      const { handler, replySpy } = await createBotHandlerWithOptions({});
+      vi.useFakeTimers();
+      try {
+        const part1 = "X".repeat(3900);
+        const part2 = "Y".repeat(200);
+
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            message_id: 20,
+            date: 1736380800,
+            text: part1,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            message_id: 21,
+            date: 1736380801,
+            text: part2,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        expect(replySpy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(TEXT_FRAGMENT_FLUSH_MS * 2);
+        expect(replySpy).toHaveBeenCalledTimes(1);
+
+        const payload = replySpy.mock.calls[0][0] as { RawBody?: string };
+        expect(payload.RawBody).toContain(part1.slice(0, 32));
+        expect(payload.RawBody).toContain(part2.slice(0, 32));
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
 });
