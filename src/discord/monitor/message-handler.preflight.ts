@@ -2,8 +2,8 @@ import { ChannelType, MessageType, type User } from "@buape/carbon";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import {
-  recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import {
   buildMentionRegexes,
@@ -32,7 +32,6 @@ import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.j
 import { fetchPluralKitMessageInfo } from "../pluralkit.js";
 import { sendMessageDiscord } from "../send.js";
 import {
-  allowListMatches,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
@@ -40,6 +39,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
+  resolveDiscordOwnerAllowedWithRoles,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
@@ -582,27 +582,19 @@ export async function preflightDiscordMessage(
   });
 
   if (!isDirectMessage) {
-    const ownerAllowList = normalizeDiscordAllowList(params.allowFrom, [
-      "discord:",
-      "user:",
-      "pk:",
-    ]);
-    const ownerOk = ownerAllowList
-      ? allowListMatches(
-          ownerAllowList,
-          {
-            id: sender.id,
-            name: sender.name,
-            tag: sender.tag,
-          },
-          { allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig) },
-        )
-      : false;
+    const ownerAccess = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: params.allowFrom,
+      userId: sender.id,
+      userName: sender.name,
+      userTag: sender.tag,
+      memberRoleIds,
+      allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+    });
     const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
-        { configured: ownerAllowList != null, allowed: ownerOk },
+        { configured: ownerAccess.configured, allowed: ownerAccess.allowed },
         { configured: hasAccessRestrictions, allowed: memberAllowed },
       ],
       modeWhenAccessGroupsOff: "configured",

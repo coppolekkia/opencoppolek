@@ -1,18 +1,18 @@
 import {
   Button,
-  ChannelSelectMenu,
-  MentionableSelectMenu,
-  Modal,
-  RoleSelectMenu,
-  StringSelectMenu,
-  UserSelectMenu,
   type ButtonInteraction,
+  ChannelSelectMenu,
   type ChannelSelectMenuInteraction,
   type ComponentData,
+  MentionableSelectMenu,
   type MentionableSelectMenuInteraction,
+  Modal,
   type ModalInteraction,
+  RoleSelectMenu,
   type RoleSelectMenuInteraction,
+  StringSelectMenu,
   type StringSelectMenuInteraction,
+  UserSelectMenu,
   type UserSelectMenuInteraction,
 } from "@buape/carbon";
 import type { APIStringSelectComponent } from "discord-api-types/v10";
@@ -42,13 +42,13 @@ import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.j
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
+  type DiscordComponentEntry,
+  type DiscordModalEntry,
   formatDiscordComponentEventText,
   parseDiscordComponentCustomId,
   parseDiscordComponentCustomIdForCarbon,
   parseDiscordModalCustomId,
   parseDiscordModalCustomIdForCarbon,
-  type DiscordComponentEntry,
-  type DiscordModalEntry,
 } from "../components.js";
 import {
   type DiscordGuildEntryResolved,
@@ -58,6 +58,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
+  resolveDiscordOwnerAllowedWithRoles,
   resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
@@ -155,7 +156,15 @@ function resolveDiscordChannelContext(
     }
   }
 
-  return { channelName, channelSlug, channelType, isThread, parentId, parentName, parentSlug };
+  return {
+    channelName,
+    channelSlug,
+    channelType,
+    isThread,
+    parentId,
+    parentName,
+    parentSlug,
+  };
 }
 
 async function resolveComponentInteractionContext(params: {
@@ -195,7 +204,9 @@ async function resolveComponentInteractionContext(params: {
   // can safely edit the original deferred response.
   if (shouldDefer) {
     try {
-      await (interaction as AgentComponentMessageInteraction).defer({ ephemeral: true });
+      await (interaction as AgentComponentMessageInteraction).defer({
+        ephemeral: true,
+      });
       didDefer = true;
     } catch (err) {
       logError(`${label}: failed to defer interaction: ${String(err)}`);
@@ -742,18 +753,14 @@ function resolveComponentCommandAuthorized(params: {
     return true;
   }
 
-  const ownerAllowList = normalizeDiscordAllowList(ctx.allowFrom, ["discord:", "user:", "pk:"]);
-  const ownerOk = ownerAllowList
-    ? resolveDiscordAllowListMatch({
-        allowList: ownerAllowList,
-        candidate: {
-          id: interactionCtx.user.id,
-          name: interactionCtx.user.username,
-          tag: formatDiscordUserTag(interactionCtx.user),
-        },
-        allowNameMatching: params.allowNameMatching,
-      }).allowed
-    : false;
+  const ownerAccess = resolveDiscordOwnerAllowedWithRoles({
+    allowFrom: ctx.allowFrom,
+    userId: interactionCtx.user.id,
+    userName: interactionCtx.user.username,
+    userTag: formatDiscordUserTag(interactionCtx.user),
+    memberRoleIds: interactionCtx.memberRoleIds,
+    allowNameMatching: params.allowNameMatching,
+  });
 
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
@@ -769,7 +776,7 @@ function resolveComponentCommandAuthorized(params: {
   const useAccessGroups = ctx.cfg.commands?.useAccessGroups !== false;
   const authorizers = useAccessGroups
     ? [
-        { configured: ownerAllowList != null, allowed: ownerOk },
+        { configured: ownerAccess.configured, allowed: ownerAccess.allowed },
         { configured: hasAccessRestrictions, allowed: memberAllowed },
       ]
     : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
@@ -789,7 +796,11 @@ async function dispatchDiscordComponentEvent(params: {
   guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
   eventText: string;
   replyToId?: string;
-  routeOverrides?: { sessionKey?: string; agentId?: string; accountId?: string };
+  routeOverrides?: {
+    sessionKey?: string;
+    agentId?: string;
+    accountId?: string;
+  };
 }): Promise<void> {
   const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
   const runtime = ctx.runtime ?? createNonExitingRuntime();
@@ -839,7 +850,11 @@ async function dispatchDiscordComponentEvent(params: {
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,
     guildInfo,
-    sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
+    sender: {
+      id: interactionCtx.user.id,
+      name: interactionCtx.user.username,
+      tag: senderTag,
+    },
     allowNameMatching,
   });
   const commandAuthorized = resolveComponentCommandAuthorized({
@@ -968,7 +983,10 @@ async function dispatchDiscordComponentEvent(params: {
       },
       onReplyStart: async () => {
         try {
-          await sendTyping({ client: interaction.client, channelId: typingChannelId });
+          await sendTyping({
+            client: interaction.client,
+            channelId: typingChannelId,
+          });
         } catch (err) {
           logVerbose(`discord: typing failed for component reply: ${String(err)}`);
         }
@@ -1005,7 +1023,10 @@ async function handleDiscordComponentEvent(params: {
     return;
   }
 
-  const entry = resolveDiscordComponentEntry({ id: parsed.componentId, consume: false });
+  const entry = resolveDiscordComponentEntry({
+    id: parsed.componentId,
+    consume: false,
+  });
   if (!entry) {
     try {
       await params.interaction.reply({
@@ -1143,7 +1164,10 @@ async function handleDiscordModalTrigger(params: {
     }
     return;
   }
-  const entry = resolveDiscordComponentEntry({ id: parsed.componentId, consume: false });
+  const entry = resolveDiscordComponentEntry({
+    id: parsed.componentId,
+    consume: false,
+  });
   if (!entry || entry.kind !== "modal-trigger") {
     try {
       await params.interaction.reply({
@@ -1233,7 +1257,10 @@ async function handleDiscordModalTrigger(params: {
   }
 
   const resolvedModalId = consumed.modalId ?? modalId;
-  const modalEntry = resolveDiscordModalEntry({ id: resolvedModalId, consume: false });
+  const modalEntry = resolveDiscordModalEntry({
+    id: resolvedModalId,
+    consume: false,
+  });
   if (!modalEntry) {
     try {
       await params.interaction.reply({
@@ -1339,7 +1366,11 @@ export class AgentComponentButton extends Button {
       contextKey: `discord:agent-button:${channelId}:${componentId}:${userId}`,
     });
 
-    await ackComponentInteraction({ interaction, replyOpts, label: "agent button" });
+    await ackComponentInteraction({
+      interaction,
+      replyOpts,
+      label: "agent button",
+    });
   }
 }
 
@@ -1431,7 +1462,11 @@ export class AgentSelectMenu extends StringSelectMenu {
       contextKey: `discord:agent-select:${channelId}:${componentId}:${userId}`,
     });
 
-    await ackComponentInteraction({ interaction, replyOpts, label: "agent select" });
+    await ackComponentInteraction({
+      interaction,
+      replyOpts,
+      label: "agent select",
+    });
   }
 }
 
@@ -1606,7 +1641,10 @@ class DiscordComponentModal extends Modal {
       return;
     }
 
-    const modalEntry = resolveDiscordModalEntry({ id: modalId, consume: false });
+    const modalEntry = resolveDiscordModalEntry({
+      id: modalId,
+      consume: false,
+    });
     if (!modalEntry) {
       try {
         await interaction.reply({
