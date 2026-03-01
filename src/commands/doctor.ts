@@ -301,6 +301,9 @@ export async function doctorCommand(
     if (fs.existsSync(backupPath)) {
       runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
     }
+    runtime.log(
+      `Run "${formatCliCommand("openclaw gateway restart")}" to apply config changes to a running gateway.`,
+    );
   } else if (!prompter.shouldRepair) {
     runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
