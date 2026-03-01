@@ -60,8 +60,35 @@ export async function sanitizeSessionMessagesImages(
     allowNonImageSanitization && options?.sanitizeToolCallIds
       ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode)
       : messages;
+  // Anthropic's API requires that thinking/redacted_thinking blocks in the
+  // last assistant message are passed through byte-identical.  Find the last
+  // assistant message index so we can preserve its thinking blocks by
+  // reference during content sanitization (other blocks are still sanitized).
+  let lastAssistantIdx = -1;
+  for (let i = sanitizedIds.length - 1; i >= 0; i--) {
+    const m = sanitizedIds[i];
+    if (
+      m &&
+      typeof m === "object" &&
+      (m as { role?: unknown }).role === "assistant" &&
+      Array.isArray((m as { content?: unknown }).content)
+    ) {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+
+  const isThinkingBlock = (block: unknown): boolean => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const t = (block as { type?: unknown }).type;
+    return t === "thinking" || t === "redacted_thinking";
+  };
+
   const out: AgentMessage[] = [];
-  for (const msg of sanitizedIds) {
+  for (let idx = 0; idx < sanitizedIds.length; idx++) {
+    const msg = sanitizedIds[idx];
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -121,11 +148,21 @@ export async function sanitizeSessionMessagesImages(
           out.push({ ...assistantMsg, content: nextContent });
           continue;
         }
+        const isLastAssistant = idx === lastAssistantIdx;
+
         const strippedContent = options?.preserveSignatures
           ? content // Keep signatures for Antigravity Claude
           : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
 
-        const filteredContent = strippedContent.filter((block) => {
+        // For the last assistant message, restore thinking/redacted_thinking
+        // blocks to their original references — stripThoughtSignatures may
+        // have cloned them (e.g. to remove thought_signature), but Anthropic
+        // requires these blocks to be byte-identical to the API response.
+        const preservedContent = isLastAssistant
+          ? strippedContent.map((block, i) => (isThinkingBlock(content[i]) ? content[i] : block))
+          : strippedContent;
+
+        const filteredContent = preservedContent.filter((block) => {
           if (!block || typeof block !== "object") {
             return true;
           }
