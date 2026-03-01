@@ -90,13 +90,36 @@ describe("resolveTelegramAccount", () => {
         },
       };
 
-      expect(listTelegramAccountIds(cfg)).toEqual(["work"]);
+      expect(listTelegramAccountIds(cfg)).toEqual(["default", "work"]);
       resolveTelegramAccount({ cfg, accountId: "work" });
     });
 
     const lines = warnMock.mock.calls.map(([line]) => String(line));
-    expect(lines).toContain("listTelegramAccountIds [ 'work' ]");
+    expect(lines).toContain("listTelegramAccountIds [ 'default', 'work' ]");
     expect(lines).toContain("resolve { accountId: 'work', enabled: true, tokenSource: 'config' }");
+  });
+
+  it("lists only the default account when no sub-accounts are configured", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: { botToken: "tok-default" },
+      },
+    };
+
+    expect(listTelegramAccountIds(cfg)).toEqual(["default"]);
+  });
+
+  it("lists default and sub-accounts so startup can register polling for all accounts", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          accounts: { work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    expect(listTelegramAccountIds(cfg)).toEqual(["default", "work"]);
   });
 });
 

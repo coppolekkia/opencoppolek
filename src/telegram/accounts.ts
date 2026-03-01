@@ -52,15 +52,18 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   return [...ids];
 }
 
+function listExplicitTelegramAccountIds(cfg: OpenClawConfig): string[] {
+  return Array.from(
+    new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "telegram")]),
+  ).toSorted((a, b) => a.localeCompare(b));
+}
+
 export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
   const ids = Array.from(
-    new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "telegram")]),
-  );
+    new Set([DEFAULT_ACCOUNT_ID, ...listExplicitTelegramAccountIds(cfg)]),
+  ).toSorted((a, b) => a.localeCompare(b));
   debugAccounts("listTelegramAccountIds", ids);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
+  return ids;
 }
 
 export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
@@ -68,7 +71,7 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   if (boundDefault) {
     return boundDefault;
   }
-  const ids = listTelegramAccountIds(cfg);
+  const ids = listExplicitTelegramAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
   }

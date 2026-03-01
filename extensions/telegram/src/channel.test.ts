@@ -53,6 +53,21 @@ function createStartAccountCtx(params: {
 }
 
 describe("telegramPlugin duplicate token guard", () => {
+  it("includes the default account in plugin account enumeration when sub-accounts exist", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "token-default",
+          accounts: {
+            work: { botToken: "token-work" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(telegramPlugin.config.listAccountIds(cfg)).toEqual(["default", "work"]);
+  });
+
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();
     const alertsAccount = telegramPlugin.config.resolveAccount(cfg, "alerts");
