@@ -1,4 +1,23 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
+
+/** Maximum time in ms to wait for a single Telegram file download.
+ *  Files between 5–20 MB can stall indefinitely without this, permanently
+ *  locking the sequentialize(chatId) slot. */
+const TELEGRAM_MEDIA_FETCH_TIMEOUT_MS = 60_000;
+
+/** Maximum time in ms for the getFile() Bot API round-trip (metadata only). */
+const TELEGRAM_GETFILE_TIMEOUT_MS = 15_000;
+
+/** Race a promise against a timeout rejection so the sequentializer slot is
+ *  never held indefinitely when Telegram's API is unresponsive. */
+function withGetFileTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`getFile timed out after ${ms}ms`)), ms),
+    ),
+  ]);
+}
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
@@ -327,6 +346,7 @@ export async function resolveMedia(
       fetchImpl,
       filePathHint: filePath,
       maxBytes,
+      timeoutMs: TELEGRAM_MEDIA_FETCH_TIMEOUT_MS,
       ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
     });
     const originalName = fetched.fileName ?? filePath;
@@ -346,7 +366,7 @@ export async function resolveMedia(
     }
 
     try {
-      const file = await ctx.getFile();
+      const file = await withGetFileTimeout(ctx.getFile(), TELEGRAM_GETFILE_TIMEOUT_MS);
       if (!file.file_path) {
         logVerbose("telegram: getFile returned no file_path for sticker");
         return null;
@@ -419,7 +439,7 @@ export async function resolveMedia(
 
   let file: { file_path?: string };
   try {
-    file = await retryAsync(() => ctx.getFile(), {
+    file = await retryAsync(() => withGetFileTimeout(ctx.getFile(), TELEGRAM_GETFILE_TIMEOUT_MS), {
       attempts: 3,
       minDelayMs: 1000,
       maxDelayMs: 4000,
