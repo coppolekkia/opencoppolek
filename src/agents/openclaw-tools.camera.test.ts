@@ -34,7 +34,7 @@ async function executeNodes(input: Record<string, unknown>) {
 
 function mockNodeList(commands?: string[]) {
   return {
-    nodes: [{ nodeId: NODE_ID, ...(commands ? { commands } : {}) }],
+    nodes: [{ nodeId: NODE_ID, remoteIp: "10.0.0.5", ...(commands ? { commands } : {}) }],
   };
 }
 
@@ -146,6 +146,35 @@ describe("nodes camera_snap", () => {
         deviceId: "cam-123",
       }),
     ).rejects.toThrow(/facing=both is not allowed when deviceId is set/i);
+  });
+
+  it("fails closed when remoteIp is missing", async () => {
+    callGateway.mockImplementation(async ({ method }) => {
+      if (method === "node.list") {
+        return {
+          nodes: [{ nodeId: NODE_ID }],
+        };
+      }
+      if (method === "node.invoke") {
+        return {
+          payload: {
+            format: "jpg",
+            base64: "aGVsbG8=",
+            width: 1,
+            height: 1,
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    await expect(
+      executeNodes({
+        action: "camera_snap",
+        node: NODE_ID,
+        facing: "front",
+      }),
+    ).rejects.toThrow(/camera_snap requires node\.remoteIp/i);
   });
 });
 

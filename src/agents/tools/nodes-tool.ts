@@ -27,7 +27,12 @@ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { listNodes, resolveNodeIdFromList, resolveNodeId } from "./nodes-utils.js";
+import {
+  type NodeListNode,
+  listNodes,
+  resolveNodeIdFromList,
+  resolveNodeId,
+} from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -80,6 +85,22 @@ async function invokeNodeCommandPayload(params: {
     idempotencyKey: crypto.randomUUID(),
   });
   return raw?.payload ?? {};
+}
+
+function findNodeById(nodes: NodeListNode[], nodeId: string): NodeListNode {
+  const match = nodes.find((entry) => entry.nodeId === nodeId);
+  if (!match) {
+    throw new Error(`node not found: ${nodeId}`);
+  }
+  return match;
+}
+
+function requireNodeRemoteIp(node: NodeListNode, action: "camera_snap" | "camera_clip"): string {
+  const remoteIp = typeof node.remoteIp === "string" ? node.remoteIp.trim() : "";
+  if (!remoteIp) {
+    throw new Error(`${action} requires node.remoteIp`);
+  }
+  return remoteIp;
 }
 
 function isPairingRequiredMessage(message: string): boolean {
@@ -229,7 +250,10 @@ export function createNodesTool(options?: {
           }
           case "camera_snap": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const nodes = await listNodes(gatewayOpts);
+            const nodeId = resolveNodeIdFromList(nodes, node);
+            const selectedNode = findNodeById(nodes, nodeId);
+            const expectedHost = requireNodeRemoteIp(selectedNode, "camera_snap");
             const facingRaw =
               typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             const facings: CameraFacing[] =
@@ -294,7 +318,7 @@ export function createNodesTool(options?: {
                 ext: isJpeg ? "jpg" : "png",
               });
               if (payload.url) {
-                await writeUrlToFile(filePath, payload.url);
+                await writeUrlToFile(filePath, payload.url, expectedHost);
               } else if (payload.base64) {
                 await writeBase64ToFile(filePath, payload.base64);
               }
@@ -372,7 +396,10 @@ export function createNodesTool(options?: {
           }
           case "camera_clip": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const nodes = await listNodes(gatewayOpts);
+            const nodeId = resolveNodeIdFromList(nodes, node);
+            const selectedNode = findNodeById(nodes, nodeId);
+            const expectedHost = requireNodeRemoteIp(selectedNode, "camera_clip");
             const facing =
               typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             if (facing !== "front" && facing !== "back") {
@@ -406,6 +433,7 @@ export function createNodesTool(options?: {
             const filePath = await writeCameraClipPayloadToFile({
               payload,
               facing,
+              expectedHost,
             });
             return {
               content: [{ type: "text", text: `FILE:${filePath}` }],

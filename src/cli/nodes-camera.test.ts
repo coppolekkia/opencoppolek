@@ -12,16 +12,25 @@ import {
 } from "./nodes-camera.js";
 import { parseScreenRecordPayload, screenRecordTempPath } from "./nodes-screen.js";
 
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
+
+vi.mock("../infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+}));
+
 async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   return await withTempDir("openclaw-test-", run);
 }
 
 describe("nodes camera helpers", () => {
-  function stubFetchResponse(response: Response) {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response),
-    );
+  function stubGuardedFetchResponse(response: Response) {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response,
+      finalUrl: "https://example.com/final",
+      release: vi.fn(async () => {}),
+    });
   }
 
   it("parses camera.snap payload", () => {
@@ -84,6 +93,7 @@ describe("nodes camera helpers", () => {
           hasAudio: false,
         },
         facing: "front",
+        expectedHost: "10.0.0.5",
         tmpDir: dir,
         id: "clip1",
       });
@@ -93,7 +103,7 @@ describe("nodes camera helpers", () => {
   });
 
   it("writes camera clip payload from url", async () => {
-    stubFetchResponse(new Response("url-clip", { status: 200 }));
+    stubGuardedFetchResponse(new Response("url-clip", { status: 200 }));
     await withCameraTempDir(async (dir) => {
       const out = await writeCameraClipPayloadToFile({
         payload: {
@@ -103,6 +113,7 @@ describe("nodes camera helpers", () => {
           hasAudio: false,
         },
         facing: "back",
+        expectedHost: "example.com",
         tmpDir: dir,
         id: "clip2",
       });
@@ -120,14 +131,23 @@ describe("nodes camera helpers", () => {
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
+    fetchWithSsrFGuardMock.mockReset();
   });
 
   it("writes url payload to file", async () => {
-    stubFetchResponse(new Response("url-content", { status: 200 }));
+    stubGuardedFetchResponse(new Response("url-content", { status: 200 }));
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await writeUrlToFile(out, "https://example.com/clip.mp4");
+      await writeUrlToFile(out, "https://example.com/clip.mp4", "example.com");
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("url-content");
+    });
+  });
+
+  it("allows http url payload for RFC1918 expected host", async () => {
+    stubGuardedFetchResponse(new Response("url-content", { status: 200 }));
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "x-http-private.bin");
+      await writeUrlToFile(out, "http://10.0.0.5/clip.mp4", "10.0.0.5");
       await expect(fs.readFile(out, "utf8")).resolves.toBe("url-content");
     });
   });
@@ -142,6 +162,11 @@ describe("nodes camera helpers", () => {
       {
         name: "non-https url",
         url: "http://example.com/x.bin",
+        expectedMessage: /only https/i,
+      },
+      {
+        name: "non-https url with public ip",
+        url: "http://8.8.8.8/x.bin",
         expectedMessage: /only https/i,
       },
       {
@@ -169,12 +194,26 @@ describe("nodes camera helpers", () => {
 
     for (const testCase of cases) {
       if (testCase.response) {
-        stubFetchResponse(testCase.response);
+        stubGuardedFetchResponse(testCase.response);
       }
-      await expect(writeUrlToFile("/tmp/ignored", testCase.url), testCase.name).rejects.toThrow(
-        testCase.expectedMessage,
-      );
+      const expectedHost = testCase.url.includes("8.8.8.8") ? "8.8.8.8" : "example.com";
+      await expect(
+        writeUrlToFile("/tmp/ignored", testCase.url, expectedHost),
+        testCase.name,
+      ).rejects.toThrow(testCase.expectedMessage);
     }
+  });
+
+  it("rejects when expectedHost is missing", async () => {
+    await expect(writeUrlToFile("/tmp/ignored", "https://example.com/x.bin", "")).rejects.toThrow(
+      /expectedHost is required/i,
+    );
+  });
+
+  it("rejects url host mismatch", async () => {
+    await expect(
+      writeUrlToFile("/tmp/ignored", "https://example.com/x.bin", "10.0.0.4"),
+    ).rejects.toThrow(/does not match expected host/i);
   });
 
   it("removes partially written file when url stream fails", async () => {
@@ -184,13 +223,13 @@ describe("nodes camera helpers", () => {
         controller.error(new Error("stream exploded"));
       },
     });
-    stubFetchResponse(new Response(stream, { status: 200 }));
+    stubGuardedFetchResponse(new Response(stream, { status: 200 }));
 
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "broken.bin");
-      await expect(writeUrlToFile(out, "https://example.com/broken.bin")).rejects.toThrow(
-        /stream exploded/i,
-      );
+      await expect(
+        writeUrlToFile(out, "https://example.com/broken.bin", "example.com"),
+      ).rejects.toThrow(/stream exploded/i);
       await expect(fs.stat(out)).rejects.toThrow();
     });
   });
