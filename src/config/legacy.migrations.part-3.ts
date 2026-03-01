@@ -218,4 +218,34 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       delete raw.identity;
     },
   },
+  {
+    id: "channels.telegram.groupMentionsOnly->groups.*.requireMention",
+    describe:
+      "Move channels.telegram.groupMentionsOnly to channels.telegram.groups.*.requireMention",
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      const telegram = getRecord(channels?.telegram);
+      if (!telegram || typeof telegram.groupMentionsOnly !== "boolean") {
+        return;
+      }
+      const groupMentionsOnly = telegram.groupMentionsOnly;
+      const groups = ensureRecord(telegram, "groups");
+      const star = ensureRecord(groups, "*");
+      if (star.requireMention === undefined) {
+        star.requireMention = groupMentionsOnly;
+        changes.push(
+          `Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention (${String(groupMentionsOnly)}).`,
+        );
+      } else {
+        changes.push(
+          'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*".requireMention already set).',
+        );
+      }
+      groups["*"] = star;
+      telegram.groups = groups;
+      delete telegram.groupMentionsOnly;
+      (channels as Record<string, unknown>).telegram = telegram;
+      raw.channels = channels;
+    },
+  },
 ];

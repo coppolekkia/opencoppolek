@@ -103,4 +103,23 @@ describe("legacy migrate mention routing", () => {
       (res.config?.channels?.telegram as { requireMention?: unknown } | undefined)?.requireMention,
     ).toBeUndefined();
   });
+
+  it("moves channels.telegram.groupMentionsOnly into groups.*.requireMention", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention (true).',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
+    expect(
+      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
+        ?.groupMentionsOnly,
+    ).toBeUndefined();
+  });
 });
