@@ -119,6 +119,32 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
+  it("drops tool results with empty or blank tool call ids", () => {
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "toolResult",
+        toolCallId: "",
+        toolName: "read",
+        content: [{ type: "text", text: "empty" }],
+      },
+      {
+        role: "toolResult",
+        toolUseId: "   ",
+        toolName: "exec",
+        content: [{ type: "text", text: "blank" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+    expect(result.droppedOrphanCount).toBe(2);
+    expect(result.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
   it("skips tool call extraction for assistant messages with stopReason 'error'", () => {
     // When an assistant message has stopReason: "error", its tool_use blocks may be
     // incomplete/malformed. We should NOT create synthetic tool_results for them,

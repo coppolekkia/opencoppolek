@@ -71,12 +71,20 @@ export function extractToolCallsFromAssistant(
 export function extractToolResultId(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
 ): string | null {
-  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
-  if (typeof toolCallId === "string" && toolCallId) {
+  const readId = (value: unknown): string | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+
+  const toolCallId = readId((msg as { toolCallId?: unknown }).toolCallId);
+  if (toolCallId) {
     return toolCallId;
   }
-  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
-  if (typeof toolUseId === "string" && toolUseId) {
+  const toolUseId = readId((msg as { toolUseId?: unknown }).toolUseId);
+  if (toolUseId) {
     return toolUseId;
   }
   return null;
