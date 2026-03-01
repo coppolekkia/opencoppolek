@@ -11,10 +11,10 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "sessions_spawn",
   // Cross-session injection — message injection across sessions
   "sessions_send",
-  // Persistent automation control plane — can create/update/remove scheduled runs
-  "cron",
   // Gateway control plane — prevents gateway reconfiguration via HTTP
   "gateway",
+  // Scheduler control — avoid remote cron mutation over HTTP invoke surface
+  "cron",
   // Interactive setup — requires terminal QR scan, hangs on HTTP
   "whatsapp_login",
 ] as const;
@@ -37,3 +37,65 @@ export const DANGEROUS_ACP_TOOL_NAMES = [
 ] as const;
 
 export const DANGEROUS_ACP_TOOLS = new Set<string>(DANGEROUS_ACP_TOOL_NAMES);
+
+// ---------------------------------------------------------------------------
+// Skill capability → tool group mapping.
+// Maps human-readable capability names (declared in SKILL.md frontmatter) to
+// the existing TOOL_GROUPS in tool-policy.ts.
+//
+// CLAWHUB ALIGNMENT: Keep in sync with clawhub/convex/lib/skillCapabilities.ts.
+// Both OpenClaw and ClawHub validate against the same capability names.
+// ---------------------------------------------------------------------------
+export const CAPABILITY_TOOL_GROUP_MAP: Record<string, string> = {
+  shell: "group:runtime", // exec, process
+  filesystem: "group:fs", // read, write, edit, apply_patch
+  network: "group:web", // web_search, web_fetch
+  // Browser capability intentionally covers browser automation only.
+  // `canvas` is an output/UI surface and remains unrestricted in Phase 1.
+  browser: "group:browser", // browser
+  sessions: "group:sessions", // sessions_spawn, sessions_send, subagents, etc.
+  messaging: "group:messaging", // message
+  scheduling: "group:scheduling", // cron
+};
+
+/**
+ * Tools always denied when community skills are loaded, regardless of
+ * capability declarations. These are control-plane / infrastructure tools
+ * that no community skill should ever touch.
+ */
+export const COMMUNITY_SKILL_ALWAYS_DENY = [
+  "gateway", // control-plane reconfiguration
+  "nodes", // device/node control
+] as const;
+
+export const COMMUNITY_SKILL_ALWAYS_DENY_SET = new Set<string>(COMMUNITY_SKILL_ALWAYS_DENY);
+
+/**
+ * Tools that require an explicit capability declaration from community skills.
+ * If a community skill doesn't declare the matching capability, these tools
+ * are blocked at runtime by the before-tool-call hook.
+ */
+export const DANGEROUS_COMMUNITY_SKILL_TOOLS = [
+  // shell capability
+  "exec",
+  "process",
+  // filesystem capability (mutations only — read is safe and always allowed)
+  "write",
+  "edit",
+  "apply_patch",
+  // network capability
+  "web_fetch",
+  "web_search",
+  // browser capability
+  "browser",
+  // sessions capability
+  "sessions_spawn",
+  "sessions_send",
+  "subagents",
+  // messaging capability
+  "message",
+  // scheduling capability
+  "cron",
+] as const;
+
+export const DANGEROUS_COMMUNITY_SKILL_TOOL_SET = new Set<string>(DANGEROUS_COMMUNITY_SKILL_TOOLS);
