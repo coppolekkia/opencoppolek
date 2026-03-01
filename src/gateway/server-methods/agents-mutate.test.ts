@@ -120,6 +120,10 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
   return { respond, promise };
 }
 
+function toPortablePath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^[A-Za-z]:/, "");
+}
+
 function createEnoentError() {
   const err = new Error("ENOENT") as NodeJS.ErrnoException;
   err.code = "ENOENT";
@@ -517,20 +521,23 @@ describe("agents.files.get/set symlink safety", () => {
   });
 
   it("rejects agents.files.get when allowlisted file symlink escapes workspace", async () => {
-    const workspace = "/workspace/test-agent";
+    const workspace = path.resolve("/workspace/test-agent");
+    const workspacePortable = toPortablePath(workspace);
     const candidate = path.resolve(workspace, "AGENTS.md");
+    const candidatePortable = toPortablePath(candidate);
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
+      const normalized = toPortablePath(p);
+      if (normalized === workspacePortable) {
         return workspace;
       }
-      if (p === candidate) {
+      if (normalized === candidatePortable) {
         return "/outside/secret.txt";
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
+      if (toPortablePath(p) === candidatePortable) {
         return makeSymlinkStat();
       }
       throw createEnoentError();
@@ -550,20 +557,23 @@ describe("agents.files.get/set symlink safety", () => {
   });
 
   it("rejects agents.files.set when allowlisted file symlink escapes workspace", async () => {
-    const workspace = "/workspace/test-agent";
+    const workspace = path.resolve("/workspace/test-agent");
+    const workspacePortable = toPortablePath(workspace);
     const candidate = path.resolve(workspace, "AGENTS.md");
+    const candidatePortable = toPortablePath(candidate);
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
+      const normalized = toPortablePath(p);
+      if (normalized === workspacePortable) {
         return workspace;
       }
-      if (p === candidate) {
+      if (normalized === candidatePortable) {
         return "/outside/secret.txt";
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
+      if (toPortablePath(p) === candidatePortable) {
         return makeSymlinkStat();
       }
       throw createEnoentError();
@@ -585,33 +595,38 @@ describe("agents.files.get/set symlink safety", () => {
   });
 
   it("allows in-workspace symlink targets for get/set", async () => {
-    const workspace = "/workspace/test-agent";
+    const workspace = path.resolve("/workspace/test-agent");
+    const workspacePortable = toPortablePath(workspace);
     const candidate = path.resolve(workspace, "AGENTS.md");
+    const candidatePortable = toPortablePath(candidate);
     const target = path.resolve(workspace, "policies", "AGENTS.md");
+    const targetPortable = toPortablePath(target);
     const targetStat = makeFileStat({ size: 7, mtimeMs: 1700, dev: 9, ino: 42 });
 
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
+      const normalized = toPortablePath(p);
+      if (normalized === workspacePortable) {
         return workspace;
       }
-      if (p === candidate) {
+      if (normalized === candidatePortable) {
         return target;
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
+      const normalized = toPortablePath(p);
+      if (normalized === candidatePortable) {
         return makeSymlinkStat({ dev: 9, ino: 41 });
       }
-      if (p === target) {
+      if (normalized === targetPortable) {
         return targetStat;
       }
       throw createEnoentError();
     });
     mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === target) {
+      if (toPortablePath(p) === targetPortable) {
         return targetStat;
       }
       throw createEnoentError();
@@ -653,17 +668,19 @@ describe("agents.files.get/set symlink safety", () => {
   });
 
   it("rejects agents.files.get when allowlisted file is a hardlinked alias", async () => {
-    const workspace = "/workspace/test-agent";
+    const workspace = path.resolve("/workspace/test-agent");
+    const workspacePortable = toPortablePath(workspace);
     const candidate = path.resolve(workspace, "AGENTS.md");
+    const candidatePortable = toPortablePath(candidate);
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
+      if (toPortablePath(p) === workspacePortable) {
         return workspace;
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
+      if (toPortablePath(p) === candidatePortable) {
         return makeFileStat({ nlink: 2 });
       }
       throw createEnoentError();
@@ -683,17 +700,19 @@ describe("agents.files.get/set symlink safety", () => {
   });
 
   it("rejects agents.files.set when allowlisted file is a hardlinked alias", async () => {
-    const workspace = "/workspace/test-agent";
+    const workspace = path.resolve("/workspace/test-agent");
+    const workspacePortable = toPortablePath(workspace);
     const candidate = path.resolve(workspace, "AGENTS.md");
+    const candidatePortable = toPortablePath(candidate);
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
+      if (toPortablePath(p) === workspacePortable) {
         return workspace;
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
+      if (toPortablePath(p) === candidatePortable) {
         return makeFileStat({ nlink: 2 });
       }
       throw createEnoentError();

@@ -2,6 +2,7 @@ import os from "node:os";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
   approveDevicePairing,
+  createDevicePairingBootstrapToken,
   listDevicePairing,
   resolveGatewayBindUrl,
   runPluginCommandWithTimeout,
@@ -25,8 +26,7 @@ type DevicePairPluginConfig = {
 
 type SetupPayload = {
   url: string;
-  token?: string;
-  password?: string;
+  token: string;
 };
 
 type ResolveUrlResult = {
@@ -300,7 +300,7 @@ function formatSetupReply(payload: SetupPayload, authLabel: string): string {
     setupCode,
     "",
     `Gateway: ${payload.url}`,
-    `Auth: ${authLabel}`,
+    `Auth: one-time setup token (gateway ${authLabel})`,
   ].join("\n");
 }
 
@@ -414,9 +414,17 @@ export default function register(api: OpenClawPluginApi) {
 
       const payload: SetupPayload = {
         url: urlResult.url,
-        token: auth.token,
-        password: auth.password,
+        token: "",
       };
+      try {
+        const bootstrap = await createDevicePairingBootstrapToken();
+        payload.token = bootstrap.token;
+      } catch (err) {
+        api.logger.error?.(
+          `device-pair: failed to mint bootstrap token (${String((err as Error)?.message ?? err)})`,
+        );
+        return { text: "Error: failed to generate setup token." };
+      }
 
       if (action === "qr") {
         const setupCode = encodeSetupCode(payload);
@@ -443,7 +451,7 @@ export default function register(api: OpenClawPluginApi) {
               return {
                 text: [
                   `Gateway: ${payload.url}`,
-                  `Auth: ${authLabel}`,
+                  `Auth: one-time setup token (gateway ${authLabel})`,
                   "",
                   "After scanning, come back here and run `/pair approve` to complete pairing.",
                 ].join("\n"),
@@ -462,7 +470,7 @@ export default function register(api: OpenClawPluginApi) {
         api.logger.info?.(`device-pair: QR fallback channel=${channel} target=${target}`);
         const infoLines = [
           `Gateway: ${payload.url}`,
-          `Auth: ${authLabel}`,
+          `Auth: one-time setup token (gateway ${authLabel})`,
           "",
           "After scanning, run `/pair approve` to complete pairing.",
         ];

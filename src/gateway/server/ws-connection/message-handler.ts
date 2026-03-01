@@ -8,6 +8,10 @@ import {
   verifyDeviceSignature,
 } from "../../../infra/device-identity.js";
 import {
+  consumeDevicePairingBootstrapToken,
+  verifyDevicePairingBootstrapToken,
+} from "../../../infra/device-pairing-bootstrap.js";
+import {
   approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
@@ -495,6 +499,8 @@ export function attachGatewayWsMessageHandler(params: {
         let deviceAuthPayloadVersion: "v2" | "v3" | null = null;
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
+        const providedSharedToken = connectParams.auth?.token?.trim() ?? "";
+        let usedBootstrapToken = false;
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
         const controlUiAuthPolicy = resolveControlUiAuthPolicy({
           isControlUi,
@@ -682,6 +688,26 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
+        const canTryBootstrapToken =
+          !authOk &&
+          !authResult.rateLimited &&
+          role === "operator" &&
+          Boolean(device) &&
+          !connectParams.auth?.password &&
+          providedSharedToken.length > 0;
+        if (canTryBootstrapToken && device) {
+          const bootstrapAuth = await verifyDevicePairingBootstrapToken({
+            token: providedSharedToken,
+            deviceId: device.id,
+          });
+          if (bootstrapAuth.ok) {
+            authOk = true;
+            authMethod = "bootstrap-token";
+            authResult = { ok: true, method: "bootstrap-token" };
+            usedBootstrapToken = true;
+          }
+        }
+
         ({ authResult, authOk, authMethod } = await resolveConnectAuthDecision({
           state: {
             authResult,
@@ -743,16 +769,6 @@ export function attachGatewayWsMessageHandler(params: {
               `security audit: device access upgrade requested reason=${reason} device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} roleFrom=${formatAuditList(currentRoles)} roleTo=${role} scopesFrom=${formatAuditList(currentScopes)} scopesTo=${formatAuditList(scopes)} client=${connectParams.client.id} conn=${connId}`,
             );
           };
-          const clientPairingMetadata = {
-            displayName: connectParams.client.displayName,
-            platform: connectParams.client.platform,
-            deviceFamily: connectParams.client.deviceFamily,
-            clientId: connectParams.client.id,
-            clientMode: connectParams.client.mode,
-            role,
-            scopes,
-            remoteIp: reportedClientIp,
-          };
           const clientAccessMetadata = {
             displayName: connectParams.client.displayName,
             clientId: connectParams.client.id,
@@ -774,8 +790,12 @@ export function attachGatewayWsMessageHandler(params: {
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
-              ...clientPairingMetadata,
-              silent: allowSilentLocalPairing,
+              ...clientAccessMetadata,
+              platform: connectParams.client.platform,
+              deviceFamily: connectParams.client.deviceFamily,
+              // Bootstrap-token onboarding must require an explicit pairing approval, even on
+              // loopback, so the one-time token can't silently self-pair a device.
+              silent: !usedBootstrapToken && allowSilentLocalPairing,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
@@ -915,6 +935,21 @@ export function attachGatewayWsMessageHandler(params: {
         const deviceToken = device
           ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
+        if (usedBootstrapToken && device && deviceToken) {
+          const consumed = await consumeDevicePairingBootstrapToken({
+            token: providedSharedToken,
+            deviceId: device.id,
+          });
+          if (!consumed) {
+            markHandshakeFailure("bootstrap-token-invalidated", { deviceId: device.id });
+            sendHandshakeErrorResponse(
+              ErrorCodes.INVALID_REQUEST,
+              "pairing setup token expired or already used",
+            );
+            close(1008, "pairing setup token invalid");
+            return;
+          }
+        }
 
         if (role === "node") {
           const cfg = loadConfig();
