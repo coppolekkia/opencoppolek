@@ -91,10 +91,10 @@ export async function persistSessionUsageUpdate(params: {
             updatedAt: Date.now(),
           };
           if (hasUsage) {
-            patch.inputTokens = params.usage?.input ?? 0;
-            patch.outputTokens = params.usage?.output ?? 0;
-            patch.cacheRead = params.usage?.cacheRead ?? 0;
-            patch.cacheWrite = params.usage?.cacheWrite ?? 0;
+            patch.inputTokens = Math.max(0, params.usage?.input ?? 0);
+            patch.outputTokens = Math.max(0, params.usage?.output ?? 0);
+            patch.cacheRead = Math.max(0, params.usage?.cacheRead ?? 0);
+            patch.cacheWrite = Math.max(0, params.usage?.cacheWrite ?? 0);
           }
           // Missing a last-call snapshot (and promptTokens fallback) means
           // context utilization is stale/unknown.
