@@ -242,4 +242,52 @@ describe("telegram text fragments", () => {
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "aggregates fragments when first part lands below 4000 chars (content-dependent split)",
+    async () => {
+      // Telegram's split position is content-dependent; the first fragment may be
+      // noticeably below 4096.  Regression test for the 3500–4000 char range that
+      // the old 4000-char threshold would silently discard.
+      const { handler, replySpy } = await createBotHandlerWithOptions({});
+      vi.useFakeTimers();
+      try {
+        const part1 = "C".repeat(3600); // below old 4000 threshold, above new ~3481
+        const part2 = "D".repeat(500);
+
+        await handler({
+          message: {
+            chat: { id: 43, type: "private" },
+            message_id: 20,
+            date: 1736380800,
+            text: part1,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        await handler({
+          message: {
+            chat: { id: 43, type: "private" },
+            message_id: 21,
+            date: 1736380801,
+            text: part2,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+
+        expect(replySpy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(TEXT_FRAGMENT_FLUSH_MS * 2);
+        expect(replySpy).toHaveBeenCalledTimes(1);
+
+        const payload = replySpy.mock.calls[0][0] as { RawBody?: string };
+        expect(payload.RawBody).toContain(part1.slice(0, 32));
+        expect(payload.RawBody).toContain(part2.slice(0, 32));
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
 });

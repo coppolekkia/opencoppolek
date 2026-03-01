@@ -116,7 +116,12 @@ export const registerTelegramHandlers = ({
   logger,
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
-  const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
+  // Telegram splits long pastes at ~4096 chars, but the exact split position varies
+  // by content (markdown headings, line breaks, etc.) so the first fragment can land
+  // noticeably below 4096.  Use 85 % of the Telegram limit (≈ 3481) rounded to a
+  // tidy value so the buffer also catches first fragments in the 3500–4000 char range.
+  const TELEGRAM_MAX_TEXT_LENGTH = 4096;
+  const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = Math.floor(TELEGRAM_MAX_TEXT_LENGTH * 0.85); // 3481
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
     Number.isFinite(opts.testTimings.textFragmentGapMs)
