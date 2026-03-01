@@ -12,6 +12,7 @@
     "eslint/no-await-in-loop": "off",
     "eslint/no-new": "off",
     "eslint/no-shadow": "off",
+    "eslint/no-unused-vars": "off",
     "eslint/no-unmodified-loop-condition": "off",
     "oxc/no-accumulating-spread": "off",
     "oxc/no-async-endpoint-handlers": "off",

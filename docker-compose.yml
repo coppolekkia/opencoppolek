@@ -1,6 +1,6 @@
 services:
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:main}
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -28,7 +28,7 @@ services:
       ]
 
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:main}
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -44,3 +44,19 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+  clawfeed:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - /Users/rexmacmini/Project/active_projects/clawfeed:/app
+      - clawfeed-data:/app/data
+    env_file:
+      - /Users/rexmacmini/Project/active_projects/clawfeed/.env
+    command: node src/server.mjs
+    ports:
+      - "127.0.0.1:8767:8767"
+    restart: unless-stopped
+
+volumes:
+  clawfeed-data:

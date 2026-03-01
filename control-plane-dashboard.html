@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenClaw Control Plane</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'SF Mono',Menlo,monospace;background:#0d1117;color:#c9d1d9;padding:16px;font-size:13px}
+h1{font-size:18px;color:#58a6ff;margin-bottom:4px}
+.subtitle{color:#8b949e;font-size:11px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px}
+.card h2{font-size:13px;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.green{background:#3fb950}.dot.yellow{background:#d29922}.dot.red{background:#f85149}.dot.blue{background:#58a6ff}
+.mode-badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;text-transform:uppercase}
+.mode-coding{background:#1f6feb33;color:#58a6ff;border:1px solid #1f6feb}
+.mode-ops{background:#3fb95033;color:#3fb950;border:1px solid #3fb950}
+.mode-debugging{background:#d2992233;color:#d29922;border:1px solid #d29922}
+.mode-research{background:#a371f733;color:#a371f7;border:1px solid #a371f7}
+.mode-none{background:#30363d;color:#8b949e;border:1px solid #484f58}
+.bar-container{display:flex;align-items:center;gap:8px;margin:4px 0}
+.bar-label{width:90px;text-align:right;color:#8b949e;font-size:11px}
+.bar-track{flex:1;height:18px;background:#21262d;border-radius:4px;overflow:hidden;position:relative}
+.bar-fill{height:100%;border-radius:4px;transition:width 0.6s ease}
+.bar-value{position:absolute;right:6px;top:0;line-height:18px;font-size:10px;color:#c9d1d9}
+.bar-coding{background:linear-gradient(90deg,#1f6feb,#58a6ff)}
+.bar-ops{background:linear-gradient(90deg,#238636,#3fb950)}
+.bar-debugging{background:linear-gradient(90deg,#9e6a03,#d29922)}
+.bar-research{background:linear-gradient(90deg,#8957e5,#a371f7)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:#8b949e;font-weight:500;padding:6px 8px;border-bottom:1px solid #30363d}
+td{padding:5px 8px;border-bottom:1px solid #21262d}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.cost-low{color:#3fb950}.cost-mid{color:#d29922}.cost-high{color:#f85149}
+.tag{padding:1px 6px;border-radius:3px;font-size:10px;white-space:nowrap}
+.tag-dev{background:#23863644;color:#3fb950;border:1px solid #238636}
+.tag-session{background:#1f6feb44;color:#58a6ff;border:1px solid #1f6feb}
+.refresh-info{color:#484f58;font-size:10px;text-align:right;margin-top:4px}
+.metric-big{font-size:26px;font-weight:700;line-height:1.1}
+.metric-label{font-size:10px;color:#8b949e;margin-top:2px}
+.metrics-row{display:flex;gap:24px;margin-bottom:14px;flex-wrap:wrap}
+.metrics-row>div{min-width:70px}
+.adj-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:10px}
+.adj-item{text-align:center;padding:5px;background:#21262d;border-radius:6px}
+.adj-value{font-size:15px;font-weight:600;color:#c9d1d9}
+.adj-label{font-size:9px;color:#8b949e;margin-top:2px}
+.timeline{max-height:260px;overflow-y:auto}
+.tl-entry{display:grid;grid-template-columns:52px 90px 70px 1fr;gap:6px;padding:4px 0;border-bottom:1px solid #21262d;font-size:11px;align-items:center}
+.tl-time{color:#484f58}.tl-intent{color:#c9d1d9}.tl-reason{color:#6e7681;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.heatmap-grid{display:grid;gap:3px;margin-top:6px}
+.heat-row{display:grid;grid-template-columns:90px 1fr 1fr;gap:3px;align-items:center}
+.heat-label{font-size:10px;color:#8b949e;text-align:right;padding-right:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.heat-bar{height:20px;border-radius:3px;position:relative;min-width:2px}
+.heat-bar span{position:absolute;right:4px;top:2px;font-size:9px;color:#fff}
+.pred-card{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px}
+.pred-item{text-align:center;padding:8px;background:#21262d;border-radius:6px}
+.pred-value{font-size:20px;font-weight:700}
+.pred-label{font-size:9px;color:#8b949e;margin-top:2px}
+</style>
+</head>
+<body>
+<h1>OpenClaw Control Plane Observatory</h1>
+<p class="subtitle">Adaptive Routing &middot; Intent Momentum &middot; Predictive Execution &mdash; <span id="uptime">connecting...</span></p>
+
+<div class="metrics-row">
+  <div><div class="metric-big" id="m-total">-</div><div class="metric-label">Routed</div></div>
+  <div><div class="metric-big" id="m-dev" style="color:#3fb950">-</div><div class="metric-label">Dev Loop</div></div>
+  <div><div class="metric-big" id="m-session" style="color:#58a6ff">-</div><div class="metric-label">Session</div></div>
+  <div><div class="metric-big" id="m-success">-</div><div class="metric-label">Success</div></div>
+  <div><div class="metric-big" id="m-mode">-</div><div class="metric-label">Mode</div></div>
+  <div><div class="metric-big" id="m-pred" style="color:#a371f7">-</div><div class="metric-label">Pred. Acc</div></div>
+</div>
+
+<div class="grid">
+  <!-- Panel 1: Routing Decision Timeline -->
+  <div class="card">
+    <h2><span class="dot red"></span> Routing Timeline</h2>
+    <div class="timeline" id="timeline"></div>
+  </div>
+
+  <!-- Panel 2: Mode Momentum Drift -->
+  <div class="card">
+    <h2><span class="dot blue"></span> Intent Momentum</h2>
+    <div id="momentum-bars"></div>
+    <div class="adj-grid" id="mode-adj"></div>
+  </div>
+
+  <!-- Panel 3: Prediction Accuracy -->
+  <div class="card">
+    <h2><span class="dot yellow"></span> Prediction Accuracy</h2>
+    <div class="pred-card" id="pred-cards"></div>
+    <table>
+      <thead><tr><th>Intent</th><th class="num">Dev</th><th class="num">Session</th><th class="num">P(ses)</th><th>Predicted</th></tr></thead>
+      <tbody id="pred-table"></tbody>
+    </table>
+  </div>
+
+  <!-- Panel 4: Executor Heatmap -->
+  <div class="card">
+    <h2><span class="dot green"></span> Executor Heatmap</h2>
+    <div class="heatmap-grid" id="heatmap"></div>
+  </div>
+</div>
+
+<div class="refresh-info">Auto-refresh: 3s &middot; Data: /routing-events, /mode-status, /routing-stats, /transitions, /prediction-stats</div>
+
+<script>
+const B = '';
+async function f(p){try{const r=await fetch(B+p);return r.ok?r.json():null}catch{return null}}
+function cc(v){v=parseFloat(v);return v<20?'cost-low':v<60?'cost-mid':'cost-high'}
+function mc(m){return m?'mode-'+m:'mode-none'}
+function ts(d){return new Date(d).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+
+// Panel 1: Timeline
+async function renderTimeline(){
+  const events = await f('/routing-events?limit=60');
+  const el = document.getElementById('timeline');
+  if(!events||events.length===0){el.innerHTML='<div style="color:#484f58;padding:12px">Waiting for routing events...</div>';return}
+  el.innerHTML = events.slice().reverse().map(e=>{
+    const executor = e.executor||'dev_loop';
+    const isSession = executor==='session_bridge';
+    const tagClass = isSession?'tag-session':'tag-dev';
+    const tagText = isSession?'SESSION':'DEV';
+    const modeStr = e.mode?`<span class="mode-badge ${mc(e.mode)}" style="font-size:9px;padding:1px 4px">${e.mode}</span>`:'';
+    const reason = e.reason||'';
+    return `<div class="tl-entry">
+      <span class="tl-time">${ts(e.ts)}</span>
+      <span class="tl-intent">${e.intent||'?'}</span>
+      <span><span class="tag ${tagClass}">${tagText}</span> ${modeStr}</span>
+      <span class="tl-reason" title="${reason}">${reason}</span>
+    </div>`;
+  }).join('');
+}
+
+// Panel 2: Momentum
+async function renderMomentum(){
+  const data = await f('/mode-status');
+  const el = document.getElementById('momentum-bars');
+  const adjEl = document.getElementById('mode-adj');
+  if(!data){el.innerHTML='<div style="color:#484f58">No data</div>';return}
+  const modes=['coding','ops','debugging','research'];
+  const maxS = Math.max(...Object.values(data.scores),3);
+  el.innerHTML = modes.map(m=>{
+    const s=data.scores[m]||0;
+    const pct=Math.min(100,(s/maxS)*100);
+    const active=data.activeMode===m?' ◀':'';
+    return `<div class="bar-container">
+      <div class="bar-label">${m}${active}</div>
+      <div class="bar-track"><div class="bar-fill bar-${m}" style="width:${pct}%"></div>
+        <div class="bar-value">${s.toFixed(1)}</div></div>
+    </div>`;
+  }).join('');
+  const a=data.adjustments||{};
+  adjEl.innerHTML=`
+    <div class="adj-item"><div class="adj-value">${(a.sessionCostMultiplier||1).toFixed(1)}x</div><div class="adj-label">Ses. Cost Mult</div></div>
+    <div class="adj-item"><div class="adj-value">${a.cooldownOverride?(a.cooldownOverride/1000)+'s':'20s'}</div><div class="adj-label">Cooldown</div></div>
+    <div class="adj-item"><div class="adj-value">${((a.predictionThreshold||0.6)*100).toFixed(0)}%</div><div class="adj-label">Pred Threshold</div></div>`;
+  // Top metric: mode
+  const mEl=document.getElementById('m-mode');
+  mEl.innerHTML=data.activeMode?`<span class="mode-badge ${mc(data.activeMode)}">${data.activeMode}</span>`:'<span style="color:#484f58">--</span>';
+}
+
+// Panel 3: Prediction
+async function renderPrediction(){
+  const [pred,trans] = await Promise.all([f('/prediction-stats'),f('/transitions')]);
+  // Cards
+  const cEl=document.getElementById('pred-cards');
+  if(pred){
+    const accColor=parseFloat(pred.accuracy)>60?'#3fb950':parseFloat(pred.accuracy)>30?'#d29922':'#f85149';
+    cEl.innerHTML=`
+      <div class="pred-item"><div class="pred-value" style="color:${accColor}">${pred.accuracy}</div><div class="pred-label">Accuracy</div></div>
+      <div class="pred-item"><div class="pred-value" style="color:#3fb950">${pred.hits}</div><div class="pred-label">Hits</div></div>
+      <div class="pred-item"><div class="pred-value" style="color:#f85149">${pred.falseWarmRate}</div><div class="pred-label">False Warm</div></div>
+      <div class="pred-item"><div class="pred-value">${pred.total}</div><div class="pred-label">Total</div></div>`;
+    document.getElementById('m-pred').textContent=pred.accuracy;
+  }
+  // Table
+  const tEl=document.getElementById('pred-table');
+  if(!trans||Object.keys(trans).length===0){tEl.innerHTML='<tr><td colspan="5" style="color:#484f58">Collecting...</td></tr>';return}
+  tEl.innerHTML=Object.entries(trans).sort((a,b)=>(b[1].total||0)-(a[1].total||0)).map(([intent,s])=>{
+    const prob=parseFloat(s.session_probability||0);
+    const pc=prob>0.6?'cost-high':prob>0.3?'cost-mid':'cost-low';
+    const pred=s.predicted_executor||'dev_loop';
+    const isS=pred==='session_bridge';
+    return `<tr><td>${intent}</td><td class="num">${s.dev_loop||0}</td><td class="num">${s.session_bridge||0}</td>
+      <td class="num ${pc}">${(prob*100).toFixed(0)}%</td>
+      <td><span class="tag ${isS?'tag-session':'tag-dev'}">${isS?'session':'dev'}</span></td></tr>`;
+  }).join('');
+}
+
+// Panel 4: Heatmap
+async function renderHeatmap(){
+  const data = await f('/routing-stats');
+  const el = document.getElementById('heatmap');
+  if(!data||Object.keys(data).length===0){el.innerHTML='<div style="color:#484f58;padding:12px">Collecting data...</div>';return}
+  let totalDev=0,totalSes=0,totalOk=0,totalFail=0;
+  const sorted=Object.entries(data).sort((a,b)=>{
+    const sa=Object.values(a[1]).reduce((s,v)=>s+(parseInt(v.samples)||0),0);
+    const sb=Object.values(b[1]).reduce((s,v)=>s+(parseInt(v.samples)||0),0);
+    return sb-sa;
+  });
+  // Header
+  let html='<div class="heat-row"><div class="heat-label" style="font-weight:600">Intent</div><div style="text-align:center;font-size:10px;color:#3fb950">Dev Loop</div><div style="text-align:center;font-size:10px;color:#58a6ff">Session Bridge</div></div>';
+  sorted.forEach(([intent,executors])=>{
+    const dev=executors.dev_loop||{};
+    const ses=executors.session_bridge||{};
+    const devN=(dev.success||0)+(dev.fail||0);
+    const sesN=(ses.success||0)+(ses.fail||0);
+    const total=devN+sesN||1;
+    const devPct=(devN/total*100).toFixed(0);
+    const sesPct=(sesN/total*100).toFixed(0);
+    totalDev+=dev.success||0;totalSes+=ses.success||0;
+    totalOk+=(dev.success||0)+(ses.success||0);
+    totalFail+=(dev.fail||0)+(ses.fail||0);
+    html+=`<div class="heat-row">
+      <div class="heat-label">${intent}</div>
+      <div class="heat-bar" style="width:${Math.max(devPct,5)}%;background:#238636"><span>${devPct}%</span></div>
+      <div class="heat-bar" style="width:${Math.max(sesPct,5)}%;background:#1f6feb"><span>${sesPct}%</span></div>
+    </div>`;
+  });
+  el.innerHTML=html;
+  // Top metrics
+  document.getElementById('m-total').textContent=totalOk+totalFail;
+  document.getElementById('m-dev').textContent=totalDev;
+  document.getElementById('m-session').textContent=totalSes;
+  document.getElementById('m-success').textContent=totalOk+totalFail>0?((totalOk/(totalOk+totalFail))*100).toFixed(0)+'%':'-';
+}
+
+async function refresh(){
+  const health = await f('/health');
+  if(health&&health.uptime) document.getElementById('uptime').textContent='uptime: '+health.uptime;
+  await Promise.all([renderTimeline(),renderMomentum(),renderPrediction(),renderHeatmap()]);
+}
+refresh();
+setInterval(refresh,3000);
+</script>
+</body>
+</html>
