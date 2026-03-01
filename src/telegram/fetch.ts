@@ -1,6 +1,6 @@
 import * as dns from "node:dns";
 import * as net from "node:net";
-import { Agent, setGlobalDispatcher } from "undici";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -40,13 +40,20 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   // current autoSelectFamily setting so subsequent globalThis.fetch calls
   // inherit the same decision.
   // See: https://github.com/openclaw/openclaw/issues/25676
+  //
+  // Use EnvHttpProxyAgent instead of a plain Agent so that any HTTP_PROXY /
+  // HTTPS_PROXY environment variables configured by the user (or by pi-ai's
+  // http-proxy initialiser) are preserved.  A plain Agent silently discards
+  // proxy settings because it becomes the process-wide dispatcher and is not
+  // proxy-aware, causing all subsequent fetch calls – including Anthropic API
+  // requests – to bypass the proxy.
   if (
     autoSelectDecision.value !== null &&
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
     try {
       setGlobalDispatcher(
-        new Agent({
+        new EnvHttpProxyAgent({
           connect: {
             autoSelectFamily: autoSelectDecision.value,
             autoSelectFamilyAttemptTimeout: 300,
