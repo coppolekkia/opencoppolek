@@ -201,6 +201,16 @@ describe("createTelegramBot", () => {
     ).toBe("telegram:123:control");
     expect(
       getTelegramSequentialKey({
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "멈춰" }),
+      }),
+    ).toBe("telegram:123:control");
+    expect(
+      getTelegramSequentialKey({
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "그만해" }),
+      }),
+    ).toBe("telegram:123:control");
+    expect(
+      getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }),
       }),
     ).toBe("telegram:123");
