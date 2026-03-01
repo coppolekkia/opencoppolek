@@ -314,6 +314,24 @@ Then verify backend health:
 /acp doctor
 ```
 
+### Non-interactive permission mode (important)
+
+ACP harness sessions run non-interactively, so they cannot answer runtime permission prompts.
+If `@openclaw/acpx` is left on a prompt-based permission mode (for example `approve-reads`), write/exec tool calls can fail early with:
+
+```text
+AcpRuntimeError: Permission prompt unavailable in non-interactive mode
+```
+
+Set acpx to non-interactive approvals:
+
+```bash
+openclaw config set plugins.entries.acpx.config.permissionMode approve-all
+openclaw gateway restart
+```
+
+If your environment needs tighter controls, use an explicit policy profile that does **not** require interactive prompts for the tool set you expect ACP harnesses to use.
+
 ### Pinned acpx install strategy (current behavior)
 
 `@openclaw/acpx` now enforces a strict plugin-local pinning model:
