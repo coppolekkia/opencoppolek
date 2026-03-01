@@ -237,6 +237,22 @@ describe("resolveWhatsAppOutboundTarget", () => {
       );
     });
 
+    it("bypasses allowList in explicit mode", () => {
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce("+19876543210") // for allowFrom[0] (processed first)
+        .mockReturnValueOnce("+11234567890"); // for 'to' param
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+
+      expectResolutionOk(
+        {
+          to: "+11234567890",
+          allowFrom: ["+19876543210"],
+          mode: "explicit",
+        },
+        "+11234567890",
+      );
+    });
+
     it("enforces allowList in custom mode string", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget)
         .mockReturnValueOnce("+19876543210") // for allowFrom[0] (happens first!)
