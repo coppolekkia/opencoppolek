@@ -600,6 +600,34 @@ describe("gateway server auth/connect", () => {
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
+    test("rejects legacy handshake first frame with explicit classification", async () => {
+      const ws = await openWs(port);
+      const closeInfoPromise = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
+
+      ws.send(JSON.stringify({ type: "handshake", version: PROTOCOL_VERSION }));
+
+      const closeInfo = await closeInfoPromise;
+      expect(closeInfo.code).toBe(1008);
+      expect(closeInfo.reason).toContain("legacy handshake frame");
+      expect(closeInfo.reason).toContain("type=handshake");
+    });
+
+    test("truncates invalid-first-frame close reason safely", async () => {
+      const ws = await openWs(port);
+      const closeInfoPromise = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
+
+      ws.send(JSON.stringify({ type: `legacy-${"x".repeat(300)}` }));
+
+      const closeInfo = await closeInfoPromise;
+      expect(closeInfo.code).toBe(1008);
+      expect(Buffer.byteLength(closeInfo.reason, "utf8")).toBeLessThanOrEqual(120);
+      expect(closeInfo.reason).toContain("invalid request frame");
+    });
+
     test("requires nonce for device auth", async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { host: "example.com" },
