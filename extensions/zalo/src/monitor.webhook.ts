@@ -127,7 +127,7 @@ export async function handleZaloWebhookRequest(
   if (!resolved) {
     return false;
   }
-  const { targets } = resolved;
+  const { targets, path: resolvedPath } = resolved;
 
   if (rejectNonPostWebhookRequest(req, res)) {
     return true;
@@ -140,17 +140,17 @@ export async function handleZaloWebhookRequest(
   if (matchedTarget.kind === "none") {
     res.statusCode = 401;
     res.end("unauthorized");
-    recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
+    recordWebhookStatus(targets[0]?.runtime, resolvedPath, res.statusCode);
     return true;
   }
   if (matchedTarget.kind === "ambiguous") {
     res.statusCode = 401;
     res.end("ambiguous webhook target");
-    recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
+    recordWebhookStatus(targets[0]?.runtime, resolvedPath, res.statusCode);
     return true;
   }
   const target = matchedTarget.target;
-  const path = req.url ?? "<unknown>";
+  const path = resolvedPath;
   const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
   const nowMs = Date.now();
 

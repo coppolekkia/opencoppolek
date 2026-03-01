@@ -41,12 +41,16 @@ function registerTarget(params: {
   path: string;
   secret?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  runtime?: {
+    log?: (message: string) => void;
+    error?: (message: string) => void;
+  };
 }): () => void {
   return registerZaloWebhookTarget({
     token: "tok",
     account: DEFAULT_ACCOUNT,
     config: {} as OpenClawConfig,
-    runtime: {},
+    runtime: params.runtime ?? {},
     core: {} as PluginRuntime,
     secret: params.secret ?? "secret",
     path: params.path,
@@ -192,6 +196,64 @@ describe("handleZaloWebhookRequest", () => {
 
         expect(saw429).toBe(true);
       });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not allow query-string churn to bypass per-path request rate limits", async () => {
+    const unregister = registerTarget({ path: "/hook-rate-query" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        let saw429 = false;
+        for (let i = 0; i < 130; i += 1) {
+          const response = await fetch(`${baseUrl}/hook-rate-query?nonce=${String(i)}`, {
+            method: "POST",
+            headers: {
+              "x-bot-api-secret-token": "secret",
+              "content-type": "application/json",
+            },
+            body: "{}",
+          });
+          if (response.status === 429) {
+            saw429 = true;
+            break;
+          }
+        }
+
+        expect(saw429).toBe(true);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("aggregates unauthorized anomaly counters across query variants", async () => {
+    const runtimeLog = vi.fn();
+    const path = `/hook-anomaly-${Date.now().toString(36)}`;
+    const unregister = registerTarget({
+      path,
+      runtime: {
+        log: runtimeLog,
+      },
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        for (let i = 0; i < 30; i += 1) {
+          const response = await fetch(`${baseUrl}${path}?nonce=${String(i)}`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: "{}",
+          });
+          expect(response.status).toBe(401);
+        }
+      });
+
+      expect(runtimeLog).toHaveBeenCalledTimes(2);
     } finally {
       unregister();
     }
