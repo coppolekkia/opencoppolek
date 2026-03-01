@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -413,6 +414,19 @@ function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
+function expandHomeDir(filePath: unknown): unknown {
+  if (typeof filePath !== "string") {
+    return filePath;
+  }
+  if (filePath === "~") {
+    return os.homedir();
+  }
+  if (filePath.startsWith("~/")) {
+    return os.homedir() + filePath.slice(1);
+  }
+  return filePath;
+}
+
 export function normalizeToolParams(params: unknown): Record<string, unknown> | undefined {
   if (!params || typeof params !== "object") {
     return undefined;
@@ -421,8 +435,12 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   const normalized = { ...record };
   // file_path → path (read, write, edit)
   if ("file_path" in normalized && !("path" in normalized)) {
-    normalized.path = normalized.file_path;
+    normalized.path = expandHomeDir(normalized.file_path);
     delete normalized.file_path;
+  }
+  // Expand ~ in path for read, write, and edit tools
+  if ("path" in normalized) {
+    normalized.path = expandHomeDir(normalized.path);
   }
   // old_string → oldText (edit)
   if ("old_string" in normalized && !("oldText" in normalized)) {
@@ -861,6 +879,95 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       }
     },
   } as const;
+}
+
+function createHostReadOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly !== false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow reads anywhere on the host
+    return {
+      readFile: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        return await fs.readFile(resolved);
+      },
+      access: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        await fs.access(resolved);
+      },
+      detectImageMimeType: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        const buffer = await fs.readFile(resolved);
+        const mime = await detectMime({ buffer, filePath: resolved });
+        return mime && mime.startsWith("image/") ? mime : undefined;
+      },
+    } as const;
+  }
+
+  // When workspaceOnly is true (default), enforce workspace boundary
+  return {
+    readFile: async (absolutePath: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      const opened = await openFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+      });
+      try {
+        return await opened.handle.readFile();
+      } finally {
+        await opened.handle.close().catch(() => {});
+      }
+    },
+    access: async (absolutePath: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      try {
+        const opened = await openFileWithinRoot({
+          rootDir: root,
+          relativePath: relative,
+        });
+        await opened.handle.close().catch(() => {});
+      } catch (error) {
+        if (error instanceof SafeOpenError && error.code === "not-found") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
+          throw createFsAccessError("EACCES", absolutePath);
+        }
+        throw error;
+      }
+    },
+    detectImageMimeType: async (absolutePath: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      const opened = await openFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+      });
+      try {
+        const buffer = await opened.handle.readFile();
+        const mime = await detectMime({ buffer, filePath: absolutePath });
+        return mime && mime.startsWith("image/") ? mime : undefined;
+      } finally {
+        await opened.handle.close().catch(() => {});
+      }
+    },
+  } as const;
+}
+
+export function createHostWorkspaceReadTool(
+  root: string,
+  options?: {
+    workspaceOnly?: boolean;
+    modelContextWindowTokens?: number;
+    imageSanitization?: ImageSanitizationLimits;
+  },
+) {
+  const base = createReadTool(root, {
+    operations: createHostReadOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  return createOpenClawReadTool(base, {
+    modelContextWindowTokens: options?.modelContextWindowTokens,
+    imageSanitization: options?.imageSanitization,
+  });
 }
 
 function toRelativePathInRoot(
