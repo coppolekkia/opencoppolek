@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -413,6 +414,19 @@ function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
+function expandHomeDir(filePath: unknown): unknown {
+  if (typeof filePath !== "string") {
+    return filePath;
+  }
+  if (filePath === "~") {
+    return os.homedir();
+  }
+  if (filePath.startsWith("~/")) {
+    return os.homedir() + filePath.slice(1);
+  }
+  return filePath;
+}
+
 export function normalizeToolParams(params: unknown): Record<string, unknown> | undefined {
   if (!params || typeof params !== "object") {
     return undefined;
@@ -421,8 +435,12 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   const normalized = { ...record };
   // file_path → path (read, write, edit)
   if ("file_path" in normalized && !("path" in normalized)) {
-    normalized.path = normalized.file_path;
+    normalized.path = expandHomeDir(normalized.file_path);
     delete normalized.file_path;
+  }
+  // Expand ~ in path for read, write, and edit tools
+  if ("path" in normalized) {
+    normalized.path = expandHomeDir(normalized.path);
   }
   // old_string → oldText (edit)
   if ("old_string" in normalized && !("oldText" in normalized)) {
@@ -758,7 +776,7 @@ function createSandboxEditOperations(params: SandboxToolParams) {
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly !== false;
+  const workspaceOnly = options?.workspaceOnly === true;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
@@ -797,7 +815,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
 }
 
 function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly !== false;
+  const workspaceOnly = options?.workspaceOnly === true;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
