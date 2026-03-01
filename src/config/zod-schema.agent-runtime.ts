@@ -264,6 +264,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("duckduckgo"),
       ])
       .optional(),
     apiKey: z.string().optional().register(sensitive),
