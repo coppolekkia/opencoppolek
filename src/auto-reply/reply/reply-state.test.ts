@@ -319,6 +319,20 @@ describe("shouldRunMemoryFlush", () => {
     ).toBe(true);
   });
 
+  it("runs when compaction incremented since last flush (flush-triggered compaction case)", () => {
+    // When a flush triggers compaction (count goes from N to N+1), the saved
+    // memoryFlushCompactionCount stays at N (the pre-flush value). Next cycle,
+    // compactionCount is N+1, so they differ and the flush runs again.
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 96_000, compactionCount: 3, memoryFlushCompactionCount: 2 },
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 2_000,
+      }),
+    ).toBe(true);
+  });
+
   it("ignores stale cached totals", () => {
     expect(
       shouldRunMemoryFlush({

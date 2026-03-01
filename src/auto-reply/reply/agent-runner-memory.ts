@@ -423,15 +423,15 @@ export async function runMemoryFlushIfNeeded(params: {
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
     if (memoryCompactionCompleted) {
-      const nextCount = await incrementCompactionCount({
+      await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
       });
-      if (typeof nextCount === "number") {
-        memoryFlushCompactionCount = nextCount;
-      }
+      // Do not update memoryFlushCompactionCount here: keeping it at the
+      // pre-flush compactionCount ensures shouldRunMemoryFlush sees a mismatch
+      // on the next turn and runs again if tokens are still high.
     }
     if (params.storePath && params.sessionKey) {
       try {

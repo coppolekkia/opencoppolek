@@ -1783,7 +1783,9 @@ describe("runReplyAgent memory flush", () => {
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].compactionCount).toBe(2);
-      expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
+      // memoryFlushCompactionCount stays at pre-flush value so next cycle
+      // sees a mismatch and runs again if tokens remain high
+      expect(stored[sessionKey].memoryFlushCompactionCount).toBe(1);
     });
   });
 });
