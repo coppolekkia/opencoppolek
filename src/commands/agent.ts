@@ -123,6 +123,13 @@ function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boo
   return "Continue where you left off. The previous model attempt failed or timed out.";
 }
 
+function resolveSenderIsOwner(opts: AgentCommandOpts): boolean {
+  if (typeof opts.senderIsOwner === "boolean") {
+    return opts.senderIsOwner;
+  }
+  return opts.inputProvenance?.kind !== "external_user";
+}
+
 function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
@@ -194,7 +201,7 @@ function runAgentAttempt(params: {
     currentThreadTs: params.runContext.currentThreadTs,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner: true,
+    senderIsOwner: resolveSenderIsOwner(params.opts),
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,

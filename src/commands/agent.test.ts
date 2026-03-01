@@ -188,6 +188,35 @@ describe("agentCommand", () => {
     });
   });
 
+  it("defaults senderIsOwner to true when provenance is not external_user", async () => {
+    await withTempHome(async (home) => {
+      const callArgs = await runWithDefaultAgentConfig({
+        home,
+        args: { message: "hi", to: "+1555" },
+      });
+      expect(callArgs?.senderIsOwner).toBe(true);
+    });
+  });
+
+  it("forces senderIsOwner=false for external_user provenance", async () => {
+    await withTempHome(async (home) => {
+      const callArgs = await runWithDefaultAgentConfig({
+        home,
+        args: {
+          message: "hi from external",
+          sessionKey: "node-test-session",
+          messageChannel: "node",
+          inputProvenance: {
+            kind: "external_user",
+            sourceChannel: "node",
+            sourceTool: "gateway.voice.transcript",
+          },
+        },
+      });
+      expect(callArgs?.senderIsOwner).toBe(false);
+    });
+  });
+
   it("resumes when session-id is provided", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

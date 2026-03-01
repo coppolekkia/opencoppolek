@@ -323,6 +323,7 @@ describe("voice transcript events", () => {
       message: "check provenance",
       deliver: false,
       messageChannel: "node",
+      senderIsOwner: false,
       inputProvenance: {
         kind: "external_user",
         sourceChannel: "voice",
@@ -517,6 +518,12 @@ describe("agent request events", () => {
       message: "summarize this",
       sessionKey: "agent:main:main",
       deliver: false,
+      senderIsOwner: false,
+      inputProvenance: {
+        kind: "external_user",
+        sourceChannel: "node",
+        sourceTool: "gateway.agent.request",
+      },
       channel: undefined,
       to: undefined,
     });
@@ -551,6 +558,12 @@ describe("agent request events", () => {
       message: "route on session",
       sessionKey: "agent:main:main",
       deliver: true,
+      senderIsOwner: false,
+      inputProvenance: {
+        kind: "external_user",
+        sourceChannel: "node",
+        sourceTool: "gateway.agent.request",
+      },
       channel: "telegram",
       to: "123",
     });

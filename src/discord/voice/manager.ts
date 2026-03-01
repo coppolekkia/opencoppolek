@@ -635,6 +635,12 @@ export class DiscordVoiceManager {
         agentId: entry.route.agentId,
         messageChannel: "discord",
         deliver: false,
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "discord",
+          sourceTool: "discord.voice.transcript",
+        },
+        senderIsOwner: false,
       },
       this.params.runtime,
     );
