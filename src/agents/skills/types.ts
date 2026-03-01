@@ -6,6 +6,8 @@ export type SkillInstallSpec = {
   label?: string;
   bins?: string[];
   os?: string[];
+  /** CPU architecture(s) for which this install is valid (e.g. ["arm64"]). Omit or empty = all arches. */
+  arch?: string[];
   formula?: string;
   package?: string;
   module?: string;

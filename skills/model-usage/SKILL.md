@@ -15,7 +15,8 @@ metadata:
               "kind": "brew",
               "formula": "steipete/tap/codexbar",
               "bins": ["codexbar"],
-              "label": "Install CodexBar (brew cask)",
+              "arch": ["arm64"],
+              "label": "Install CodexBar (brew cask, Apple Silicon only)",
             },
           ],
       },
@@ -28,7 +29,7 @@ metadata:
 
 Get per-model usage cost from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
 
-TODO: add Linux CLI support guidance once CodexBar CLI install path is documented for Linux.
+The bundled Homebrew install (CodexBar) is Apple Silicon only. On Intel Macs the skill will not offer an auto-install; install CodexBar manually if needed. TODO: add Linux CLI support guidance once CodexBar CLI install path is documented for Linux.
 
 ## Quick start
 
