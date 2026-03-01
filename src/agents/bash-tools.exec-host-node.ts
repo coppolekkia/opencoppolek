@@ -1,5 +1,6 @@
-import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import crypto from "node:crypto";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   type ExecApprovalsFile,
   type ExecAsk,
@@ -13,7 +14,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import {
   registerExecApprovalRequestForHost,
   waitForExecApprovalDecision,
@@ -23,7 +24,6 @@ import {
   createApprovalSlug,
   emitExecSystemEvent,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
@@ -59,6 +59,17 @@ export async function executeNodeHostCommand(
   });
   const hostSecurity = minSecurity(params.security, approvals.agent.security);
   const hostAsk = maxAsk(params.ask, approvals.agent.ask);
+  if (hostSecurity !== approvals.agent.security) {
+    logWarn(
+      `exec: agent=${params.agentId ?? "default"} security '${approvals.agent.security}' clamped to '${hostSecurity}' by config-level tools.exec.security — set tools.exec.security in your config to allow this`,
+    );
+  }
+  if (hostAsk !== approvals.agent.ask) {
+    logWarn(
+      `exec: agent=${params.agentId ?? "default"} ask '${approvals.agent.ask}' clamped to '${hostAsk}' by config-level tools.exec.ask — set tools.exec.ask in your config to allow this`,
+    );
+  }
+
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=node security=deny");

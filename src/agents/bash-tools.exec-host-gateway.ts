@@ -1,5 +1,7 @@
-import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import crypto from "node:crypto";
+import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   addAllowlistEntry,
   type ExecAsk,
@@ -14,8 +16,7 @@ import {
   resolveExecApprovals,
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
-import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   registerExecApprovalRequestForHost,
@@ -29,7 +30,6 @@ import {
   normalizeNotifyOutput,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 export type ProcessGatewayAllowlistParams = {
   command: string;
@@ -71,6 +71,17 @@ export async function processGatewayAllowlist(
   });
   const hostSecurity = minSecurity(params.security, approvals.agent.security);
   const hostAsk = maxAsk(params.ask, approvals.agent.ask);
+  if (hostSecurity !== approvals.agent.security) {
+    logWarn(
+      `exec: agent=${params.agentId ?? "default"} security '${approvals.agent.security}' clamped to '${hostSecurity}' by config-level tools.exec.security — set tools.exec.security in your config to allow this`,
+    );
+  }
+  if (hostAsk !== approvals.agent.ask) {
+    logWarn(
+      `exec: agent=${params.agentId ?? "default"} ask '${approvals.agent.ask}' clamped to '${hostAsk}' by config-level tools.exec.ask — set tools.exec.ask in your config to allow this`,
+    );
+  }
+
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=gateway security=deny");
