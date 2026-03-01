@@ -3,6 +3,7 @@ import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../ac
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -322,6 +323,9 @@ export async function agentCommand(
     agentId: sessionAgentId,
     sessionKey,
   });
+  const agentThinkingDefault = sessionAgentId
+    ? resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault
+    : undefined;
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
@@ -478,6 +482,7 @@ export async function agentCommand(
       thinkOnce ??
       thinkOverride ??
       persistedThinking ??
+      (agentThinkingDefault as ThinkLevel | undefined) ??
       (agentCfg?.thinkingDefault as ThinkLevel | undefined);
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);

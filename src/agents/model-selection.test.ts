@@ -12,6 +12,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "./model-selection.js";
 
 describe("model-selection", () => {
@@ -428,6 +429,68 @@ describe("model-selection", () => {
         model: "moonshotai/kimi-k2.5",
       });
       expect(resolved?.alias).toBe("kimi");
+    });
+  });
+
+  describe("resolveThinkingDefault", () => {
+    it("prefers per-model thinking default over global", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            thinkingDefault: "high",
+            models: {
+              "openai-codex/gpt-5.3-codex": {
+                thinkingDefault: "xhigh",
+              },
+            },
+          },
+        },
+      };
+
+      const resolved = resolveThinkingDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+      });
+
+      expect(resolved).toBe("xhigh");
+    });
+
+    it("uses global thinking default when per-model is not set", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            thinkingDefault: "high",
+          },
+        },
+      };
+
+      const resolved = resolveThinkingDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+
+      expect(resolved).toBe("high");
+    });
+
+    it("falls back to low for reasoning-capable models when config is absent", () => {
+      const cfg: Partial<OpenClawConfig> = {};
+      const resolved = resolveThinkingDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        catalog: [
+          {
+            id: "claude-opus-4-6",
+            provider: "anthropic",
+            name: "Claude Opus 4.6",
+            reasoning: true,
+          },
+        ],
+      });
+
+      expect(resolved).toBe("low");
     });
   });
 
