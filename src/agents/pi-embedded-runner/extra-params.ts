@@ -404,18 +404,22 @@ function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
 function createAnthropicBetaHeadersWrapper(
   baseStreamFn: StreamFn | undefined,
   betas: string[],
+  opts?: { skipContext1mForOauth?: boolean },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
     const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
-    const effectiveBetas =
-      isOauth && requestedContext1m
-        ? betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)
-        : betas;
-    if (isOauth && requestedContext1m) {
+    const shouldSkipContext1m =
+      isOauth && requestedContext1m && opts?.skipContext1mForOauth === true;
+
+    const effectiveBetas = shouldSkipContext1m
+      ? betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)
+      : betas;
+
+    if (shouldSkipContext1m) {
       log.warn(
-        `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; Anthropic rejects context-1m beta with OAuth auth`,
+        `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; explicit model params requested skip`,
       );
     }
 
@@ -760,7 +764,10 @@ export function applyExtraParamsToAgent(
     log.debug(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    const skipContext1mForOauth = merged?.anthropicContext1mOAuthMode === "skip";
+    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas, {
+      skipContext1mForOauth,
+    });
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
