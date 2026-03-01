@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelPrimaryValue, toAgentModelListLike } from "../config/model-input.js";
+import {
+  hasExplicitFallbacks,
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+  toAgentModelListLike,
+} from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -384,6 +389,36 @@ export function resolveSubagentSpawnModelSelection(params: {
     normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`
   );
+}
+
+export function resolveSubagentSpawnModelFallbacks(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): string[] | undefined {
+  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
+
+  // Per-agent subagent fallbacks.
+  // An explicit empty array (fallbacks: []) means "no fallbacks" and must
+  // short-circuit the cascade so global/default fallbacks are not inherited.
+  const agentSubModel = agentConfig?.subagents?.model;
+  if (hasExplicitFallbacks(agentSubModel)) {
+    return resolveAgentModelFallbackValues(agentSubModel);
+  }
+
+  // Global subagent fallbacks
+  const globalSubModel = params.cfg.agents?.defaults?.subagents?.model;
+  if (hasExplicitFallbacks(globalSubModel)) {
+    return resolveAgentModelFallbackValues(globalSubModel);
+  }
+
+  // Per-agent model fallbacks
+  const agentModel = agentConfig?.model;
+  if (hasExplicitFallbacks(agentModel)) {
+    return resolveAgentModelFallbackValues(agentModel);
+  }
+
+  // undefined = let runWithModelFallback use agents.defaults.model.fallbacks
+  return undefined;
 }
 
 export function buildAllowedModelSet(params: {
