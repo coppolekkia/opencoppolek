@@ -567,6 +567,91 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
+  it("implicitMention is false when bot has no prior thread session and is not parent_user_id", async () => {
+    // New thread where bot is not the root author and has no prior session
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const slackCtx = createInboundSlackCtx({
+      cfg,
+      appClient: {
+        conversations: { replies: vi.fn().mockResolvedValue({ messages: [] }) },
+      } as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    // Thread reply where bot did NOT start the thread (parent_user_id !== botUserId)
+    const message = createThreadReplyMessage({
+      text: "follow-up without mention",
+      ts: "101.000",
+      parent_user_id: "U_OTHER",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, createThreadAccount(), message);
+    // Should be blocked — no mention, no prior bot session, bot not parent_user_id
+    expect(prepared).toBeNull();
+  });
+
+  it("implicitMention is true when bot has a prior thread session even if not parent_user_id", async () => {
+    // Existing thread where bot previously replied (session exists)
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+
+    // Pre-populate the thread session store to simulate prior bot participation
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: "100.000",
+    });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [threadKeys.sessionKey]: { updatedAt: Date.now() } }, null, 2),
+    );
+
+    const slackCtx = createInboundSlackCtx({
+      cfg,
+      appClient: {
+        conversations: {
+          replies: vi.fn().mockResolvedValue({
+            messages: [
+              { text: "starter", user: "U_OTHER", ts: "100.000" },
+              { text: "bot reply", bot_id: "B1", ts: "100.500" },
+            ],
+          }),
+        },
+      } as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    // Follow-up thread reply without @mention, bot is NOT parent_user_id
+    const message = createThreadReplyMessage({
+      text: "follow-up without mention",
+      ts: "101.000",
+      parent_user_id: "U_OTHER",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, createThreadAccount(), message);
+    // Should NOT be blocked — bot has a prior session in this thread (implicit mention)
+    expect(prepared).not.toBeNull();
+  });
+
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
     const message = createSlackMessage({
       text: "this is a reply",

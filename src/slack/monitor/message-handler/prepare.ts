@@ -187,6 +187,12 @@ export async function prepareSlackMessage(params: {
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
+  // Resolve storePath early so it can be used for both the implicitMention check
+  // (thread participation) and the later session-recording steps.
+  const storePath = resolveStorePath(ctx.cfg.session?.store, {
+    agentId: route.agentId,
+  });
+
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const explicitlyMentioned = Boolean(
@@ -204,11 +210,19 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
+  // Treat as an implicit mention when:
+  // (a) the bot authored the thread root message (original behaviour), OR
+  // (b) the bot has previously replied in this thread (session already exists).
+  //     This covers scenario where the bot joined a thread via @mention but is
+  //     NOT the parent_user_id, so follow-up replies without @mention still
+  //     reach the bot (fixes: #25760).
+  const botParticipatedInThread =
+    isThreadReply && Boolean(readSessionUpdatedAt({ storePath, sessionKey }));
   const implicitMention = Boolean(
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
-    message.parent_user_id === ctx.botUserId,
+    (message.parent_user_id === ctx.botUserId || botParticipatedInThread),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
@@ -422,9 +436,6 @@ export async function prepareSlackMessage(params: {
       ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
       : "";
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
-  const storePath = resolveStorePath(ctx.cfg.session?.store, {
-    agentId: route.agentId,
-  });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
