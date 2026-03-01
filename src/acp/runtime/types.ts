@@ -29,6 +29,7 @@ export type AcpRuntimeEnsureInput = {
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
   text: string;
+  images?: import("../../commands/agent/types.js").ImageContent[];
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
