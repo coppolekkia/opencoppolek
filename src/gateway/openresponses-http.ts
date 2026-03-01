@@ -255,6 +255,12 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: "webchat",
       bestEffortDeliver: false,
+      senderIsOwner: false,
+      inputProvenance: {
+        kind: "external_user",
+        sourceChannel: "openresponses_http",
+        sourceTool: "gateway.openresponses_http.responses",
+      },
     },
     defaultRuntime,
     params.deps,

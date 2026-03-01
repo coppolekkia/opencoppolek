@@ -366,6 +366,33 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it("marks chat completions ingress as non-owner external input", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(200);
+
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | {
+          senderIsOwner?: boolean;
+          inputProvenance?: { kind?: string; sourceChannel?: string; sourceTool?: string };
+        }
+      | undefined;
+    expect(opts?.senderIsOwner).toBe(false);
+    expect(opts?.inputProvenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "openai_http",
+      sourceTool: "gateway.openai_http.chat_completions",
+    });
+
+    await res.text();
+  });
+
   it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {
     testState.gatewayAuth = {
       mode: "token",

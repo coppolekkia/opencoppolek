@@ -54,6 +54,12 @@ function buildAgentCommandInput(params: {
     deliver: false as const,
     messageChannel: "webchat" as const,
     bestEffortDeliver: false as const,
+    senderIsOwner: false as const,
+    inputProvenance: {
+      kind: "external_user" as const,
+      sourceChannel: "openai_http",
+      sourceTool: "gateway.openai_http.chat_completions",
+    },
   };
 }
 

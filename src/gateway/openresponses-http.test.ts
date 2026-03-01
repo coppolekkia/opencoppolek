@@ -430,6 +430,33 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
+  it("marks responses ingress as non-owner external input", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: "hi",
+    });
+    expect(res.status).toBe(200);
+
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | {
+          senderIsOwner?: boolean;
+          inputProvenance?: { kind?: string; sourceChannel?: string; sourceTool?: string };
+        }
+      | undefined;
+    expect(opts?.senderIsOwner).toBe(false);
+    expect(opts?.inputProvenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "openresponses_http",
+      sourceTool: "gateway.openresponses_http.responses",
+    });
+
+    await ensureResponseConsumed(res);
+  });
+
   it("streams OpenResponses SSE events", async () => {
     const port = enabledPort;
     try {
