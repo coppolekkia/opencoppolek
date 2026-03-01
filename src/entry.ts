@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { isRootHelpRequest, isRootNoCommandRequest, isRootVersionRequest } from "./cli/argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
@@ -9,6 +10,7 @@ import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import { VERSION } from "./version.js";
 
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
@@ -130,14 +132,44 @@ if (
       process.argv = parsed.argv;
     }
 
-    import("./cli/run-main.js")
-      .then(({ runCli }) => runCli(process.argv))
-      .catch((error) => {
-        console.error(
-          "[openclaw] Failed to start CLI:",
-          error instanceof Error ? (error.stack ?? error.message) : error,
-        );
-        process.exitCode = 1;
-      });
+    // Fast path: print version and exit before loading heavy CLI modules.
+    // isRootVersionRequest handles --version/-V (stops at -- terminator so forwarded
+    // args like `nodes run -- git --version` are excluded) and -v (only at root scope,
+    // not when a subcommand is present). Avoids the full plugin/config startup on
+    // low-powered devices (e.g. Pi4b).
+    const argv = process.argv;
+    if (isRootVersionRequest(argv)) {
+      console.log(VERSION);
+      process.exit(0);
+    }
+
+    // Fast path: display root help without loading run-main.js or route.ts.
+    // isRootHelpRequest stops at -- and requires no subcommand before -h/--help,
+    // so `openclaw status --help` still falls through to the full CLI path.
+    // Importing program.js directly avoids the route.ts static import in run-main.ts.
+    if (isRootHelpRequest(argv) || isRootNoCommandRequest(argv)) {
+      import("./cli/program.js")
+        .then(({ buildProgram }) => {
+          buildProgram().outputHelp();
+          process.exit(0);
+        })
+        .catch((error) => {
+          console.error(
+            "[openclaw] Failed to display help:",
+            error instanceof Error ? (error.stack ?? error.message) : error,
+          );
+          process.exit(1);
+        });
+    } else {
+      import("./cli/run-main.js")
+        .then(({ runCli }) => runCli(process.argv))
+        .catch((error) => {
+          console.error(
+            "[openclaw] Failed to start CLI:",
+            error instanceof Error ? (error.stack ?? error.message) : error,
+          );
+          process.exitCode = 1;
+        });
+    }
   }
 }
