@@ -24,6 +24,8 @@ export type AgentConfig = {
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
+    /** When false, block generic subagent spawns (no agentId). Defaults to true. */
+    allowGeneric?: boolean;
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
   };

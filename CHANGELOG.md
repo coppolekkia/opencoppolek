@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Subagents/Spawn: add `subagents.allowGeneric` option to block generic (unnamed) subagent spawns, enabling strict agent hierarchy enforcement. (#29982)
 - Web UI/i18n: add German (`de`) locale support and auto-render language options from supported locale constants in Overview settings. (#28495) thanks @dsantoreis.
 - Web UI/Cron i18n: localize cron page labels, filters, form help text, and validation/error messaging in English and zh-CN. (#29315)
 - Discord/Thread bindings: replace fixed TTL lifecycle with inactivity (`idleHours`, default 24h) plus optional hard `maxAgeHours` lifecycle controls, and add `/session idle` + `/session max-age` commands for focused thread-bound sessions. (#27845) Thanks @osolmaz.

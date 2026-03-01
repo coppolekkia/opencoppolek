@@ -251,6 +251,19 @@ export async function spawnSubagentDirect(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+
+  // Block generic (no agentId) spawns when allowGeneric is explicitly false.
+  if (!requestedAgentId) {
+    const allowGeneric = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowGeneric ?? true;
+    if (!allowGeneric) {
+      return {
+        status: "forbidden",
+        error:
+          "Generic subagent spawns (without agentId) are not allowed for this agent. Specify an agentId from the allowAgents list.",
+      };
+    }
+  }
+
   if (targetAgentId !== requesterAgentId) {
     const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");

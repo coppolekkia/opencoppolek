@@ -154,4 +154,100 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       acceptedAt: 5200,
     });
   });
+
+  describe("allowGeneric", () => {
+    function setAllowGeneric(allowGeneric: boolean, allowAgents: string[] = ["lead"]) {
+      setSessionsSpawnConfigOverride({
+        session: {
+          mainKey: "main",
+          scope: "per-sender",
+        },
+        agents: {
+          list: [
+            {
+              id: "main",
+              subagents: {
+                allowAgents,
+                allowGeneric,
+              },
+            },
+          ],
+        },
+      });
+    }
+
+    async function executeGenericSpawn(callId: string) {
+      const tool = await getSessionsSpawnTool({
+        agentSessionKey: "main",
+        agentChannel: "whatsapp",
+      });
+      return tool.execute(callId, { task: "do thing" });
+    }
+
+    it("blocks generic spawn when allowGeneric is false", async () => {
+      setAllowGeneric(false);
+
+      const result = await executeGenericSpawn("call-generic-blocked");
+
+      expect(result.details).toMatchObject({
+        status: "forbidden",
+      });
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    });
+
+    it("allows generic spawn when allowGeneric is true", async () => {
+      setAllowGeneric(true);
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: unknown };
+        if (request.method === "agent") {
+          return { runId: "run-1", status: "accepted", acceptedAt: 6000 };
+        }
+        return {};
+      });
+
+      const result = await executeGenericSpawn("call-generic-allowed");
+
+      expect(result.details).toMatchObject({
+        status: "accepted",
+      });
+    });
+
+    it("allows generic spawn by default (allowGeneric not set)", async () => {
+      setAllowAgents(["lead"]);
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: unknown };
+        if (request.method === "agent") {
+          return { runId: "run-1", status: "accepted", acceptedAt: 6100 };
+        }
+        return {};
+      });
+
+      const result = await executeGenericSpawn("call-generic-default");
+
+      expect(result.details).toMatchObject({
+        status: "accepted",
+      });
+    });
+
+    it("blocks generic spawn but still allows named agents from allowAgents", async () => {
+      setAllowGeneric(false, ["lead"]);
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: unknown };
+        if (request.method === "agent") {
+          return { runId: "run-1", status: "accepted", acceptedAt: 6200 };
+        }
+        return {};
+      });
+
+      // Generic spawn → blocked
+      const genericResult = await executeGenericSpawn("call-generic-blocked2");
+      expect(genericResult.details).toMatchObject({ status: "forbidden" });
+
+      callGatewayMock.mockClear();
+
+      // Named spawn with allowed agentId → accepted
+      const namedResult = await executeSpawn("call-named-allowed", "lead");
+      expect(namedResult.details).toMatchObject({ status: "accepted" });
+    });
+  });
 });
