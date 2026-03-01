@@ -1749,6 +1749,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
   }
 
+  private isTimeoutError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.includes("timed out after");
+  }
+
   private isUnsupportedQmdOptionError(err: unknown): boolean {
     const message = err instanceof Error ? err.message : String(err);
     const normalized = message.toLowerCase();
@@ -1801,12 +1806,12 @@ export class QmdMemoryManager implements MemorySearchManager {
         r.status === "fulfilled",
     );
 
-    // Re-throw structural errors (missing collections, unsupported flags) so the
-    // caller can trigger repair/fallback logic. Only swallow transient errors
-    // (timeouts) when at least some collections succeeded.
+    // Re-throw all failures except transient timeouts when at least some
+    // collections succeeded. This ensures real errors (corrupted indexes,
+    // spawn/permission failures, malformed JSON) propagate to the caller.
     for (const r of rejected) {
       const err = r.reason;
-      if (this.isMissingCollectionSearchError(err) || this.isUnsupportedQmdOptionError(err)) {
+      if (!this.isTimeoutError(err)) {
         throw err instanceof Error ? err : new Error(String(err));
       }
     }
@@ -1816,7 +1821,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     for (const r of rejected) {
-      log.debug(`qmd ${command} collection query failed: ${r.reason}`);
+      log.debug(`qmd ${command} collection query timed out: ${r.reason}`);
     }
 
     const bestByDocId = new Map<string, QmdQueryResult>();
@@ -1877,12 +1882,12 @@ export class QmdMemoryManager implements MemorySearchManager {
         r.status === "fulfilled",
     );
 
-    // Re-throw structural errors (missing collections, unsupported flags) so the
-    // caller can trigger repair/fallback logic. Only swallow transient errors
-    // (timeouts) when at least some collections succeeded.
+    // Re-throw all failures except transient timeouts when at least some
+    // collections succeeded. This ensures real errors (corrupted indexes,
+    // spawn/permission failures, malformed JSON) propagate to the caller.
     for (const r of rejected) {
       const err = r.reason;
-      if (this.isMissingCollectionSearchError(err) || this.isUnsupportedQmdOptionError(err)) {
+      if (!this.isTimeoutError(err)) {
         throw err instanceof Error ? err : new Error(String(err));
       }
     }
@@ -1892,7 +1897,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     for (const r of rejected) {
-      log.debug(`qmd mcporter ${params.tool} collection query failed: ${r.reason}`);
+      log.debug(`qmd mcporter ${params.tool} collection query timed out: ${r.reason}`);
     }
 
     const bestByDocId = new Map<string, QmdQueryResult>();
