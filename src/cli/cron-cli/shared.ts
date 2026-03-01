@@ -171,7 +171,7 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     pad("Last", CRON_LAST_PAD),
     pad("Status", CRON_STATUS_PAD),
     pad("Target", CRON_TARGET_PAD),
-    pad("Agent", CRON_AGENT_PAD),
+    pad("Agent ID", CRON_AGENT_PAD),
   ].join(" ");
 
   runtime.log(rich ? theme.heading(header) : header);
@@ -192,7 +192,7 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
-    const agentLabel = pad(truncate(job.agentId ?? "default", CRON_AGENT_PAD), CRON_AGENT_PAD);
+    const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
 
     const coloredStatus = (() => {
       if (statusRaw === "ok") {
