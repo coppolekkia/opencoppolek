@@ -28,7 +28,10 @@ export type LoggerSettings = {
   consoleStyle?: ConsoleStyle;
 };
 
-type LogObj = { date?: Date } & Record<string, unknown>;
+type LogObj = { date?: Date; _meta?: { logLevelName?: string; logLevelId?: number } } & Record<
+  string,
+  unknown
+>;
 
 type ResolvedSettings = {
   level: LogLevel;
@@ -113,6 +116,11 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
+      // Check if this log level should be written to file
+      const logLevelName = (logObj._meta as { logLevelName?: string })?.logLevelName?.toLowerCase();
+      if (logLevelName && !isFileLogLevelEnabled(logLevelName as LogLevel)) {
+        return;
+      }
       const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
@@ -261,10 +269,16 @@ export function registerLogTransport(transport: LogTransport): () => void {
 }
 
 function formatLocalDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  // Use toLocaleDateString with the system timezone to get the correct local date
+  // This avoids issues with getFullYear/getMonth/getDate which can be inconsistent
+  // when the system is near midnight UTC (where UTC date differs from local date)
+  const parts = date.toLocaleDateString("en-CA", { timeZone: getLocalTimezone() }).split("-");
+  return parts.join("-");
+}
+
+function getLocalTimezone(): string {
+  // Intl.DateTimeFormat().resolvedOptions().timeZone gives the configured system timezone
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
 }
 
 function defaultRollingPathForToday(): string {

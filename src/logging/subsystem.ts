@@ -243,7 +243,7 @@ function logToFile(
   message: string,
   meta?: Record<string, unknown>,
 ) {
-  if (level === "silent") {
+  if (level === "silent" || !isFileLogLevelEnabled(level)) {
     return;
   }
   const safeLevel = level;
@@ -262,9 +262,12 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerDate: string = "";
   const getFileLogger = () => {
-    if (!fileLogger) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (!fileLogger || fileLoggerDate !== today) {
       fileLogger = getChildLogger({ subsystem });
+      fileLoggerDate = today;
     }
     return fileLogger;
   };
