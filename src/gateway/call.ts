@@ -21,7 +21,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { isSecureWebSocketUrl, type IsSecureWebSocketUrlOptions } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 type CallGatewayBaseOptions = {
@@ -143,14 +143,27 @@ export function buildGatewayConnectionDetails(
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
   // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
   // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url)) {
+  const allowPlaintextInternal = config.gateway?.dangerouslyAllowPlaintextInternal === true;
+  const wsSecurityOpts: IsSecureWebSocketUrlOptions = {
+    dangerouslyAllowPlaintextInternal: allowPlaintextInternal,
+  };
+  if (!isSecureWebSocketUrl(url, wsSecurityOpts)) {
+    const fixLines = allowPlaintextInternal
+      ? [
+          "Fix: The URL is not a recognized internal address (RFC1918 private IP or CGNAT).",
+          "Use wss:// for public or unrecognized addresses.",
+        ]
+      : [
+          "Fix: Use wss:// for remote gateway URLs, or set gateway.dangerouslyAllowPlaintextInternal=true",
+          "if you have a layered security architecture (TLS gateway → internal plaintext).",
+        ];
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
         "Both credentials and chat data would be exposed to network interception.",
         `Source: ${urlSource}`,
         `Config: ${configPath}`,
-        "Fix: Use wss:// for remote gateway URLs.",
+        ...fixLines,
         "Safe remote access defaults:",
         "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18789:127.0.0.1:18789 user@gateway-host)",
         "- or use Tailscale Serve/Funnel for HTTPS remote access",
@@ -312,6 +325,8 @@ async function executeGatewayRequestWithScopes<T>(params: {
 }): Promise<T> {
   const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
     params;
+  const dangerouslyAllowPlaintextInternal =
+    opts.config?.gateway?.dangerouslyAllowPlaintextInternal ?? false;
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
@@ -341,6 +356,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
+      dangerouslyAllowPlaintextInternal,
       deviceIdentity: loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,

@@ -374,4 +374,55 @@ describe("isSecureWebSocketUrl", () => {
       expect(isSecureWebSocketUrl(testCase.input), testCase.input).toBe(testCase.expected);
     }
   });
+
+  it("allows plaintext ws:// to RFC1918 private IPs when dangerouslyAllowPlaintextInternal is true", () => {
+    const cases = [
+      { input: "ws://10.0.0.5:18789", expected: true },
+      { input: "ws://10.255.255.255:18789", expected: true },
+      { input: "ws://172.16.0.1:18789", expected: true },
+      { input: "ws://172.31.255.254:18789", expected: true },
+      { input: "ws://192.168.1.100:18789", expected: true },
+      { input: "ws://192.168.255.255:18789", expected: true },
+      { input: "ws://100.64.0.1:18789", expected: true },
+      { input: "ws://100.127.255.254:18789", expected: true },
+      { input: "ws://169.254.10.20:18789", expected: true },
+    ] as const;
+
+    for (const testCase of cases) {
+      expect(
+        isSecureWebSocketUrl(testCase.input, { dangerouslyAllowPlaintextInternal: true }),
+        testCase.input,
+      ).toBe(testCase.expected);
+    }
+  });
+
+  it("still rejects plaintext ws:// to public IPs even with dangerouslyAllowPlaintextInternal", () => {
+    const cases = [
+      { input: "ws://1.1.1.1:18789", expected: false },
+      { input: "ws://8.8.8.8:18789", expected: false },
+      { input: "ws://203.0.113.10:18789", expected: false },
+      { input: "ws://remote.example.com:18789", expected: false },
+    ] as const;
+
+    for (const testCase of cases) {
+      expect(
+        isSecureWebSocketUrl(testCase.input, { dangerouslyAllowPlaintextInternal: true }),
+        testCase.input,
+      ).toBe(testCase.expected);
+    }
+  });
+
+  it("loopback addresses work regardless of dangerouslyAllowPlaintextInternal setting", () => {
+    const loopbackUrls = ["ws://127.0.0.1:18789", "ws://localhost:18789", "ws://[::1]:18789"];
+
+    for (const url of loopbackUrls) {
+      expect(isSecureWebSocketUrl(url, { dangerouslyAllowPlaintextInternal: false }), url).toBe(
+        true,
+      );
+      expect(isSecureWebSocketUrl(url, { dangerouslyAllowPlaintextInternal: true }), url).toBe(
+        true,
+      );
+      expect(isSecureWebSocketUrl(url), url).toBe(true);
+    }
+  });
 });

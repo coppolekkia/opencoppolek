@@ -22,7 +22,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { isSecureWebSocketUrl, type IsSecureWebSocketUrlOptions } from "./net.js";
 import {
   type ConnectParams,
   type EventFrame,
@@ -64,6 +64,11 @@ export type GatewayClientOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
+  /**
+   * DANGEROUS: Allow plaintext ws:// connections to non-loopback internal addresses.
+   * See IsSecureWebSocketUrlOptions for details.
+   */
+  dangerouslyAllowPlaintextInternal?: boolean;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -117,7 +122,10 @@ export class GatewayClient {
     // Security check: block ALL plaintext ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
     // This protects both credentials AND chat/conversation data from MITM attacks.
     // Device tokens may be loaded later in sendConnect(), so we block regardless of hasCredentials.
-    if (!isSecureWebSocketUrl(url)) {
+    const wsSecurityOpts: IsSecureWebSocketUrlOptions = {
+      dangerouslyAllowPlaintextInternal: this.opts.dangerouslyAllowPlaintextInternal,
+    };
+    if (!isSecureWebSocketUrl(url, wsSecurityOpts)) {
       // Safe hostname extraction - avoid throwing on malformed URLs in error path
       let displayHost = url;
       try {
@@ -130,6 +138,8 @@ export class GatewayClient {
           "Both credentials and chat data would be exposed to network interception. " +
           "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
           "(ssh -N -L 18789:127.0.0.1:18789 user@gateway-host), or use Tailscale Serve/Funnel. " +
+          "If you have a layered security architecture (TLS gateway → internal plaintext), set " +
+          "gateway.dangerouslyAllowPlaintextInternal=true in your config (config file only). " +
           "Run `openclaw doctor --fix` for guidance.",
       );
       this.opts.onConnectError?.(error);
