@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { webhookCallback } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeRateLimitClientIp } from "../gateway/auth-rate-limit.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
@@ -20,6 +21,71 @@ import { createTelegramBot } from "./bot.js";
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 10_000;
+const TELEGRAM_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
+const TELEGRAM_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
+const TELEGRAM_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS = 4_096;
+
+type WebhookRateLimitState = { count: number; windowStartMs: number };
+const webhookRateLimits = new Map<string, WebhookRateLimitState>();
+let lastWebhookRateLimitCleanupMs = 0;
+
+function trimWebhookRateLimitState(): void {
+  while (webhookRateLimits.size > TELEGRAM_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS) {
+    const oldestKey = webhookRateLimits.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    webhookRateLimits.delete(oldestKey);
+  }
+}
+
+function maybePruneWebhookRateLimitState(nowMs: number): void {
+  if (
+    webhookRateLimits.size === 0 ||
+    nowMs - lastWebhookRateLimitCleanupMs < TELEGRAM_WEBHOOK_RATE_LIMIT_WINDOW_MS
+  ) {
+    return;
+  }
+  lastWebhookRateLimitCleanupMs = nowMs;
+  for (const [key, state] of webhookRateLimits) {
+    if (nowMs - state.windowStartMs >= TELEGRAM_WEBHOOK_RATE_LIMIT_WINDOW_MS) {
+      webhookRateLimits.delete(key);
+    }
+  }
+}
+
+export function clearTelegramWebhookRateLimits(): void {
+  webhookRateLimits.clear();
+  lastWebhookRateLimitCleanupMs = 0;
+}
+
+export function getTelegramWebhookRateLimitStateSize(): number {
+  return webhookRateLimits.size;
+}
+
+export function isTelegramWebhookRateLimited(key: string, nowMs: number): boolean {
+  maybePruneWebhookRateLimitState(nowMs);
+
+  const state = webhookRateLimits.get(key);
+  if (!state || nowMs - state.windowStartMs >= TELEGRAM_WEBHOOK_RATE_LIMIT_WINDOW_MS) {
+    webhookRateLimits.set(key, { count: 1, windowStartMs: nowMs });
+    trimWebhookRateLimitState();
+    return false;
+  }
+
+  state.count += 1;
+  if (state.count > TELEGRAM_WEBHOOK_RATE_LIMIT_MAX_REQUESTS) {
+    return true;
+  }
+  return false;
+}
+
+export function buildTelegramWebhookRateLimitKey(
+  path: string,
+  remoteAddress: string | undefined,
+): string {
+  return `${path}:${normalizeRateLimitClientIp(remoteAddress)}`;
+}
 
 async function listenHttpServer(params: {
   server: ReturnType<typeof createServer>;
@@ -140,6 +206,12 @@ export async function startTelegramWebhook(opts: {
     if (req.url !== path || req.method !== "POST") {
       res.writeHead(404);
       res.end();
+      return;
+    }
+    const rateLimitKey = buildTelegramWebhookRateLimitKey(path, req.socket.remoteAddress);
+    if (isTelegramWebhookRateLimited(rateLimitKey, Date.now())) {
+      res.writeHead(429);
+      res.end("Too Many Requests");
       return;
     }
     const startTime = Date.now();
