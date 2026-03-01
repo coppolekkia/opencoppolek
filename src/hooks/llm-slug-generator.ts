@@ -49,6 +49,12 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
     const provider = parsed?.provider ?? DEFAULT_PROVIDER;
     const model = parsed?.model ?? DEFAULT_MODEL;
+    if (!parsed) {
+      log.warn(
+        `slug-generator: no configured model found for agent ${agentId} (modelRef=${String(modelRef)}); falling back to DEFAULT_MODEL`,
+        { agentId, modelRef },
+      );
+    }
 
     const result = await runEmbeddedPiAgent({
       sessionId: `slug-generator-${Date.now()}`,

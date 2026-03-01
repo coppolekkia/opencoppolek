@@ -119,6 +119,7 @@ vi.mock("../../config/sessions.js", () => ({
   resolveSessionTranscriptPath: vi.fn().mockReturnValue("/tmp/transcript.jsonl"),
   setSessionRuntimeModel: vi.fn(),
   updateSessionStore: vi.fn().mockResolvedValue(undefined),
+  setSessionRuntimeModel: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock("../../routing/session-key.js", async (importOriginal) => {
