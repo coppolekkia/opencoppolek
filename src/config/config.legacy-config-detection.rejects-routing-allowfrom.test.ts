@@ -25,6 +25,35 @@ describe("legacy config detection", () => {
         input: { routing: { groupChat: { requireMention: false } } },
         expectedPath: "routing.groupChat.requireMention",
       },
+      {
+        name: "channels.discord.accounts.*.allowlist",
+        input: {
+          channels: {
+            discord: {
+              accounts: {
+                ops: {
+                  allowlist: ["1234567890"],
+                },
+              },
+            },
+          },
+        },
+        expectedPath: "channels.discord",
+      },
+      {
+        name: "agents.list[].routing",
+        input: {
+          agents: {
+            list: [
+              {
+                id: "main",
+                routing: { groupChat: { mentionPatterns: ["@openclaw"] } },
+              },
+            ],
+          },
+        },
+        expectedPath: "agents.list",
+      },
     ] as const;
     for (const testCase of cases) {
       const res = validateConfigObject(testCase.input);
@@ -33,6 +62,150 @@ describe("legacy config detection", () => {
         expect(res.issues[0]?.path, testCase.name).toBe(testCase.expectedPath);
       }
     }
+  });
+
+  it("migrates legacy discord allowlist aliases", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          allowFrom: ["111"],
+          allowlist: ["222"],
+          groupAllowFrom: ["333"],
+          accounts: {
+            ops: { allowlist: ["123"], groupAllowFrom: ["456"] },
+            work: { allowFrom: ["789"], allowlist: ["999"] },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Removed channels.discord.allowlist.");
+    expect(res.changes).toContain(
+      "Removed channels.discord.groupAllowFrom (unsupported for Discord).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.ops.allowlist → channels.discord.accounts.ops.allowFrom.",
+    );
+    expect(res.changes).toContain(
+      "Removed channels.discord.accounts.ops.groupAllowFrom (unsupported for Discord).",
+    );
+    expect(res.changes).toContain("Removed channels.discord.accounts.work.allowlist.");
+    expect(res.config?.channels?.discord?.allowFrom).toEqual(["111"]);
+    expect(
+      (
+        res.config?.channels?.discord as
+          | { allowlist?: unknown; groupAllowFrom?: unknown }
+          | undefined
+      )?.allowlist,
+    ).toBeUndefined();
+    expect(
+      (
+        res.config?.channels?.discord as
+          | { allowlist?: unknown; groupAllowFrom?: unknown }
+          | undefined
+      )?.groupAllowFrom,
+    ).toBeUndefined();
+    expect(res.config?.channels?.discord?.accounts?.ops?.allowFrom).toEqual(["123"]);
+    expect(
+      (
+        res.config?.channels?.discord?.accounts?.ops as
+          | { allowlist?: unknown; groupAllowFrom?: unknown }
+          | undefined
+      )?.allowlist,
+    ).toBeUndefined();
+    expect(
+      (
+        res.config?.channels?.discord?.accounts?.ops as
+          | { allowlist?: unknown; groupAllowFrom?: unknown }
+          | undefined
+      )?.groupAllowFrom,
+    ).toBeUndefined();
+    expect(res.config?.channels?.discord?.accounts?.work?.allowFrom).toEqual(["789"]);
+    expect(
+      (
+        res.config?.channels?.discord?.accounts?.work as
+          | { allowlist?: unknown; groupAllowFrom?: unknown }
+          | undefined
+      )?.allowlist,
+    ).toBeUndefined();
+  });
+
+  it("drops empty legacy discord allowlist aliases without migrating to allowFrom", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          allowlist: [],
+          accounts: {
+            ops: { allowlist: [] },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Removed channels.discord.allowlist.");
+    expect(res.changes).toContain("Removed channels.discord.accounts.ops.allowlist.");
+    expect(res.config?.channels?.discord?.allowFrom).toBeUndefined();
+    expect(res.config?.channels?.discord?.accounts?.ops?.allowFrom).toBeUndefined();
+    expect(
+      (
+        res.config?.channels?.discord as
+          | { allowlist?: unknown; groupAllowFrom?: unknown }
+          | undefined
+      )?.allowlist,
+    ).toBeUndefined();
+    expect(
+      (
+        res.config?.channels?.discord?.accounts?.ops as
+          | { allowlist?: unknown; groupAllowFrom?: unknown }
+          | undefined
+      )?.allowlist,
+    ).toBeUndefined();
+  });
+
+  it("keeps dm.allowFrom authoritative when removing legacy discord allowlist aliases", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          dm: { allowFrom: ["111"] },
+          allowlist: ["legacy-top"],
+          accounts: {
+            ops: {
+              dm: { allowFrom: ["222"] },
+              allowlist: ["legacy-account"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Removed channels.discord.allowlist.");
+    expect(res.changes).toContain("Removed channels.discord.accounts.ops.allowlist.");
+    expect(res.config?.channels?.discord?.allowFrom).toBeUndefined();
+    expect(res.config?.channels?.discord?.dm?.allowFrom).toEqual(["111"]);
+    expect(res.config?.channels?.discord?.accounts?.ops?.allowFrom).toBeUndefined();
+    expect(res.config?.channels?.discord?.accounts?.ops?.dm?.allowFrom).toEqual(["222"]);
+  });
+
+  it("migrates legacy agents.list routing entries", async () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        list: [
+          {
+            id: "main",
+            routing: { groupChat: { mentionPatterns: ["@openclaw"] } },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved agents.list (id "main").routing.groupChat.mentionPatterns → agents.list (id "main").groupChat.mentionPatterns.',
+    );
+    expect(res.changes).toContain('Removed agents.list (id "main").routing.');
+    expect(res.config?.agents?.list?.[0]?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
+    expect(
+      (res.config?.agents?.list?.[0] as { routing?: unknown } | undefined)?.routing,
+    ).toBeUndefined();
   });
 
   it("migrates or drops routing.allowFrom based on whatsapp configuration", async () => {
