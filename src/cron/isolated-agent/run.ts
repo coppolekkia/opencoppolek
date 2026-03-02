@@ -26,6 +26,7 @@ import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
+import { resolveElevatedPermissions } from "../../auto-reply/reply/reply-elevated.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -333,13 +334,25 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const deliveryRequested = deliveryPlan.requested;
-
   const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
     accountId: deliveryPlan.accountId,
     sessionKey: params.job.sessionKey,
   });
+  const elevated = resolveElevatedPermissions({
+    cfg: cfgWithAgentDefaults,
+    agentId,
+    ctx: {
+      Provider: "cron-event",
+      AccountId: resolvedDelivery.accountId,
+      From: resolvedDelivery.to,
+      To: resolvedDelivery.to,
+      SessionKey: agentSessionKey,
+    },
+    provider: "cron-event",
+  });
+  const elevatedDefault = agentCfg?.elevatedDefault ?? "off";
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
@@ -506,6 +519,11 @@ export async function runCronIsolatedAgentTurn(params: {
           // be blocked by a target it cannot satisfy (#27898).
           requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
           disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
+          bashElevated: {
+            enabled: elevated.enabled,
+            allowed: elevated.allowed,
+            defaultLevel: elevatedDefault,
+          },
           abortSignal,
         });
       },
