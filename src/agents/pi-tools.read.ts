@@ -14,6 +14,7 @@ import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
@@ -429,6 +430,10 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   if ("file_path" in normalized && !("path" in normalized)) {
     normalized.path = normalized.file_path;
     delete normalized.file_path;
+  }
+  // Expand ~ in path
+  if (typeof normalized.path === "string" && normalized.path.startsWith("~")) {
+    normalized.path = expandHomePrefix(normalized.path);
   }
   // old_string → oldText (edit)
   if ("old_string" in normalized && !("oldText" in normalized)) {
