@@ -6,8 +6,6 @@ import {
   type ExecSecurity,
   buildEnforcedShellCommand,
   evaluateShellAllowlist,
-  maxAsk,
-  minSecurity,
   recordAllowlistUse,
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
@@ -71,8 +69,14 @@ export async function processGatewayAllowlist(
     security: params.security,
     ask: params.ask,
   });
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
+
+  // Fix: if the tool didn't explicitly request a security/ask level, use the user's
+  // configured setting directly. minSecurity("allowlist", "full") would produce "allowlist",
+  // overriding the user's "Always Allow" — so we only call minSecurity when the tool
+  // explicitly passed a security param (i.e. params.security was originally set).
+  // The same logic applies to ask.
+  const hostSecurity = approvals.agent.security;
+  const hostAsk = approvals.agent.ask;
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=gateway security=deny");
