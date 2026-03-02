@@ -398,12 +398,27 @@ export async function spawnSubagentDirect(
     }
     thinkingOverride = normalized;
   }
+  // Consolidate session setup into a single sessions.patch call to avoid race
+  // conditions where the agent run starts before all patches land (#27858).
+  const patchParams: Record<string, unknown> = {
+    key: childSessionKey,
+    spawnDepth: childDepth,
+  };
+  if (resolvedModel) {
+    patchParams.model = resolvedModel;
+  }
+  if (thinkingOverride !== undefined) {
+    patchParams.thinkingLevel = thinkingOverride === "off" ? null : thinkingOverride;
+  }
   try {
     await callGateway({
       method: "sessions.patch",
-      params: { key: childSessionKey, spawnDepth: childDepth },
+      params: patchParams,
       timeoutMs: 10_000,
     });
+    if (resolvedModel) {
+      modelApplied = true;
+    }
   } catch (err) {
     const messageText =
       err instanceof Error ? err.message : typeof err === "string" ? err : "error";
@@ -412,45 +427,6 @@ export async function spawnSubagentDirect(
       error: messageText,
       childSessionKey,
     };
-  }
-
-  if (resolvedModel) {
-    try {
-      await callGateway({
-        method: "sessions.patch",
-        params: { key: childSessionKey, model: resolvedModel },
-        timeoutMs: 10_000,
-      });
-      modelApplied = true;
-    } catch (err) {
-      const messageText =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-      return {
-        status: "error",
-        error: messageText,
-        childSessionKey,
-      };
-    }
-  }
-  if (thinkingOverride !== undefined) {
-    try {
-      await callGateway({
-        method: "sessions.patch",
-        params: {
-          key: childSessionKey,
-          thinkingLevel: thinkingOverride === "off" ? null : thinkingOverride,
-        },
-        timeoutMs: 10_000,
-      });
-    } catch (err) {
-      const messageText =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-      return {
-        status: "error",
-        error: messageText,
-        childSessionKey,
-      };
-    }
   }
   if (requestThreadBinding) {
     const bindResult = await ensureThreadBindingForSubagentSpawn({
@@ -710,6 +686,7 @@ export async function spawnSubagentDirect(
         lane: AGENT_LANE_SUBAGENT,
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
+        model: resolvedModel || undefined,
         timeout: runTimeoutSeconds,
         label: label || undefined,
         spawnedBy: spawnedByKey,
