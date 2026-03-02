@@ -82,7 +82,15 @@ async function downloadFile(
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, file);
+    try {
+      await pipeline(readable, file);
+    } catch (err) {
+      if (!file.destroyed) {
+        file.destroy();
+      }
+      await fs.promises.unlink(destPath).catch(() => {});
+      throw err;
+    }
     const stat = await fs.promises.stat(destPath);
     return { bytes: stat.size };
   } finally {
