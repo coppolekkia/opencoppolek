@@ -420,6 +420,37 @@ describe("provider usage loading", () => {
     );
   });
 
+  it("keeps usage summary available when one provider request aborts", async () => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("api.anthropic.com/api/oauth/usage")) {
+        const err = new Error("This operation was aborted: code=20");
+        err.name = "AbortError";
+        throw err;
+      }
+      if (url.includes("chatgpt.com/backend-api/wham/usage")) {
+        return makeResponse(200, {
+          rate_limit: { primary_window: { used_percent: 12, limit_window_seconds: 10800 } },
+          plan_type: "Plus",
+        });
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadUsageWithAuth(
+      [
+        { provider: "anthropic", token: "token-a" },
+        { provider: "openai-codex", token: "token-c", accountId: "acc-1" },
+      ],
+      mockFetch,
+    );
+
+    const claude = summary.providers.find((provider) => provider.provider === "anthropic");
+    const codex = summary.providers.find((provider) => provider.provider === "openai-codex");
+
+    expect(claude?.error).toBe("Timeout");
+    expect(codex?.windows[0]?.label).toBe("3h");
+  });
+
   it("returns empty provider list when auth resolves to none", async () => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));
     const summary = await loadUsageWithAuth([], mockFetch);
