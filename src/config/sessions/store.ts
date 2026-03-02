@@ -1062,7 +1062,6 @@ export async function updateLastRoute(params: {
     const store = loadSessionStore(storePath);
     const resolved = resolveStoreSessionEntry({ store, sessionKey });
     const existing = resolved.existing;
-    const now = Date.now();
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);
     const inlineContext = normalizeDeliveryContext({
       channel,
@@ -1108,7 +1107,6 @@ export async function updateLastRoute(params: {
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,

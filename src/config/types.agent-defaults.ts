@@ -285,6 +285,8 @@ export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
+  /** Dedicated model for summarization (e.g., "google/gemini-2.0-flash"). Falls back to session model if not set. */
+  model?: string;
   /** Pi reserve tokens target before floor enforcement. */
   reserveTokens?: number;
   /** Pi keepRecentTokens budget used for cut-point selection. */

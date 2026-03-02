@@ -13,6 +13,8 @@ export type CompactionSafeguardRuntimeValue = {
    * (extensionRunner.initialize() is never called in that path).
    */
   model?: Model<Api>;
+  /** Dedicated model for summarization (e.g., "google/gemini-2.0-flash"). */
+  summarizationModel?: string;
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();

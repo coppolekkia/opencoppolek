@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -47,6 +51,7 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { runSessionEndFlush, resolveSessionEndFlushSettings } from "./session-end-flush.js";
 
 const log = createSubsystemLogger("session-init");
 
@@ -381,7 +386,9 @@ export async function initSessionState(params: {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
+  // Capture previous entry for both manual reset (/new) and idle/daily expiry
+  // This is set after we evaluate freshEntry to know if session will reset
+  let previousSessionEntry: SessionEntry | undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -420,6 +427,60 @@ export async function initSessionState(params: {
     persistedProviderOverride = entry.providerOverride;
     persistedLabel = entry.label;
   } else {
+    // Capture previous session entry for callers to know what was reset
+    if (entry) {
+      previousSessionEntry = { ...entry };
+    }
+
+    // Session is resetting - run memory flush if enabled
+    // This captures context before it's lost to idle/daily/manual reset
+    if (entry && resolveSessionEndFlushSettings(cfg)) {
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const agentDir = resolveAgentDir(cfg, agentId);
+
+      // Snapshot the transcript — archiveSessionTranscripts runs later in
+      // this flow and renames the original file, which would race with the
+      // async flush reading it.
+      const originalFile = entry.sessionFile;
+      let snapshotFile: string | undefined;
+      if (originalFile && fs.existsSync(originalFile)) {
+        snapshotFile = `${originalFile}.flush-snapshot`;
+        try {
+          fs.copyFileSync(originalFile, snapshotFile);
+        } catch {
+          snapshotFile = undefined;
+        }
+      }
+
+      // Use a flush-specific sessionKey so it gets its own lane and doesn't
+      // block the new session's first reply (runEmbeddedPiAgent serializes
+      // work by sessionKey via resolveSessionLane).
+      const flushSessionKey = `${sessionKey}:flush:${entry.sessionId}`;
+
+      // Fire and forget - don't block session init on flush
+      runSessionEndFlush({
+        cfg,
+        sessionEntry: snapshotFile ? { ...entry, sessionFile: snapshotFile } : entry,
+        sessionKey: flushSessionKey,
+        agentId,
+        workspaceDir,
+        agentDir,
+      })
+        .catch(() => {
+          // Silently ignore flush errors - session reset should proceed
+        })
+        .finally(() => {
+          // Clean up transcript snapshot
+          if (snapshotFile) {
+            try {
+              fs.unlinkSync(snapshotFile);
+            } catch {
+              // best-effort cleanup
+            }
+          }
+        });
+    }
+
     sessionId = crypto.randomUUID();
     isNewSession = true;
     systemSent = false;

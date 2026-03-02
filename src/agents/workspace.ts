@@ -498,29 +498,32 @@ async function resolveMemoryBootstrapEntries(
 export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
+  // Order: most stable files first, most volatile last.
+  // Changes to a file invalidate the prompt cache from that point onward,
+  // so placing rarely-changing files early maximizes cache hit coverage.
   const entries: Array<{
     name: WorkspaceBootstrapFileName;
     filePath: string;
   }> = [
     {
-      name: DEFAULT_AGENTS_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
+      name: DEFAULT_IDENTITY_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_IDENTITY_FILENAME),
     },
     {
       name: DEFAULT_SOUL_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_SOUL_FILENAME),
     },
     {
-      name: DEFAULT_TOOLS_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
-    },
-    {
-      name: DEFAULT_IDENTITY_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_IDENTITY_FILENAME),
-    },
-    {
       name: DEFAULT_USER_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
+    },
+    {
+      name: DEFAULT_AGENTS_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
+    },
+    {
+      name: DEFAULT_TOOLS_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
     },
     {
       name: DEFAULT_HEARTBEAT_FILENAME,

@@ -281,6 +281,78 @@ export function detectCategory(text: string): MemoryCategory {
 }
 
 // ============================================================================
+// Chunked recall: split long prompts to stay under embedding token limits
+// ============================================================================
+
+// text-embedding-3-small has an 8192-token limit.
+// UTF-8 byte length is always >= token count, so 7000 bytes guarantees < 8192 tokens.
+const RECALL_MAX_BYTES = 7000;
+// Safety cap: max session context is 200K tokens ≈ 800KB at ~4 bytes/token.
+// 800KB / 7KB per chunk ≈ 115 chunks. 128 adds headroom.
+const RECALL_MAX_CHUNKS = 128;
+
+/**
+ * Split text into chunks that fit within the embedding model's input limit.
+ * Chunks from the END of the text first (most recent conversation turns are
+ * the most relevant for recall), then works backwards. If the chunk cap is
+ * hit, the oldest content at the start is what gets dropped.
+ * Prefers splitting at paragraph, line, or word boundaries.
+ */
+function splitForRecall(text: string, maxBytes = RECALL_MAX_BYTES): string[] {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+    return [text];
+  }
+
+  // Work backwards from the end so the most recent content is always included
+  const chunks: string[] = [];
+  let end = text.length;
+
+  while (end > 0 && chunks.length < RECALL_MAX_CHUNKS) {
+    // Binary search for the leftmost start position within byte limit
+    let lo = Math.max(0, end - maxBytes);
+    let hi = end - 1;
+    let best = hi;
+
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (Buffer.byteLength(text.slice(mid, end), "utf8") <= maxBytes) {
+        best = mid;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+
+    // Try to break at a natural boundary (paragraph > line > space)
+    if (best > 0) {
+      const slice = text.slice(best, end);
+      const halfLen = slice.length * 0.5;
+      const paraBrk = slice.indexOf("\n\n");
+      const lineBrk = slice.indexOf("\n");
+      const spaceBrk = slice.indexOf(" ");
+
+      if (paraBrk >= 0 && paraBrk < halfLen) {
+        best = best + paraBrk + 2;
+      } else if (lineBrk >= 0 && lineBrk < halfLen) {
+        best = best + lineBrk + 1;
+      } else if (spaceBrk >= 0 && spaceBrk < halfLen) {
+        best = best + spaceBrk + 1;
+      }
+    }
+
+    const chunk = text.slice(best, end).trim();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+    end = best;
+  }
+
+  // Reverse so chunks are in chronological order (oldest first)
+  chunks.reverse();
+  return chunks;
+}
+
+// ============================================================================
 // Plugin Definition
 // ============================================================================
 
@@ -539,6 +611,8 @@ const memoryPlugin = {
     // ========================================================================
 
     // Auto-recall: inject relevant memories before agent starts
+    // Uses chunked multi-query to handle conversations that exceed the
+    // embedding model's token limit (8192 for text-embedding-3-small).
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event) => {
         if (!event.prompt || event.prompt.length < 5) {
@@ -546,18 +620,39 @@ const memoryPlugin = {
         }
 
         try {
-          const vector = await embeddings.embed(event.prompt);
-          const results = await db.search(vector, 3, 0.3);
+          const chunks = splitForRecall(event.prompt);
 
-          if (results.length === 0) {
+          // Embed each chunk and search sequentially to avoid rate limits
+          const allResults: MemorySearchResult[] = [];
+          for (const chunk of chunks) {
+            const vector = await embeddings.embed(chunk);
+            const results = await db.search(vector, 3, 0.3);
+            allResults.push(...results);
+          }
+
+          // Deduplicate by memory ID, keeping highest similarity score
+          const bestById = new Map<string, MemorySearchResult>();
+          for (const r of allResults) {
+            const existing = bestById.get(r.entry.id);
+            if (!existing || r.score > existing.score) {
+              bestById.set(r.entry.id, r);
+            }
+          }
+
+          // Sort by score descending, take top 5
+          const deduplicated = [...bestById.values()].sort((a, b) => b.score - a.score).slice(0, 5);
+
+          if (deduplicated.length === 0) {
             return;
           }
 
-          api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
+          api.logger.info?.(
+            `memory-lancedb: injecting ${deduplicated.length} memories (from ${chunks.length} chunk${chunks.length > 1 ? "s" : ""})`,
+          );
 
           return {
             prependContext: formatRelevantMemoriesContext(
-              results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
+              deduplicated.map((r) => ({ category: r.entry.category, text: r.entry.text })),
             ),
           };
         } catch (err) {

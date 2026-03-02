@@ -1,0 +1,19 @@
+{
+  "id": "penpot",
+  "name": "PenPot Design Bridge",
+  "description": "Direct PenPot backend integration for headless design operations",
+  "configSchema": {
+    "type": "object",
+    "required": ["accessToken"],
+    "properties": {
+      "accessToken": {
+        "type": "string",
+        "description": "PenPot API access token (supports ${ENV_VAR} syntax)"
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "PenPot instance URL (default: https://design.penpot.app)"
+      }
+    }
+  }
+}

@@ -24,6 +24,27 @@ const log = createSubsystemLogger("compaction-safeguard");
 
 // Track session managers that have already logged the missing-model warning to avoid log spam.
 const missedModelWarningSessions = new WeakSet<object>();
+
+/**
+ * Parse a model reference string (e.g., "google/gemini-2.0-flash") into provider and modelId.
+ */
+function parseModelRef(ref: string): { provider: string; modelId: string } | null {
+  const trimmed = ref.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex === -1) {
+    return null;
+  }
+  const provider = trimmed.slice(0, slashIndex);
+  const modelId = trimmed.slice(slashIndex + 1);
+  if (!provider || !modelId) {
+    return null;
+  }
+  return { provider, modelId };
+}
+
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -223,12 +244,29 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
+    // Additionally, prefer a dedicated summarization model if configured.
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
     const summarizationInstructions = {
       identifierPolicy: runtime?.identifierPolicy,
       identifierInstructions: runtime?.identifierInstructions,
     };
-    const model = ctx.model ?? runtime?.model;
+    let model = ctx.model ?? runtime?.model;
+    let usedDedicatedModel = false;
+
+    if (runtime?.summarizationModel) {
+      const parsed = parseModelRef(runtime.summarizationModel);
+      if (parsed) {
+        const dedicatedModel = ctx.modelRegistry.find(parsed.provider, parsed.modelId);
+        if (dedicatedModel) {
+          model = dedicatedModel;
+          usedDedicatedModel = true;
+        } else {
+          log.warn(
+            `Configured summarization model "${runtime.summarizationModel}" not found in registry; falling back to session model`,
+          );
+        }
+      }
+    }
     if (!model) {
       // Log warning once per session when both models are missing (diagnostic for future issues).
       // Use a WeakSet to track which session managers have already logged the warning.
@@ -243,12 +281,29 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const apiKey = await ctx.modelRegistry.getApiKey(model);
+    let apiKey = await ctx.modelRegistry.getApiKey(model);
     if (!apiKey) {
-      console.warn(
-        "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
-      );
-      return { cancel: true };
+      if (usedDedicatedModel) {
+        const fallbackModel = ctx.model ?? runtime?.model;
+        const fallbackKey = fallbackModel ? await ctx.modelRegistry.getApiKey(fallbackModel) : null;
+        if (fallbackModel && fallbackKey) {
+          log.warn(
+            `No API key for summarization model "${runtime?.summarizationModel}"; falling back to session model`,
+          );
+          model = fallbackModel;
+          apiKey = fallbackKey;
+        } else {
+          log.warn(
+            "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
+          );
+          return { cancel: true };
+        }
+      } else {
+        log.warn(
+          "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
+        );
+        return { cancel: true };
+      }
     }
 
     try {
