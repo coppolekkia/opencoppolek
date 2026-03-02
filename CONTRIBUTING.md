@@ -74,6 +74,7 @@ Welcome to the lobster tank! 🦞
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
+- For breaking behavior/config changes: add a `### Breaking` changelog entry and add an `openclaw doctor` upgrade warning/check when feasible.
 
 ## Control UI Decorators
 
