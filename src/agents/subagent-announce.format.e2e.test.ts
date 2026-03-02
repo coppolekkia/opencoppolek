@@ -293,7 +293,7 @@ describe("subagent announce formatting", () => {
     { role: "toolResult", toolOutput: "tool output line 1", childRunId: "run-tool-fallback-1" },
     { role: "tool", toolOutput: "tool output line 2", childRunId: "run-tool-fallback-2" },
   ] as const)(
-    "falls back to latest $role output when assistant reply is empty",
+    "does NOT leak $role content when assistant reply is empty (security)",
     async (testCase) => {
       chatHistoryMock.mockResolvedValueOnce({
         messages: [
@@ -320,7 +320,7 @@ describe("subagent announce formatting", () => {
 
       const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
       const msg = call?.params?.message as string;
-      expect(msg).toContain(testCase.toolOutput);
+      expect(msg).not.toContain(testCase.toolOutput);
     },
   );
 
@@ -1432,7 +1432,7 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("old tool output");
   });
 
-  it("falls back to latest tool output for completion-mode when assistant output is empty", async () => {
+  it("does not leak tool output in completion-mode when assistant output is empty (security)", async () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [
         {
@@ -1458,10 +1458,11 @@ describe("subagent announce formatting", () => {
     });
 
     expect(didAnnounce).toBe(true);
+    // Tool output must not appear in the completion message (security fix).
     expect(sendSpy).toHaveBeenCalledTimes(1);
     const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("tool output only");
+    expect(msg).not.toContain("tool output only");
   });
 
   it("ignores user text when deriving fallback completion output", async () => {
@@ -2028,5 +2029,126 @@ describe("subagent announce formatting", () => {
       expect(call?.params?.deliver, testCase.name).toBe(testCase.expectedDeliver);
       expect(call?.params?.channel, testCase.name).toBe(testCase.expectedChannel);
     }
+  });
+
+  describe("security: timeout does not leak tool results", () => {
+    it("does not forward toolResult content when no assistant message exists (timeout scenario)", async () => {
+      const sensitiveCode = 'const API_KEY = "sk-secret-1234"; export default handler;';
+      chatHistoryMock.mockResolvedValueOnce({
+        messages: [
+          { role: "user", content: "investigate the bug" },
+          { role: "toolResult", content: [{ type: "text", text: sensitiveCode }] },
+        ],
+      });
+      readLatestAssistantReplyMock.mockResolvedValue("");
+
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:worker",
+        childRunId: "run-timeout-leak-1",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        outcome: { status: "timeout" },
+        expectsCompletionMessage: true,
+        waitForCompletion: false,
+      });
+
+      // The sensitive tool content must never reach the direct send path.
+      if (sendSpy.mock.calls.length > 0) {
+        const sendCall = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+        const sendMsg = sendCall?.params?.message ?? "";
+        expect(sendMsg).not.toContain(sensitiveCode);
+      }
+      // Also check the agent path if it was used instead.
+      if (agentSpy.mock.calls.length > 0) {
+        const agentCall = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+        const agentMsg = agentCall?.params?.message ?? "";
+        expect(agentMsg).not.toContain(sensitiveCode);
+      }
+    });
+
+    it("returns only assistant content when both assistant and toolResult exist", async () => {
+      chatHistoryMock.mockResolvedValueOnce({
+        messages: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "full source code of secret.ts" }],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "I found the bug in the handler" }],
+          },
+        ],
+      });
+      readLatestAssistantReplyMock.mockResolvedValue("");
+
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:worker",
+        childRunId: "run-timeout-leak-2",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        ...defaultOutcomeAnnounce,
+        waitForCompletion: false,
+      });
+
+      const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+      const msg = call?.params?.message as string;
+      expect(msg).toContain("I found the bug in the handler");
+      expect(msg).not.toContain("full source code of secret.ts");
+    });
+
+    it("truncates very long findings in completion message", async () => {
+      const longContent = "A".repeat(5000);
+      readLatestAssistantReplyMock.mockResolvedValue(longContent);
+
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:worker",
+        childRunId: "run-long-findings",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        expectsCompletionMessage: true,
+        waitForCompletion: false,
+      });
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+      const msg = call?.params?.message ?? "";
+      // The 5000-char content should be truncated
+      expect(msg.length).toBeLessThan(5000);
+      expect(msg).toContain("[… output truncated]");
+    });
+
+    it("does not leak tool content via direct send path on timeout", async () => {
+      const rawCode = "function secretHandler() { return process.env.DB_PASSWORD; }";
+      chatHistoryMock.mockResolvedValueOnce({
+        messages: [{ role: "tool", content: [{ type: "text", text: rawCode }] }],
+      });
+      readLatestAssistantReplyMock.mockResolvedValue("");
+
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:worker",
+        childRunId: "run-timeout-direct-leak",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "slack", to: "channel:C999", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        outcome: { status: "timeout" },
+        expectsCompletionMessage: true,
+        waitForCompletion: false,
+      });
+
+      // Verify the raw code never appears in any outgoing message.
+      for (const call of sendSpy.mock.calls) {
+        const params = (call[0] as { params?: { message?: string } })?.params;
+        expect(params?.message ?? "").not.toContain(rawCode);
+      }
+      for (const call of agentSpy.mock.calls) {
+        const params = (call[0] as { params?: { message?: string } })?.params;
+        expect(params?.message ?? "").not.toContain(rawCode);
+      }
+    });
   });
 });
