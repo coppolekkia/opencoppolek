@@ -352,7 +352,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   const scope = cfg.session?.scope ?? "per-sender";
   const configuredById = new Map<
     string,
-    { name?: string; identity?: GatewayAgentRow["identity"] }
+    { name?: string; model?: string; identity?: GatewayAgentRow["identity"] }
   >();
   for (const entry of cfg.agents?.list ?? []) {
     if (!entry?.id) {
@@ -390,9 +390,11 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   }
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
+    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     return {
       id,
       name: meta?.name,
+      model: `${resolvedModel.provider}/${resolvedModel.model}`,
       identity: meta?.identity,
     };
   });

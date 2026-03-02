@@ -1777,21 +1777,25 @@ public struct WebLoginWaitParams: Codable, Sendable {
 public struct AgentSummary: Codable, Sendable {
     public let id: String
     public let name: String?
+    public let model: String?
     public let identity: [String: AnyCodable]?
 
     public init(
         id: String,
         name: String?,
+        model: String?,
         identity: [String: AnyCodable]?)
     {
         self.id = id
         self.name = name
+        self.model = model
         self.identity = identity
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case name
+        case model
         case identity
     }
 }

@@ -310,6 +310,27 @@ describe("gateway session utils", () => {
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
   });
+
+  test("listAgentsForGateway exposes resolved model per agent", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.2" } },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", model: "anthropic/claude-opus-4-5" },
+        ],
+      },
+      session: { mainKey: "main" },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expect(result.agents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "main", model: "openai/gpt-5.2" }),
+        expect.objectContaining({ id: "ops", model: "anthropic/claude-opus-4-5" }),
+      ]),
+    );
+  });
 });
 
 describe("resolveSessionModelRef", () => {
