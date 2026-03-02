@@ -223,6 +223,8 @@ type DeliverOutboundPayloadsCoreParams = {
   silent?: boolean;
   /** Links outbox queue rows to a durable message turn. */
   turnId?: string;
+  /** Dispatch kind for outbox tracking and recovery filtering. */
+  dispatchKind?: "tool" | "block" | "final";
 };
 
 type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
@@ -250,6 +252,7 @@ export async function deliverOutboundPayloads(
         silent: params.silent,
         mirror: params.mirror,
         turnId: params.turnId,
+        dispatchKind: params.dispatchKind,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.

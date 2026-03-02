@@ -39,6 +39,8 @@ export type RouteReplyParams = {
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
+  /** Dispatch kind for outbox tracking and recovery filtering. */
+  kind?: "tool" | "block" | "final";
 };
 
 export type RouteReplyResult = {
@@ -141,6 +143,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       threadId: resolvedThreadId,
       session: outboundSession,
       abortSignal,
+      dispatchKind: params.kind,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {

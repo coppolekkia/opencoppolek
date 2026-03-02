@@ -83,6 +83,7 @@ export async function emitResetCommandHooks(params: {
         accountId: params.ctx.AccountId,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
+        kind: "final",
       });
     }
   }
