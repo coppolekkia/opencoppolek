@@ -31,6 +31,7 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
 };
@@ -87,6 +88,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     filePathHint,
     maxBytes,
     maxRedirects,
+    timeoutMs,
     ssrfPolicy,
     lookupFn,
   } = options;
@@ -100,6 +102,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       fetchImpl,
       init: requestInit,
       maxRedirects,
+      timeoutMs,
       policy: ssrfPolicy,
       lookupFn,
     });
@@ -140,15 +143,26 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       }
     }
 
-    const buffer = maxBytes
-      ? await readResponseWithLimit(res, maxBytes, {
-          onOverflow: ({ maxBytes, res }) =>
-            new MediaFetchError(
-              "max_bytes",
-              `Failed to fetch media from ${res.url || url}: payload exceeds maxBytes ${maxBytes}`,
-            ),
-        })
-      : Buffer.from(await res.arrayBuffer());
+    let buffer: Buffer;
+    try {
+      buffer = maxBytes
+        ? await readResponseWithLimit(res, maxBytes, {
+            onOverflow: ({ maxBytes, res }) =>
+              new MediaFetchError(
+                "max_bytes",
+                `Failed to fetch media from ${res.url || url}: payload exceeds maxBytes ${maxBytes}`,
+              ),
+          })
+        : Buffer.from(await res.arrayBuffer());
+    } catch (err) {
+      if (err instanceof MediaFetchError) {
+        throw err;
+      }
+      throw new MediaFetchError(
+        "fetch_failed",
+        `Failed to fetch media from ${url}: ${String(err)}`,
+      );
+    }
     let fileNameFromUrl: string | undefined;
     try {
       const parsed = new URL(finalUrl);

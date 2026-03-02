@@ -43,6 +43,8 @@ const TELEGRAM_MEDIA_SSRF_POLICY = {
   allowedHostnames: ["api.telegram.org"],
   allowRfc2544BenchmarkRange: true,
 };
+const TELEGRAM_GET_FILE_TIMEOUT_MS = 15_000;
+const TELEGRAM_MEDIA_FETCH_TIMEOUT_MS = 30_000;
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -357,6 +359,7 @@ export async function resolveMedia(
       fetchImpl,
       filePathHint: filePath,
       maxBytes,
+      timeoutMs: TELEGRAM_MEDIA_FETCH_TIMEOUT_MS,
       ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
     });
     const originalName = fetched.fileName ?? filePath;
@@ -376,7 +379,12 @@ export async function resolveMedia(
     }
 
     try {
-      const file = await ctx.getFile();
+      const file = await getTelegramFileWithTimeout(
+        ctx,
+        sticker.file_id,
+        TELEGRAM_GET_FILE_TIMEOUT_MS,
+        "telegram:getFile",
+      );
       if (!file.file_path) {
         logVerbose("telegram: getFile returned no file_path for sticker");
         return null;
@@ -449,16 +457,25 @@ export async function resolveMedia(
 
   let file: { file_path?: string };
   try {
-    file = await retryAsync(() => ctx.getFile(), {
-      attempts: 3,
-      minDelayMs: 1000,
-      maxDelayMs: 4000,
-      jitter: 0.2,
-      label: "telegram:getFile",
-      shouldRetry: isRetryableGetFileError,
-      onRetry: ({ attempt, maxAttempts }) =>
-        logVerbose(`telegram: getFile retry ${attempt}/${maxAttempts}`),
-    });
+    file = await retryAsync(
+      () =>
+        getTelegramFileWithTimeout(
+          ctx,
+          m.file_id,
+          TELEGRAM_GET_FILE_TIMEOUT_MS,
+          "telegram:getFile",
+        ),
+      {
+        attempts: 3,
+        minDelayMs: 1000,
+        maxDelayMs: 4000,
+        jitter: 0.2,
+        label: "telegram:getFile",
+        shouldRetry: isRetryableGetFileError,
+        onRetry: ({ attempt, maxAttempts }) =>
+          logVerbose(`telegram: getFile retry ${attempt}/${maxAttempts}`),
+      },
+    );
   } catch (err) {
     // Handle "file is too big" separately - Telegram Bot API has a 20MB download limit
     if (isFileTooBigError(err)) {
@@ -484,6 +501,49 @@ export async function resolveMedia(
   const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
+}
+
+async function getTelegramFileWithTimeout(
+  ctx: TelegramContext,
+  fileId: string,
+  timeoutMs: number,
+  label: string,
+): Promise<{ file_path?: string }> {
+  const normalizedTimeoutMs = Math.max(1, timeoutMs);
+
+  if (ctx.api && typeof ctx.api.getFile === "function") {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, normalizedTimeoutMs);
+
+    try {
+      return await ctx.api.getFile(fileId, controller.signal);
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`${label} timed out after ${normalizedTimeoutMs}ms`, { cause: err });
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      ctx.getFile(),
+      new Promise<{ file_path?: string }>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${normalizedTimeoutMs}ms`));
+        }, normalizedTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 function isVoiceMessagesForbidden(err: unknown): boolean {
