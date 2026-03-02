@@ -274,6 +274,7 @@ export function createHooksRequestHandler(
           sessionKey: sessionKey.value,
           targetAgentId,
         }),
+        sessionKeyExplicit: sessionKey.explicit,
         agentId: targetAgentId,
       });
       sendJson(res, 202, { ok: true, runId });
@@ -334,6 +335,7 @@ export function createHooksRequestHandler(
               sessionKey: sessionKey.value,
               targetAgentId,
             }),
+            sessionKeyExplicit: sessionKey.explicit,
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,
             to: mapped.action.to,
