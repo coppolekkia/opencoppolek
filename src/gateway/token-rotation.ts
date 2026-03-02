@@ -1,19 +1,7 @@
-/**
- * Token rotation for the gateway auth token.
- *
- * T-ACCESS-003 recommends "token encryption at rest, add token rotation."
- * Generates a new token and atomically replaces the old one.
- *
- * Uses write-to-temp-then-rename to prevent config corruption.
- *
- * Note: Uses JSON.parse/stringify. If OpenClaw configs adopt JSON5
- * (comments, trailing commas), this should be updated to use a
- * JSON5-aware parser to preserve formatting and comments.
- */
-
 import { randomBytes } from "crypto";
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
+import { mask } from "./token-redactor.js";
 
 interface RotationResult {
   previousTokenPrefix: string;
@@ -28,10 +16,9 @@ function generateToken(bytes: number = 24): string {
 
 /**
  * Atomically write content to a file.
- *
- * Writes to a temporary file in the same directory, then renames
- * over the target. rename() is atomic on POSIX filesystems, so a
- * crash at any point leaves either the old or new file intact.
+ * Forces 0o600 permissions to match the main config writer
+ * (src/config/io.ts). On Windows, falls back gracefully if
+ * rename fails due to EPERM/EEXIST.
  */
 function atomicWriteFileSync(filePath: string, content: string): void {
   const dir = dirname(filePath);
@@ -39,19 +26,50 @@ function atomicWriteFileSync(filePath: string, content: string): void {
 
   try {
     writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
+  } catch (writeErr) {
+    try { unlinkSync(tmpPath); } catch { /* ignore */ }
+    throw writeErr;
+  }
+
+  try {
     renameSync(tmpPath, filePath);
-  } catch (err) {
-    try { unlinkSync(tmpPath); } catch { /* temp may not exist */ }
-    throw err;
+  } catch (renameErr: any) {
+    if (renameErr.code === "EPERM" || renameErr.code === "EEXIST") {
+      try {
+        unlinkSync(filePath);
+        renameSync(tmpPath, filePath);
+      } catch (fallbackErr: any) {
+        // Do NOT delete tmpPath — it is the only copy of the new config.
+        const recovery = new Error(
+          `Failed to write config. New config preserved at ${tmpPath}. ` +
+            `Rename it to ${filePath} manually to recover.`,
+        );
+        (recovery as any).cause = fallbackErr;
+        throw recovery;
+      }
+    } else {
+      try { unlinkSync(tmpPath); } catch { /* ignore */ }
+      throw renameErr;
+    }
   }
 }
 
 /**
  * Rotate the gateway auth token in the config file.
+ * Callers should serialize rotation attempts (single-operator model).
+ *
+ * Note: Uses JSON.parse. If configs adopt JSON5 (comments, trailing
+ * commas), switch to parseConfigJson5 from src/config/io.ts.
  */
 export function rotateToken(configPath: string): RotationResult {
   const raw = readFileSync(configPath, "utf-8");
   const config = JSON.parse(raw);
+
+  if (typeof config !== "object" || config === null || Array.isArray(config)) {
+    throw new Error(
+      `Cannot rotate: ${configPath} does not contain a JSON object`,
+    );
+  }
 
   const oldToken: string = config?.gateway?.auth?.token || "";
   const newToken = generateToken();
@@ -63,8 +81,8 @@ export function rotateToken(configPath: string): RotationResult {
   atomicWriteFileSync(configPath, JSON.stringify(config, null, 2));
 
   return {
-    previousTokenPrefix: oldToken.slice(0, 4) + "****",
-    newTokenPrefix: newToken.slice(0, 4) + "****",
+    previousTokenPrefix: oldToken ? mask(oldToken) : "(none)",
+    newTokenPrefix: mask(newToken),
     rotatedAt: new Date().toISOString(),
     configPath,
   };

@@ -1,52 +1,61 @@
 /**
  * Redacts sensitive tokens from config output, logs, and error messages.
- *
  * T-ACCESS-003 residual risk: tokens visible in plaintext.
- * Prevents accidental exposure through CLI output, log files,
- * and error stack traces.
+ *
+ * Standalone module — call installLogRedaction() from the gateway
+ * entrypoint to activate. Integration is a follow-up PR.
  */
 
-// Matches "token": "any-string-value" in JSON
-const TOKEN_FIELD_PATTERN = /("token"\s*:\s*")([^"]{8,})(")/gi;
+import { inspect } from "util";
 
-// Matches "Bearer <token>" — case-insensitive per RFC 6750
-// Full token68 charset per RFC 7235
-const BEARER_PATTERN = /(bearer\s+)([\w\-\.+/=~]{16,})/gi;
+// JSON format: "token": "value"
+const SENSITIVE_FIELD_PATTERN =
+  /("(?:\w*(?:token|password|secret|api_key|apiKey))\w*"\s*:\s*")([^"]+)(")/gi;
 
-// Matches standalone long hex strings (API keys, session IDs)
-const HEX_TOKEN_PATTERN = /\b([a-f0-9]{32,})\b/gi;
+// util.inspect format: token: 'value' (unquoted keys, single-quoted values)
+const INSPECT_FIELD_PATTERN =
+  /((?:\w*(?:token|password|secret|api_key|apiKey))\w*:\s*')([^']+)(')/gi;
 
-function mask(token: string): string {
-  if (token.length <= 8) return "****";
-  return token.slice(0, 4) + "****" + token.slice(-4);
+// Case-insensitive per RFC 6750, full token68 charset per RFC 7235.
+const BEARER_PATTERN = /(bearer\s+)([\w\-\.+/=~]+)/gi;
+
+export function mask(token: string): string {
+  if (token.length <= 16) return "****";
+  return token.slice(0, 4) + "****";
 }
 
 export function redactTokens(input: string): string {
   return input
-    .replace(TOKEN_FIELD_PATTERN, (_m, pre, token, post) => {
+    .replace(SENSITIVE_FIELD_PATTERN, (_m, pre, token, post) => {
+      return `${pre}${mask(token)}${post}`;
+    })
+    .replace(INSPECT_FIELD_PATTERN, (_m, pre, token, post) => {
       return `${pre}${mask(token)}${post}`;
     })
     .replace(BEARER_PATTERN, (_m, pre, token) => {
       return `${pre}${mask(token)}`;
-    })
-    .replace(HEX_TOKEN_PATTERN, (token) => {
-      return mask(token);
     });
 }
 
-/**
- * Convert any argument to a redacted copy for logging.
- * Never mutates the original argument.
- */
 function stringify(arg: any): any {
   if (typeof arg === "string") return redactTokens(arg);
 
   if (arg instanceof Error) {
-    // Use Object.create to preserve prototype chain and all custom
-    // fields (code, statusCode, etc.) without calling the subclass
-    // constructor, which may require extra arguments.
     const clone: Error = Object.create(Object.getPrototypeOf(arg));
-    Object.assign(clone, arg);
+    for (const key of Object.keys(arg)) {
+      const val = (arg as any)[key];
+      if (typeof val === "string") {
+        (clone as any)[key] = redactTokens(val);
+      } else if (typeof val === "object" && val !== null) {
+        try {
+          (clone as any)[key] = JSON.parse(redactTokens(JSON.stringify(val)));
+        } catch {
+          (clone as any)[key] = "[nested object: redaction failed]";
+        }
+      } else {
+        (clone as any)[key] = val;
+      }
+    }
     clone.message = redactTokens(arg.message);
     if (arg.stack) clone.stack = redactTokens(arg.stack);
     return clone;
@@ -56,31 +65,41 @@ function stringify(arg: any): any {
     try {
       return JSON.parse(redactTokens(JSON.stringify(arg)));
     } catch {
-      return arg;
+      return redactTokens(
+        inspect(arg, { depth: 3, maxStringLength: 200, breakLength: Infinity }),
+      );
     }
   }
 
   return arg;
 }
 
-/**
- * Wraps all console output methods to automatically redact tokens.
- * Covers log, info, debug, warn, error, trace, dir, and table.
- * Call once at gateway startup.
- */
+let installed = false;
+let savedOriginals: Record<string, (...args: any[]) => void> = {};
+
 export function installLogRedaction(): void {
+  if (installed) return;
+  installed = true;
+
   const methods = [
     "log", "info", "debug", "warn", "error", "trace", "dir", "table",
   ] as const;
 
-  const originals: Record<string, (...args: any[]) => void> = {};
-
   for (const level of methods) {
     if (typeof console[level] !== "function") continue;
-    originals[level] = console[level];
+    savedOriginals[level] = console[level];
     (console as any)[level] = (...args: any[]) => {
       const redacted = args.map(stringify);
-      originals[level].apply(console, redacted);
+      savedOriginals[level].apply(console, redacted);
     };
   }
+}
+
+export function uninstallLogRedaction(): void {
+  if (!installed) return;
+  for (const [level, fn] of Object.entries(savedOriginals)) {
+    (console as any)[level] = fn;
+  }
+  savedOriginals = {};
+  installed = false;
 }

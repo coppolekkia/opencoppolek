@@ -1,15 +1,5 @@
-/**
- * Warns if the OpenClaw config directory is inside a git repository.
- *
- * T-ACCESS-003: tokens stored in plaintext in ~/.openclaw/openclaw.json.
- * If a user accidentally commits their config directory, tokens are
- * pushed to a remote and become compromised.
- *
- * Runs once at startup. Prints a warning, does not block.
- */
-
 import { existsSync } from "fs";
-import { resolve, dirname } from "path";
+import { resolve, dirname, relative } from "path";
 
 function findGitRoot(startDir: string): string | null {
   let dir = resolve(startDir);
@@ -19,8 +9,6 @@ function findGitRoot(startDir: string): string | null {
       return dir;
     }
     const parent = dirname(dir);
-    // Stop when we can't go higher (handles all platforms including
-    // Windows drives where dirname("D:\") === "D:\")
     if (parent === dir) break;
     dir = parent;
   }
@@ -28,11 +16,13 @@ function findGitRoot(startDir: string): string | null {
 }
 
 export function checkConfigInGitRepo(configDir: string): void {
-  const gitRoot = findGitRoot(configDir);
+  const resolved = resolve(configDir);
+  const gitRoot = findGitRoot(resolved);
   if (gitRoot) {
+    const rel = relative(gitRoot, resolved);
     console.warn(
       `[security] WARNING: OpenClaw config directory is inside a git repo (${gitRoot}).` +
-      ` Tokens in openclaw.json may be committed. Add .openclaw/ to .gitignore.`
+        ` Tokens in openclaw.json may be committed. Add ${rel}/ to .gitignore.`,
     );
   }
 }
