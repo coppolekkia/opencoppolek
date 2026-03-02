@@ -401,7 +401,10 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+# Guard against missing compinit/compdef (e.g., clean zsh without oh-my-zsh)
+if (( $+functions[compdef] )); then
+  compdef _${rootCmd}_root_completion ${rootCmd}
+fi
 `;
   return script;
 }
