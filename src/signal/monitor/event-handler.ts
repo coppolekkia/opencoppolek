@@ -28,6 +28,7 @@ import { createTypingCallbacks } from "../../channels/typing.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { emitMessageSentHooks } from "../../hooks/message-sent.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
@@ -252,7 +253,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
       deliver: async (payload) => {
-        await deps.deliverReplies({
+        const result = await deps.deliverReplies({
           replies: [payload],
           target: ctxPayload.To,
           baseUrl: deps.baseUrl,
@@ -261,6 +262,39 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
+        });
+        return {
+          delivered: result?.delivered ?? true,
+          messageId: result?.messageId,
+        };
+      },
+      onDelivery: (payload, info) => {
+        const target = ctxPayload.To;
+        if (info.success) {
+          if (!info.delivered) {
+            return;
+          }
+          emitMessageSentHooks({
+            to: target,
+            content: payload.text ?? "",
+            success: true,
+            channelId: "signal",
+            accountId: deps.accountId,
+            conversationId: target,
+            sessionKey: ctxPayload.SessionKey,
+            messageId: info.messageId,
+          });
+          return;
+        }
+        emitMessageSentHooks({
+          to: target,
+          content: payload.text ?? "",
+          success: false,
+          error: info.error instanceof Error ? info.error.message : String(info.error),
+          channelId: "signal",
+          accountId: deps.accountId,
+          conversationId: target,
+          sessionKey: ctxPayload.SessionKey,
         });
       },
       onError: (err, info) => {

@@ -994,7 +994,7 @@ async function dispatchDiscordComponentEvent(params: {
       humanDelay: resolveHumanDelayConfig(ctx.cfg, agentId),
       deliver: async (payload) => {
         const replyToId = replyReference.use();
-        await deliverDiscordReply({
+        const delivery = await deliverDiscordReply({
           replies: [payload],
           target: deliverTarget,
           token,
@@ -1008,7 +1008,10 @@ async function dispatchDiscordComponentEvent(params: {
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
         });
-        replyReference.markSent();
+        if (delivery.delivered) {
+          replyReference.markSent();
+        }
+        return delivery;
       },
       onReplyStart: async () => {
         try {

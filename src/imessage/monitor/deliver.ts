@@ -17,9 +17,12 @@ export async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
-}) {
+}): Promise<{ delivered: boolean; messageId?: string; deliveredContent?: string }> {
   const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
     params;
+  let delivered = false;
+  let lastMessageId: string | undefined;
+  let lastDeliveredContent: string | undefined;
   const scope = `${accountId ?? ""}:${target}`;
   const cfg = loadConfig();
   const tableMode = resolveMarkdownTableMode({
@@ -44,8 +47,13 @@ export async function deliverReplies(params: {
           accountId,
           replyToId: payload.replyToId,
         });
+        delivered = true;
+        if (sent.messageId && sent.messageId !== "unknown" && sent.messageId !== "ok") {
+          lastMessageId = sent.messageId;
+        }
         sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
       }
+      lastDeliveredContent = text;
     } else {
       let first = true;
       for (const url of mediaList) {
@@ -58,12 +66,22 @@ export async function deliverReplies(params: {
           accountId,
           replyToId: payload.replyToId,
         });
+        delivered = true;
+        if (sent.messageId && sent.messageId !== "unknown" && sent.messageId !== "ok") {
+          lastMessageId = sent.messageId;
+        }
         sentMessageCache?.remember(scope, {
           text: caption || undefined,
           messageId: sent.messageId,
         });
       }
+      lastDeliveredContent = text;
     }
     runtime.log?.(`imessage: delivered reply to ${target}`);
   }
+  return {
+    delivered,
+    messageId: lastMessageId,
+    ...(lastDeliveredContent !== undefined ? { deliveredContent: lastDeliveredContent } : {}),
+  };
 }

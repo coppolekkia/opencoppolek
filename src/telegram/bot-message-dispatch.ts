@@ -18,6 +18,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { emitMessageSentHooks } from "../hooks/message-sent.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -256,6 +257,19 @@ export const dispatchTelegramMessage = async ({
         Boolean(split.reasoningText) && suppressReasoning && !split.answerText,
     };
   };
+  const deriveHookContent = (payload: ReplyPayload): string => {
+    if (resolvedReasoningLevel !== "off") {
+      return payload.text ?? "";
+    }
+    const split = splitTextIntoLaneSegments(payload.text);
+    if (split.suppressedReasoningOnly) {
+      return "";
+    }
+    if (split.segments.length === 0) {
+      return payload.text ?? "";
+    }
+    return split.segments.map((segment) => segment.text).join("\n\n");
+  };
   const resetDraftLaneState = (lane: DraftLaneState) => {
     lane.lastPartialText = "";
     lane.hasStreamedMessage = false;
@@ -469,6 +483,7 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
+          let delivered = false;
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
@@ -486,13 +501,16 @@ export const dispatchTelegramMessage = async ({
                 | { buttons?: TelegramInlineButtons }
                 | undefined
             )?.buttons;
-            await deliverLaneText({
+            const result = await deliverLaneText({
               laneName: "answer",
               text: buffered.text,
               payload: buffered.payload,
               infoKind: "final",
               previewButtons: bufferedButtons,
             });
+            if (result !== "skipped") {
+              delivered = true;
+            }
             reasoningStepState.resetForNextStep();
           };
 
@@ -516,6 +534,9 @@ export const dispatchTelegramMessage = async ({
               previewButtons,
               allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
             });
+            if (result !== "skipped") {
+              delivered = true;
+            }
             if (segment.lane === "reasoning") {
               if (result !== "skipped") {
                 reasoningStepState.noteReasoningDelivered();
@@ -531,18 +552,21 @@ export const dispatchTelegramMessage = async ({
             }
           }
           if (segments.length > 0) {
-            return;
+            return { delivered };
           }
           if (split.suppressedReasoningOnly) {
             if (hasMedia) {
               const payloadWithoutSuppressedReasoning =
                 typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-              await sendPayload(payloadWithoutSuppressedReasoning);
+              const mediaDelivered = await sendPayload(payloadWithoutSuppressedReasoning);
+              if (mediaDelivered) {
+                delivered = true;
+              }
             }
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
             }
-            return;
+            return { delivered };
           }
 
           if (info.kind === "final") {
@@ -556,12 +580,16 @@ export const dispatchTelegramMessage = async ({
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
             }
-            return;
+            return { delivered };
           }
-          await sendPayload(payload);
+          const payloadDelivered = await sendPayload(payload);
+          if (payloadDelivered) {
+            delivered = true;
+          }
           if (info.kind === "final") {
             await flushBufferedFinalAnswer();
           }
+          return { delivered };
         },
         onSkip: (_payload, info) => {
           if (info.reason !== "silent") {
@@ -571,6 +599,36 @@ export const dispatchTelegramMessage = async ({
         onError: (err, info) => {
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
+        },
+        onDelivery: (payload, info) => {
+          const target = String(chatId);
+          const hookContent = deriveHookContent(payload);
+          if (info.success) {
+            if (!info.delivered) {
+              return;
+            }
+            emitMessageSentHooks({
+              to: target,
+              content: hookContent,
+              success: true,
+              channelId: "telegram",
+              accountId: route.accountId,
+              conversationId: target,
+              sessionKey: ctxPayload.SessionKey,
+              messageId: info.messageId,
+            });
+            return;
+          }
+          emitMessageSentHooks({
+            to: target,
+            content: hookContent,
+            success: false,
+            error: info.error instanceof Error ? info.error.message : String(info.error),
+            channelId: "telegram",
+            accountId: route.accountId,
+            conversationId: target,
+            sessionKey: ctxPayload.SessionKey,
+          });
         },
       },
       replyOptions: {

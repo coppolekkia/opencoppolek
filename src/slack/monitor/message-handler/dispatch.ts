@@ -9,6 +9,7 @@ import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
+import { emitMessageSentHooks } from "../../../hooks/message-sent.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { removeSlackReaction } from "../../actions.js";
@@ -210,10 +211,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
+  const deliveredContentByPayload = new WeakMap<ReplyPayload, string>();
 
-  const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
+  const deliverNormally = async (
+    payload: ReplyPayload,
+    forcedThreadTs?: string,
+  ): Promise<{ delivered: boolean; messageId?: string }> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
-    await deliverReplies({
+    const delivery = await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
       token: ctx.botToken,
@@ -224,17 +229,22 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyToMode: prepared.replyToMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
-    // Record the thread ts only after confirmed delivery success.
-    if (replyThreadTs) {
-      usedReplyThreadTs ??= replyThreadTs;
+    // Record thread routing only after actual delivery.
+    if (delivery.delivered) {
+      if (replyThreadTs) {
+        usedReplyThreadTs ??= replyThreadTs;
+      }
+      replyPlan.markSent();
+      deliveredContentByPayload.set(payload, payload.text ?? "");
     }
-    replyPlan.markSent();
+    return delivery;
   };
 
-  const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
+  const deliverWithStreaming = async (
+    payload: ReplyPayload,
+  ): Promise<{ delivered: boolean; messageId?: string }> => {
     if (streamFailed || hasMedia(payload) || !payload.text?.trim()) {
-      await deliverNormally(payload, streamSession?.threadTs);
-      return;
+      return await deliverNormally(payload, streamSession?.threadTs);
     }
 
     const text = payload.text.trim();
@@ -248,8 +258,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             "slack-stream: no reply thread target for stream start, falling back to normal delivery",
           );
           streamFailed = true;
-          await deliverNormally(payload);
-          return;
+          return await deliverNormally(payload);
         }
 
         streamSession = await startSlackStream({
@@ -262,19 +271,22 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
-        return;
+        deliveredContentByPayload.set(payload, text);
+        return { delivered: true };
       }
 
       await appendSlackStream({
         session: streamSession,
         text: "\n" + text,
       });
+      deliveredContentByPayload.set(payload, text);
+      return { delivered: true };
     } catch (err) {
       runtime.error?.(
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
       streamFailed = true;
-      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
+      return await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
     }
   };
 
@@ -283,9 +295,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
     deliver: async (payload) => {
+      deliveredContentByPayload.delete(payload);
       if (useStreaming) {
-        await deliverWithStreaming(payload);
-        return;
+        return await deliverWithStreaming(payload);
       }
 
       const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
@@ -311,7 +323,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ts: draftMessageId,
             text: normalizeSlackOutboundText(finalText.trim()),
           });
-          return;
+          deliveredContentByPayload.set(payload, finalText.trim());
+          return {
+            delivered: true,
+            messageId: draftMessageId,
+          };
         } catch (err) {
           logVerbose(
             `slack: preview final edit failed; falling back to standard send (${String(err)})`,
@@ -337,7 +353,38 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         hasStreamedMessage = false;
       }
 
-      await deliverNormally(payload);
+      return await deliverNormally(payload);
+    },
+    onDelivery: (payload, info) => {
+      const target = prepared.ctxPayload.To ?? message.channel;
+      const hookContent = deliveredContentByPayload.get(payload) ?? payload.text ?? "";
+      deliveredContentByPayload.delete(payload);
+      if (info.success) {
+        if (!info.delivered) {
+          return;
+        }
+        emitMessageSentHooks({
+          to: target,
+          content: hookContent,
+          success: true,
+          channelId: "slack",
+          accountId: route.accountId,
+          conversationId: target,
+          sessionKey: prepared.ctxPayload.SessionKey,
+          messageId: info.messageId,
+        });
+        return;
+      }
+      emitMessageSentHooks({
+        to: target,
+        content: hookContent,
+        success: false,
+        error: info.error instanceof Error ? info.error.message : String(info.error),
+        channelId: "slack",
+        accountId: route.accountId,
+        conversationId: target,
+        sessionKey: prepared.ctxPayload.SessionKey,
+      });
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));

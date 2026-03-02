@@ -45,7 +45,7 @@ describe("deliverReplies", () => {
   it("propagates payload replyToId through all text chunks", async () => {
     chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
 
-    await deliverReplies({
+    const result = await deliverReplies({
       replies: [{ text: "first|second", replyToId: "reply-1" }],
       target: "chat_id:10",
       client,
@@ -56,6 +56,11 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessageIMessageMock).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      delivered: true,
+      messageId: "imsg-1",
+      deliveredContent: "first|second",
+    });
     expect(sendMessageIMessageMock).toHaveBeenNthCalledWith(
       1,
       "chat_id:10",
@@ -147,6 +152,48 @@ describe("deliverReplies", () => {
     expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
       text: "second",
       messageId: "imsg-1",
+    });
+  });
+
+  it("reports delivered=false when payload has no text or media", async () => {
+    const result = await deliverReplies({
+      replies: [{ channelData: { traceId: "noop" } }],
+      target: "chat_id:40",
+      client,
+      accountId: "acct-4",
+      runtime,
+      maxBytes: 2048,
+      textLimit: 4000,
+    });
+
+    expect(sendMessageIMessageMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ delivered: false, messageId: undefined });
+  });
+
+  it("returns deliveredContent from markdown-table-converted text", async () => {
+    convertMarkdownTablesMock.mockImplementation((text: string) => text.replace("|A|B|", "A\tB"));
+
+    const result = await deliverReplies({
+      replies: [{ text: "|A|B|" }],
+      target: "chat_id:50",
+      client,
+      accountId: "acct-5",
+      runtime,
+      maxBytes: 4096,
+      textLimit: 4000,
+    });
+
+    expect(sendMessageIMessageMock).toHaveBeenCalledWith(
+      "chat_id:50",
+      "A\tB",
+      expect.objectContaining({
+        accountId: "acct-5",
+      }),
+    );
+    expect(result).toEqual({
+      delivered: true,
+      messageId: "imsg-1",
+      deliveredContent: "A\tB",
     });
   });
 });

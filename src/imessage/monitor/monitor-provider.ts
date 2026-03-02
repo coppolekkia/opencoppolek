@@ -13,6 +13,7 @@ import {
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
@@ -23,6 +24,7 @@ import {
 } from "../../config/runtime-group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
+import { emitMessageSentHooks } from "../../hooks/message-sent.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -372,17 +374,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       channel: "imessage",
       accountId: decision.route.accountId,
     });
+    const deliveredContentByPayload = new WeakMap<ReplyPayload, string>();
 
     const dispatcher = createReplyDispatcher({
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
       deliver: async (payload) => {
+        deliveredContentByPayload.delete(payload);
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
-          return;
+          return { delivered: false };
         }
-        await deliverReplies({
+        const delivery = await deliverReplies({
           replies: [payload],
           target,
           client,
@@ -391,6 +395,44 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           maxBytes: mediaMaxBytes,
           textLimit,
           sentMessageCache,
+        });
+        if (delivery.delivered) {
+          deliveredContentByPayload.set(payload, delivery.deliveredContent ?? payload.text ?? "");
+        }
+        return delivery;
+      },
+      onDelivery: (payload, info) => {
+        const target = ctxPayload.To;
+        if (!target) {
+          return;
+        }
+        const hookContent = deliveredContentByPayload.get(payload) ?? payload.text ?? "";
+        deliveredContentByPayload.delete(payload);
+        if (info.success) {
+          if (!info.delivered) {
+            return;
+          }
+          emitMessageSentHooks({
+            to: target,
+            content: hookContent,
+            success: true,
+            channelId: "imessage",
+            accountId: accountInfo.accountId,
+            conversationId: target,
+            sessionKey: ctxPayload.SessionKey,
+            messageId: info.messageId,
+          });
+          return;
+        }
+        emitMessageSentHooks({
+          to: target,
+          content: hookContent,
+          success: false,
+          error: info.error instanceof Error ? info.error.message : String(info.error),
+          channelId: "imessage",
+          accountId: accountInfo.accountId,
+          conversationId: target,
+          sessionKey: ctxPayload.SessionKey,
         });
       },
       onError: (err, info) => {
