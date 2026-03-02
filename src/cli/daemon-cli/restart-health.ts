@@ -175,16 +175,22 @@ export async function terminateStaleGatewayPids(pids: number[]): Promise<number[
 
   await sleep(400);
 
+  let needForceKill = false;
   for (const pid of killed) {
     try {
       process.kill(pid, 0);
       process.kill(pid, "SIGKILL");
+      needForceKill = true;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code;
       if (code !== "ESRCH") {
         throw err;
       }
     }
+  }
+
+  if (needForceKill) {
+    await sleep(200);
   }
 
   return killed;

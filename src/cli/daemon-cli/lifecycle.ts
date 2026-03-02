@@ -12,6 +12,7 @@ import {
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
+  inspectGatewayRestart,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
@@ -75,6 +76,19 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
+
+  const preSnapshot = await inspectGatewayRestart({ service, port: restartPort }).catch(() => null);
+  if (preSnapshot && preSnapshot.staleGatewayPids.length > 0) {
+    if (!json) {
+      defaultRuntime.log(
+        theme.warn(
+          `Found stale gateway process(es) holding port ${restartPort}: ${preSnapshot.staleGatewayPids.join(", ")}.`,
+        ),
+      );
+      defaultRuntime.log(theme.muted("Stopping stale process(es) before restart..."));
+    }
+    await terminateStaleGatewayPids(preSnapshot.staleGatewayPids);
+  }
 
   return await runServiceRestart({
     serviceNoun: "Gateway",

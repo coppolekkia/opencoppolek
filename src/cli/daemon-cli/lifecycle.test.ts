@@ -25,6 +25,7 @@ const service = {
 };
 
 const runServiceRestart = vi.fn();
+const inspectGatewayRestart = vi.fn();
 const waitForGatewayHealthyRestart = vi.fn();
 const terminateStaleGatewayPids = vi.fn();
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
@@ -43,6 +44,7 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
+  inspectGatewayRestart,
   waitForGatewayHealthyRestart,
   terminateStaleGatewayPids,
   renderRestartDiagnostics,
@@ -61,6 +63,7 @@ describe("runDaemonRestart health checks", () => {
     service.readCommand.mockClear();
     service.restart.mockClear();
     runServiceRestart.mockClear();
+    inspectGatewayRestart.mockClear();
     waitForGatewayHealthyRestart.mockClear();
     terminateStaleGatewayPids.mockClear();
     renderRestartDiagnostics.mockClear();
@@ -70,6 +73,13 @@ describe("runDaemonRestart health checks", () => {
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
+    });
+
+    inspectGatewayRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     });
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
@@ -111,6 +121,71 @@ describe("runDaemonRestart health checks", () => {
     expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
     expect(service.restart).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+  });
+
+  it("kills stale pids before restart when orphaned process holds port", async () => {
+    inspectGatewayRestart.mockResolvedValue({
+      healthy: false,
+      staleGatewayPids: [4242],
+      runtime: { status: "stopped" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+    const healthy: RestartHealthSnapshot = {
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    };
+    waitForGatewayHealthyRestart.mockResolvedValue(healthy);
+    terminateStaleGatewayPids.mockResolvedValue([4242]);
+
+    const { runDaemonRestart } = await import("./lifecycle.js");
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(terminateStaleGatewayPids).toHaveBeenCalledWith([4242]);
+    expect(runServiceRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips pre-restart cleanup when no stale pids detected", async () => {
+    inspectGatewayRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+    const healthy: RestartHealthSnapshot = {
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    };
+    waitForGatewayHealthyRestart.mockResolvedValue(healthy);
+
+    const { runDaemonRestart } = await import("./lifecycle.js");
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
+    expect(runServiceRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues restart even when pre-restart inspection fails", async () => {
+    inspectGatewayRestart.mockRejectedValue(new Error("lsof unavailable"));
+    const healthy: RestartHealthSnapshot = {
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    };
+    waitForGatewayHealthyRestart.mockResolvedValue(healthy);
+
+    const { runDaemonRestart } = await import("./lifecycle.js");
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
+    expect(runServiceRestart).toHaveBeenCalledTimes(1);
   });
 
   it("fails restart when gateway remains unhealthy", async () => {
