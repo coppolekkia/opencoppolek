@@ -177,7 +177,11 @@
 
         <div class="card">
           <h2>Relay connection</h2>
-          <label for="port">Port</label>
+          <label for="host">Host</label>
+          <div class="row">
+            <input id="host" type="text" placeholder="127.0.0.1" style="width: min(260px, 100%)" />
+          </div>
+          <label for="port" style="margin-top: 10px">Port</label>
           <div class="row">
             <input id="port" inputmode="numeric" pattern="[0-9]*" />
           </div>
@@ -187,7 +191,7 @@
             <button id="save" type="button">Save</button>
           </div>
           <div class="hint">
-            Default port: <code>18792</code>. Extension connects to: <code id="relay-url">http://127.0.0.1:&lt;port&gt;/</code>.
+            Default: <code>127.0.0.1:18792</code>. Extension connects to: <code id="relay-url">http://127.0.0.1:&lt;port&gt;/</code>.
             Gateway token must match <code>gateway.auth.token</code> (or <code>OPENCLAW_GATEWAY_TOKEN</code>).
           </div>
           <div class="status" id="status"></div>
