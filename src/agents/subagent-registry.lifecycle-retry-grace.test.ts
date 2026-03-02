@@ -124,6 +124,132 @@ describe("subagent registry lifecycle error grace", () => {
     expect(first.outcome?.status).toBe("ok");
   });
 
+  it("uses longer grace period for transient 429 rate limit errors", async () => {
+    mod.registerSubagentRun({
+      runId: "run-ratelimit",
+      childSessionKey: "agent:main:subagent:ratelimit",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "rate limit test",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-ratelimit",
+      data: { phase: "error", error: "429 rate_limit_error", endedAt: 1_000 },
+    });
+    await flushAsync();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushAsync();
+    expect(announceSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    expect(announceSpy).not.toHaveBeenCalled();
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-ratelimit",
+      data: { phase: "start", startedAt: 1_050 },
+    });
+    await flushAsync();
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-ratelimit",
+      data: { phase: "end", endedAt: 1_250 },
+    });
+    await flushAsync();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const announceCalls = announceSpy.mock.calls as unknown as Array<Array<unknown>>;
+    const first = (announceCalls[0]?.[0] ?? {}) as {
+      outcome?: { status?: string };
+    };
+    expect(first.outcome?.status).toBe("ok");
+  });
+
+  it("announces error when transient 429 error remains terminal after 90s grace window", async () => {
+    mod.registerSubagentRun({
+      runId: "run-429-terminal",
+      childSessionKey: "agent:main:subagent:429-terminal",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "429 terminal test",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-429-terminal",
+      data: { phase: "error", error: "429 rate_limit_error", endedAt: 3_000 },
+    });
+    await flushAsync();
+
+    await vi.advanceTimersByTimeAsync(89_999);
+    await flushAsync();
+    expect(announceSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flushAsync();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const announceCalls = announceSpy.mock.calls as unknown as Array<Array<unknown>>;
+    const first = (announceCalls[0]?.[0] ?? {}) as {
+      outcome?: { status?: string; error?: string };
+    };
+    expect(first.outcome?.status).toBe("error");
+    expect(first.outcome?.error).toContain("429");
+  });
+
+  it("uses longer grace period for 503 service unavailable errors", async () => {
+    mod.registerSubagentRun({
+      runId: "run-503",
+      childSessionKey: "agent:main:subagent:503",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "503 transient test",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-503",
+      data: { phase: "error", error: "503 service unavailable", endedAt: 1_000 },
+    });
+    await flushAsync();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushAsync();
+    expect(announceSpy).not.toHaveBeenCalled();
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-503",
+      data: { phase: "start", startedAt: 1_050 },
+    });
+    await flushAsync();
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-503",
+      data: { phase: "end", endedAt: 1_250 },
+    });
+    await flushAsync();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const announceCalls = announceSpy.mock.calls as unknown as Array<Array<unknown>>;
+    const first = (announceCalls[0]?.[0] ?? {}) as {
+      outcome?: { status?: string };
+    };
+    expect(first.outcome?.status).toBe("ok");
+  });
+
   it("announces error when lifecycle error remains terminal after grace window", async () => {
     mod.registerSubagentRun({
       runId: "run-terminal-error",

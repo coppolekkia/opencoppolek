@@ -73,6 +73,22 @@ type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
+/**
+ * Longer grace period for transient errors (429 rate limits, 5xx, timeouts)
+ * where the retry backoff itself may exceed the default grace window (#27990).
+ */
+const LIFECYCLE_TRANSIENT_ERROR_RETRY_GRACE_MS = 90_000;
+
+const TRANSIENT_ERROR_RE =
+  /\b(429|rate.?limit|too.?many.?requests|overloaded|50[0-4]|timeout|timed.?out|ECONNRESET|ETIMEDOUT)\b/i;
+
+function resolveLifecycleErrorGraceMs(error?: string): number {
+  if (error && TRANSIENT_ERROR_RE.test(error)) {
+    return LIFECYCLE_TRANSIENT_ERROR_RETRY_GRACE_MS;
+  }
+  return LIFECYCLE_ERROR_RETRY_GRACE_MS;
+}
+
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
   // retryCount is "attempts already made", so retry #1 waits 1s, then 2s, 4s...
@@ -262,7 +278,7 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
     });
-  }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+  }, resolveLifecycleErrorGraceMs(params.error));
   timer.unref?.();
   pendingLifecycleErrorByRunId.set(params.runId, {
     timer,
