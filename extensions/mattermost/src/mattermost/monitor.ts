@@ -383,7 +383,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       callbackUrl,
       resolveSessionKey: async (channelId: string) => {
         const channelInfo = await resolveChannelInfo(channelId);
-        const kind = channelKind(channelInfo?.type);
+        const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
         const teamId = channelInfo?.team_id ?? undefined;
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
@@ -399,7 +399,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
       dispatchButtonClick: async (opts) => {
         const channelInfo = await resolveChannelInfo(opts.channelId);
-        const kind = channelKind(channelInfo?.type);
+        const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
         const chatType = channelChatType(kind);
         const teamId = channelInfo?.team_id ?? undefined;
         const channelName = channelInfo?.name ?? undefined;
