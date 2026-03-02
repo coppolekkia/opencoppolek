@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const undiciFetch = vi.fn();
@@ -29,7 +29,7 @@ vi.mock("undici", () => ({
   setGlobalDispatcher: mocks.setGlobalDispatcher,
 }));
 
-import { makeProxyFetch } from "./proxy.js";
+import { makeProxyFetch, resolveProxyUrlFromEnv, shouldBypassProxyForUrl } from "./proxy.js";
 
 describe("makeProxyFetch", () => {
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
@@ -45,5 +45,77 @@ describe("makeProxyFetch", () => {
       expect.objectContaining({ dispatcher: mocks.getLastAgent() }),
     );
     expect(mocks.setGlobalDispatcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveProxyUrlFromEnv", () => {
+  const vars = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
+
+  afterEach(() => {
+    for (const key of vars) {
+      delete process.env[key];
+    }
+  });
+
+  it("returns undefined when no proxy env var is set", () => {
+    expect(resolveProxyUrlFromEnv()).toBeUndefined();
+  });
+
+  it("prefers HTTPS_PROXY over HTTP_PROXY and ALL_PROXY", () => {
+    process.env.ALL_PROXY = "http://all:8080";
+    process.env.HTTP_PROXY = "http://http:8080";
+    process.env.HTTPS_PROXY = "http://https:8080";
+    expect(resolveProxyUrlFromEnv()).toBe("http://https:8080");
+  });
+
+  it("falls back to HTTP_PROXY then ALL_PROXY", () => {
+    process.env.ALL_PROXY = "http://all:8080";
+    process.env.HTTP_PROXY = "http://http:8080";
+    expect(resolveProxyUrlFromEnv()).toBe("http://http:8080");
+    delete process.env.HTTP_PROXY;
+    expect(resolveProxyUrlFromEnv()).toBe("http://all:8080");
+  });
+
+  it("ignores blank values", () => {
+    process.env.HTTPS_PROXY = "  ";
+    process.env.HTTP_PROXY = "http://http:8080";
+    expect(resolveProxyUrlFromEnv()).toBe("http://http:8080");
+  });
+});
+
+describe("shouldBypassProxyForUrl", () => {
+  afterEach(() => {
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
+  });
+
+  it("returns false when NO_PROXY is unset", () => {
+    expect(shouldBypassProxyForUrl("https://api.telegram.org")).toBe(false);
+  });
+
+  it("supports exact host matches", () => {
+    process.env.NO_PROXY = "api.telegram.org";
+    expect(shouldBypassProxyForUrl("https://api.telegram.org")).toBe(true);
+    expect(shouldBypassProxyForUrl("https://core.telegram.org")).toBe(false);
+  });
+
+  it("supports domain suffix matches and avoids partial host overmatch", () => {
+    process.env.NO_PROXY = ".telegram.org";
+    expect(shouldBypassProxyForUrl("https://api.telegram.org")).toBe(true);
+    expect(shouldBypassProxyForUrl("https://telegram.org")).toBe(true);
+    expect(shouldBypassProxyForUrl("https://eviltelegram.org")).toBe(false);
+  });
+
+  it("supports wildcard bypass", () => {
+    process.env.NO_PROXY = "*";
+    expect(shouldBypassProxyForUrl("https://api.telegram.org")).toBe(true);
+    expect(shouldBypassProxyForUrl("https://example.com")).toBe(true);
+  });
+
+  it("supports entries with port/scheme and list syntax", () => {
+    process.env.NO_PROXY = "https://api.telegram.org:443, localhost";
+    expect(shouldBypassProxyForUrl("https://api.telegram.org")).toBe(true);
+    expect(shouldBypassProxyForUrl("https://localhost:9000")).toBe(true);
+    expect(shouldBypassProxyForUrl("https://example.org")).toBe(false);
   });
 });

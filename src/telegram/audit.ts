@@ -87,9 +87,11 @@ export async function auditTelegramGroupMembership(params: {
 
   // Lazy import to avoid pulling `undici` (ProxyAgent) into cold-path callers that only need
   // `collectTelegramUnmentionedGroupIds` (e.g. config audits).
-  const fetcher = params.proxyUrl
-    ? (await import("./proxy.js")).makeProxyFetch(params.proxyUrl)
-    : fetch;
+  const proxyModule = await import("./proxy.js");
+  const resolvedProxyUrl = params.proxyUrl?.trim() || proxyModule.resolveProxyUrlFromEnv();
+  const shouldBypassProxy = proxyModule.shouldBypassProxyForUrl(TELEGRAM_API_BASE);
+  const fetcher =
+    resolvedProxyUrl && !shouldBypassProxy ? proxyModule.makeProxyFetch(resolvedProxyUrl) : fetch;
   const { fetchWithTimeout } = await import("../utils/fetch-timeout.js");
   const base = `${TELEGRAM_API_BASE}/bot${token}`;
   const groups: TelegramGroupMembershipAuditEntry[] = [];
