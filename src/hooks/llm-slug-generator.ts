@@ -44,7 +44,7 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    // Resolve model from agent config instead of using hardcoded defaults
+    // Resolve model from agent config, falling back to global default
     const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
     const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
     const provider = parsed?.provider ?? DEFAULT_PROVIDER;
