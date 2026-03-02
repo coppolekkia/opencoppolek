@@ -2,10 +2,13 @@ import { existsSync } from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
+
+const log = createSubsystemLogger("tailscale");
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -343,19 +346,19 @@ export async function ensureFunnel(
       },
     );
     if (stdout.trim()) {
-      console.log(stdout.trim());
+      log.info(stdout.trim());
     }
   } catch (err) {
     const errOutput = err as { stdout?: unknown; stderr?: unknown };
     const stdout = typeof errOutput.stdout === "string" ? errOutput.stdout : "";
     const stderr = typeof errOutput.stderr === "string" ? errOutput.stderr : "";
     if (stdout.includes("Funnel is not enabled")) {
-      console.error(danger("Funnel is not enabled on this tailnet/device."));
+      runtime.error(danger("Funnel is not enabled on this tailnet/device."));
       const linkMatch = stdout.match(/https?:\/\/\S+/);
       if (linkMatch) {
-        console.error(info(`Enable it here: ${linkMatch[0]}`));
+        runtime.error(info(`Enable it here: ${linkMatch[0]}`));
       } else {
-        console.error(
+        runtime.error(
           info(
             "Enable in admin console: https://login.tailscale.com/admin (see https://tailscale.com/kb/1223/funnel)",
           ),
@@ -363,7 +366,7 @@ export async function ensureFunnel(
       }
     }
     if (stderr.includes("client version") || stdout.includes("client version")) {
-      console.error(
+      runtime.error(
         warn(
           "Tailscale client/server version mismatch detected; try updating tailscale/tailscaled.",
         ),

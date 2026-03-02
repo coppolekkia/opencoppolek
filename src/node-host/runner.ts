@@ -11,6 +11,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
@@ -31,6 +32,8 @@ type NodeHostRunOptions = {
   nodeId?: string;
   displayName?: string;
 };
+
+const log = createSubsystemLogger("node-host");
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
@@ -144,8 +147,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const scheme = gateway.tls ? "wss" : "ws";
   const url = `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
-  // eslint-disable-next-line no-console
-  console.log(`node host PATH: ${pathEnv}`);
+  log.info("PATH configured", { pathEnv });
 
   const client = new GatewayClient({
     url,
@@ -181,12 +183,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway connect failed: ${err.message}`);
+      log.warn(`gateway connect failed: ${err.message}`);
     },
     onClose: (code, reason) => {
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway closed (${code}): ${reason}`);
+      log.warn(`gateway closed (${code}): ${reason}`);
     },
   });
 
