@@ -464,7 +464,10 @@ export const dispatchTelegramMessage = async ({
       cfg,
       dispatcherOptions: {
         ...prefixOptions,
-        typingCallbacks,
+        // Suppress the typing indicator (and its 3-second keepalive loop) when streaming
+        // preview is disabled — the indicator would keep refreshing after the response
+        // arrives because Telegram auto-expires it but the loop re-sends every 3 s.
+        typingCallbacks: previewStreamingEnabled ? typingCallbacks : undefined,
         deliver: async (payload, info) => {
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined

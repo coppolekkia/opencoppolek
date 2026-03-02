@@ -166,7 +166,16 @@ describe("version resolution", () => {
           npm_package_version: "",
         },
         "fallback",
+        "not-a-valid-url", // prevent package.json / build-info.json lookup
       ),
     ).toBe("fallback");
+  });
+
+  it("falls back to package.json version when env vars are absent", () => {
+    // resolveVersionFromModuleUrl resolves version from package.json in the
+    // test environment — so the result should be a real version string, not "dev".
+    const version = resolveRuntimeServiceVersion({});
+    expect(version).not.toBe("dev");
+    expect(version).toMatch(/\d/); // contains at least one digit
   });
 });
