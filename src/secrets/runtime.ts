@@ -258,6 +258,8 @@ function collectApiKeyProfileAssignment(params: {
     expected: "string",
     apply: (value) => {
       params.profile.key = String(value);
+      // Canonicalize the runtime profile so writebacks can preserve ref-based auth.
+      params.profile.keyRef = resolvedKeyRef;
     },
   });
 }
@@ -292,6 +294,8 @@ function collectTokenProfileAssignment(params: {
     expected: "string",
     apply: (value) => {
       params.profile.token = String(value);
+      // Canonicalize the runtime profile so writebacks can preserve ref-based auth.
+      params.profile.tokenRef = resolvedTokenRef;
     },
   });
 }
