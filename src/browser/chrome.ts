@@ -2,11 +2,12 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Agent, type Dispatcher } from "undici";
 import WebSocket from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
-import { appendCdpPath } from "./cdp.helpers.js";
+import { appendCdpPath, isLoopbackHost } from "./cdp.helpers.js";
 import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
@@ -78,14 +79,29 @@ type ChromeVersion = {
   "User-Agent"?: string;
 };
 
+// Use a shared direct dispatcher for loopback probes so local CDP checks
+// bypass process-wide proxy dispatch without recreating agents per request.
+const loopbackProbeDispatcher: Dispatcher = new Agent();
+
+function resolveCdpProbeDispatcher(cdpUrl: string): Dispatcher | undefined {
+  try {
+    const parsed = new URL(cdpUrl);
+    return isLoopbackHost(parsed.hostname) ? loopbackProbeDispatcher : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<ChromeVersion | null> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
+    const dispatcher = resolveCdpProbeDispatcher(cdpUrl);
     const res = await fetch(versionUrl, {
       signal: ctrl.signal,
       headers: getHeadersWithAuth(versionUrl),
+      ...(dispatcher ? { dispatcher } : {}),
     });
     if (!res.ok) {
       return null;
