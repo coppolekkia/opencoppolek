@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import { marked, type Tokens } from "marked";
 import { truncateText } from "./format.ts";
 
 marked.setOptions({
@@ -7,13 +7,36 @@ marked.setOptions({
   breaks: true,
 });
 
+// Custom renderer to add copy button to code blocks
+const renderer = new marked.Renderer();
+let codeBlockId = 0;
+
+renderer.code = ({ text, lang }: Tokens.Code) => {
+  const id = `code-block-${++codeBlockId}`;
+  const language = lang ? escapeHtml(lang) : "";
+  const escaped = escapeHtml(text);
+  const codeClass = language ? ` class="language-${language}"` : "";
+  // GitHub style: floating button, no header bar
+  return `<div class="code-block-wrapper" data-code-id="${id}">
+    <button class="code-block-copy-btn" type="button" title="Copy code" aria-label="Copy code" data-code-id="${id}">
+      <svg class="code-block-copy-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+      <svg class="code-block-check-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    </button>
+    <pre><code${codeClass}>${escaped}</code></pre>
+  </div>`;
+};
+
+marked.use({ renderer });
+
 const allowedTags = [
   "a",
   "b",
   "blockquote",
   "br",
+  "button",
   "code",
   "del",
+  "div",
   "em",
   "h1",
   "h2",
@@ -24,8 +47,13 @@ const allowedTags = [
   "li",
   "ol",
   "p",
+  "path",
+  "polyline",
   "pre",
+  "rect",
+  "span",
   "strong",
+  "svg",
   "table",
   "tbody",
   "td",
@@ -36,12 +64,33 @@ const allowedTags = [
   "img",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt"];
-const sanitizeOptions = {
-  ALLOWED_TAGS: allowedTags,
-  ALLOWED_ATTR: allowedAttrs,
-  ADD_DATA_URI_TAGS: ["img"],
-};
+const allowedAttrs = [
+  "aria-label",
+  "class",
+  "d",
+  "data-code-id",
+  "fill",
+  "height",
+  "href",
+  "points",
+  "rel",
+  "rx",
+  "ry",
+  "start",
+  "src",
+  "alt",
+  "stroke",
+  "stroke-linecap",
+  "stroke-linejoin",
+  "stroke-width",
+  "target",
+  "title",
+  "type",
+  "viewBox",
+  "width",
+  "x",
+  "y",
+];
 
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
@@ -109,28 +158,25 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     const html = `<pre class="code-block">${escaped}</pre>`;
-    const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
+    const sanitized = DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: allowedTags,
+      ALLOWED_ATTR: allowedAttrs,
+    });
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(input, sanitized);
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`, {
-    renderer: htmlEscapeRenderer,
-  }) as string;
-  const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
+  const rendered = marked.parse(`${truncated.text}${suffix}`) as string;
+  const sanitized = DOMPurify.sanitize(rendered, {
+    ALLOWED_TAGS: allowedTags,
+    ALLOWED_ATTR: allowedAttrs,
+  });
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(input, sanitized);
   }
   return sanitized;
 }
-
-// Prevent raw HTML in chat messages from being rendered as formatted HTML.
-// Display it as escaped text so users see the literal markup.
-// Security is handled by DOMPurify, but rendering pasted HTML (e.g. error
-// pages) as formatted output is confusing UX (#13937).
-const htmlEscapeRenderer = new marked.Renderer();
-htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
 
 function escapeHtml(value: string): string {
   return value
@@ -139,4 +185,77 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Initialize code block copy functionality via event delegation
+let codeBlockCopyInitialized = false;
+
+export function initCodeBlockCopy() {
+  if (codeBlockCopyInitialized) {
+    return;
+  }
+  codeBlockCopyInitialized = true;
+
+  document.addEventListener("click", async (e) => {
+    const target = e.target as HTMLElement;
+    const closest = target.closest(".code-block-copy-btn");
+    if (!closest || !(closest instanceof HTMLButtonElement)) {
+      return;
+    }
+    const button = closest;
+
+    const codeId = button.dataset.codeId;
+    if (!codeId) {
+      return;
+    }
+
+    const wrapper = button.closest(".code-block-wrapper");
+    if (!wrapper) {
+      return;
+    }
+
+    const codeElement = wrapper.querySelector("pre code");
+    if (!codeElement) {
+      return;
+    }
+
+    const text = codeElement.textContent ?? "";
+    if (!text) {
+      return;
+    }
+
+    // Prevent double-click
+    if (button.dataset.copying === "1") {
+      return;
+    }
+
+    button.dataset.copying = "1";
+    button.disabled = true;
+
+    try {
+      await navigator.clipboard.writeText(text);
+      button.dataset.copied = "1";
+      button.title = "Copied";
+      button.setAttribute("aria-label", "Copied");
+
+      setTimeout(() => {
+        delete button.dataset.copied;
+        button.title = "Copy code";
+        button.setAttribute("aria-label", "Copy code");
+      }, 1500);
+    } catch {
+      button.dataset.error = "1";
+      button.title = "Copy failed";
+      button.setAttribute("aria-label", "Copy failed");
+
+      setTimeout(() => {
+        delete button.dataset.error;
+        button.title = "Copy code";
+        button.setAttribute("aria-label", "Copy code");
+      }, 2000);
+    } finally {
+      delete button.dataset.copying;
+      button.disabled = false;
+    }
+  });
 }
