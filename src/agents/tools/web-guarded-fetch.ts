@@ -12,6 +12,7 @@ const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
 
 type WebToolGuardedFetchOptions = Omit<GuardedFetchOptions, "proxy"> & {
   timeoutSeconds?: number;
+  policy?: SsrFPolicy;
 };
 type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "policy">;
 
@@ -31,9 +32,10 @@ function resolveTimeoutMs(params: {
 export async function fetchWithWebToolsNetworkGuard(
   params: WebToolGuardedFetchOptions,
 ): Promise<GuardedFetchResult> {
-  const { timeoutSeconds, ...rest } = params;
+  const { timeoutSeconds, policy, ...rest } = params;
   return fetchWithSsrFGuard({
     ...rest,
+    policy,
     timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
     proxy: "env",
   });

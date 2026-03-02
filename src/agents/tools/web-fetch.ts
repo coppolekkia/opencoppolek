@@ -446,6 +446,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  allowRfc2544BenchmarkRange?: boolean;
 };
 
 function toFirecrawlContentParams(
@@ -534,6 +535,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           "Accept-Language": "en-US,en;q=0.9",
         },
       },
+      policy: params.allowRfc2544BenchmarkRange
+        ? { allowRfc2544BenchmarkRange: true }
+        : undefined,
     });
     res = result.response;
     finalUrl = result.finalUrl;
@@ -758,6 +762,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        allowRfc2544BenchmarkRange: fetch?.allowRfc2544BenchmarkRange === true,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,

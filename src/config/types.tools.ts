@@ -492,6 +492,12 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /**
+       * Allow the RFC 2544 benchmark IP range (198.18.0.0/15) through the
+       * SSRF guard. Required when running behind VPN/proxy tools that use
+       * fake-IP DNS interception (Surge, Clash, Shadowrocket, etc.).
+       */
+      allowRfc2544BenchmarkRange?: boolean;
       firecrawl?: {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;

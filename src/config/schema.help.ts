@@ -645,6 +645,8 @@ export const FIELD_HELP: Record<string, string> = {
     "When true, Firecrawl returns only the main content (default: true).",
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
+  "tools.web.fetch.allowRfc2544BenchmarkRange":
+    "Allow the RFC 2544 benchmark IP range (198.18.0.0/15) through the SSRF guard. Enable this when running behind VPN/proxy tools with fake-IP DNS interception (Surge, Clash, Shadowrocket, etc.).",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
