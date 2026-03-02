@@ -225,6 +225,20 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   return false;
 }
 
+function isDirectoryEntry(entry: fs.Dirent, fullPath: string): boolean {
+  if (entry.isDirectory()) {
+    return true;
+  }
+  if (!entry.isSymbolicLink()) {
+    return false;
+  }
+  try {
+    return fs.statSync(fullPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function readPackageManifest(dir: string): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
   const opened = openBoundaryFileSync({
@@ -380,7 +394,7 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
       });
     }
-    if (!entry.isDirectory()) {
+    if (!isDirectoryEntry(entry, fullPath)) {
       continue;
     }
     if (shouldIgnoreScannedDirectory(entry.name)) {
