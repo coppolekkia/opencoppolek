@@ -74,7 +74,13 @@ export function resolveModel(
     // Otherwise, configured providers can default to a generic API and break specific transports.
     const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
     if (forwardCompat) {
-      return { model: forwardCompat, authStorage, modelRegistry };
+      // Apply baseUrl override before normalization to avoid double /v1 issues with anthropic-messages
+      const configuredBaseUrl = cfg?.models?.providers?.[provider]?.baseUrl;
+      const modelWithBaseUrl = configuredBaseUrl
+        ? { ...forwardCompat, baseUrl: configuredBaseUrl }
+        : forwardCompat;
+      const model = normalizeModelCompat(modelWithBaseUrl);
+      return { model, authStorage, modelRegistry };
     }
     // OpenRouter is a pass-through proxy — any model ID available on OpenRouter
     // should work without being pre-registered in the local catalog.
@@ -123,7 +129,11 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  // Apply baseUrl override before discovered-model normalization to avoid double /v1 issues
+  const configuredBaseUrl = cfg?.models?.providers?.[provider]?.baseUrl;
+  const modelWithBaseUrl = configuredBaseUrl ? { ...model, baseUrl: configuredBaseUrl } : model;
+  const resolvedModel = normalizeModelCompat(modelWithBaseUrl);
+  return { model: resolvedModel, authStorage, modelRegistry };
 }
 
 /**
