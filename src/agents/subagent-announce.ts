@@ -1,3 +1,4 @@
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
@@ -80,7 +81,12 @@ function buildCompletionDeliveryMessage(params: {
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
   // Cron completions are standalone messages — skip the subagent status header.
   if (params.announceType === "cron job") {
-    return hasFindings ? findingsText : "";
+    if (!hasFindings) {
+      return "";
+    }
+    // Strip HEARTBEAT_OK so the token never leaks to end-users (#32013).
+    const { text, didStrip } = stripHeartbeatToken(findingsText, { mode: "message" });
+    return didStrip ? text || "" : findingsText;
   }
   const header = (() => {
     if (params.outcome?.status === "error") {
