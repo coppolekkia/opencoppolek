@@ -1142,6 +1142,11 @@ export async function processMessage(
 
   let sentMessage = false;
   let streamingActive = false;
+  const configuredTypingMode = config.session?.typingMode ?? config.agents?.defaults?.typingMode;
+  const typingSuppressed = isTapbackMessage || configuredTypingMode === "never";
+  const typingStartsOnMessage = configuredTypingMode === "message";
+  const typingChatGuid =
+    !typingSuppressed && chatGuidForActions && baseUrl && password ? chatGuidForActions : undefined;
   let typingRestartTimer: NodeJS.Timeout | undefined;
   const typingRestartDelayMs = 150;
   const clearTypingRestartTimer = () => {
@@ -1150,8 +1155,25 @@ export async function processMessage(
       typingRestartTimer = undefined;
     }
   };
+  const startTyping = async () => {
+    if (!typingChatGuid) {
+      return;
+    }
+    if (!streamingActive) {
+      streamingActive = true;
+    }
+    clearTypingRestartTimer();
+    try {
+      await sendBlueBubblesTyping(typingChatGuid, true, {
+        cfg: config,
+        accountId: account.accountId,
+      });
+    } catch (err) {
+      runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
+    }
+  };
   const restartTypingSoon = () => {
-    if (!streamingActive || !chatGuidForActions || !baseUrl || !password) {
+    if (!streamingActive || !typingChatGuid) {
       return;
     }
     clearTypingRestartTimer();
@@ -1160,7 +1182,7 @@ export async function processMessage(
       if (!streamingActive) {
         return;
       }
-      sendBlueBubblesTyping(chatGuidForActions, true, {
+      sendBlueBubblesTyping(typingChatGuid, true, {
         cfg: config,
         accountId: account.accountId,
       }).catch((err) => {
@@ -1203,6 +1225,9 @@ export async function processMessage(
             const text = sanitizeReplyDirectiveText(
               core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
             );
+            if (typingStartsOnMessage && text.trim()) {
+              await startTyping();
+            }
             let first = true;
             for (const mediaUrl of mediaList) {
               const caption = first ? text : undefined;
@@ -1266,6 +1291,9 @@ export async function processMessage(
           if (!chunks.length) {
             return;
           }
+          if (typingStartsOnMessage) {
+            await startTyping();
+          }
           for (const chunk of chunks) {
             const pendingId = rememberPendingOutboundMessageId({
               accountId: account.accountId,
@@ -1298,28 +1326,16 @@ export async function processMessage(
           }
         },
         onReplyStart: async () => {
-          if (!chatGuidForActions) {
+          if (!typingChatGuid) {
             return;
           }
-          if (!baseUrl || !password) {
+          if (typingStartsOnMessage && !streamingActive) {
             return;
           }
-          streamingActive = true;
-          clearTypingRestartTimer();
-          try {
-            await sendBlueBubblesTyping(chatGuidForActions, true, {
-              cfg: config,
-              accountId: account.accountId,
-            });
-          } catch (err) {
-            runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
-          }
+          await startTyping();
         },
         onIdle: async () => {
-          if (!chatGuidForActions) {
-            return;
-          }
-          if (!baseUrl || !password) {
+          if (!typingChatGuid) {
             return;
           }
           // Intentionally no-op for block streaming. We stop typing in finally
@@ -1338,8 +1354,7 @@ export async function processMessage(
       },
     });
   } finally {
-    const shouldStopTyping =
-      Boolean(chatGuidForActions && baseUrl && password) && (streamingActive || !sentMessage);
+    const shouldStopTyping = Boolean(typingChatGuid) && (streamingActive || !sentMessage);
     streamingActive = false;
     clearTypingRestartTimer();
     if (sentMessage && chatGuidForActions && ackMessageId) {
@@ -1365,9 +1380,9 @@ export async function processMessage(
         },
       });
     }
-    if (shouldStopTyping && chatGuidForActions) {
+    if (shouldStopTyping && typingChatGuid) {
       // Stop typing after streaming completes to avoid a stuck indicator.
-      sendBlueBubblesTyping(chatGuidForActions, false, {
+      sendBlueBubblesTyping(typingChatGuid, false, {
         cfg: config,
         accountId: account.accountId,
       }).catch((err) => {
@@ -1375,7 +1390,7 @@ export async function processMessage(
           log: (msg) => logVerbose(core, runtime, msg),
           channel: "bluebubbles",
           action: "stop",
-          target: chatGuidForActions,
+          target: typingChatGuid,
           error: err,
         });
       });
