@@ -26,6 +26,7 @@ import {
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
+  collectLinuxUfwFindings,
   collectLikelyMultiUserSetupFindings,
   collectSandboxBrowserHashLabelFindings,
   collectMinimalProfileOverrideFindings,
@@ -1053,6 +1054,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(
       ...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir, platform, execIcacls })),
     );
+    findings.push(...(await collectLinuxUfwFindings({ env, platform })));
     findings.push(
       ...(await collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: opts.execDockerRawFn,
