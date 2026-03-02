@@ -210,15 +210,15 @@ export const ModelDefinitionSchema = z
     input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
     cost: z
       .object({
-        input: z.number().optional(),
-        output: z.number().optional(),
-        cacheRead: z.number().optional(),
-        cacheWrite: z.number().optional(),
+        input: z.coerce.number().optional(),
+        output: z.coerce.number().optional(),
+        cacheRead: z.coerce.number().optional(),
+        cacheWrite: z.coerce.number().optional(),
       })
       .strict()
       .optional(),
-    contextWindow: z.number().positive().optional(),
-    maxTokens: z.number().positive().optional(),
+    contextWindow: z.coerce.number().positive().optional(),
+    maxTokens: z.coerce.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
   })

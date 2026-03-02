@@ -164,4 +164,35 @@ describe("config schema regressions", () => {
       expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
     }
   });
+
+  it("accepts numeric strings in model definitions", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://127.0.0.1:8000/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "qwen2.5-32b-instruct",
+                name: "Local Model",
+                reasoning: true,
+                input: ["text"],
+                cost: {
+                  input: "0",
+                  output: "0",
+                  cacheRead: "0",
+                  cacheWrite: "0",
+                },
+                contextWindow: "32000",
+                maxTokens: "5000",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
