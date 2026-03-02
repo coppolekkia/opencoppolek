@@ -7,6 +7,7 @@ import {
   matchAllowlist,
   normalizeExecApprovals,
   normalizeSafeBins,
+  resolveExplicitExecApprovalsPolicy,
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
   type ExecApprovalsAgent,
@@ -279,5 +280,30 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
         expectNoSpreadStringArtifacts(entries ?? []);
       }
     }
+  });
+});
+
+describe("resolveExplicitExecApprovalsPolicy", () => {
+  it("returns explicit defaults when set", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: {},
+    };
+    const resolved = resolveExplicitExecApprovalsPolicy({ file });
+    expect(resolved).toEqual({ security: "full", ask: "off" });
+  });
+
+  it("prefers agent overrides over defaults and wildcard", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss" },
+      agents: {
+        "*": { security: "full", ask: "off" },
+        main: { security: "deny", ask: "always" },
+      },
+    };
+    const resolved = resolveExplicitExecApprovalsPolicy({ file, agentId: "main" });
+    expect(resolved).toEqual({ security: "deny", ask: "always" });
   });
 });

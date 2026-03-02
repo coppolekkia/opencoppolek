@@ -12,6 +12,7 @@ import {
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
   resolveExecApprovals,
+  resolveExplicitExecApprovalsPolicy,
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
@@ -69,8 +70,16 @@ export async function processGatewayAllowlist(
     security: params.security,
     ask: params.ask,
   });
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
+  let hostSecurity = minSecurity(params.security, approvals.agent.security);
+  let hostAsk = maxAsk(params.ask, approvals.agent.ask);
+  const explicitPolicy = resolveExplicitExecApprovalsPolicy({
+    file: approvals.file,
+    agentId: params.agentId,
+  });
+  if (explicitPolicy.security === "full" && explicitPolicy.ask === "off") {
+    hostSecurity = "full";
+    hostAsk = "off";
+  }
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=gateway security=deny");

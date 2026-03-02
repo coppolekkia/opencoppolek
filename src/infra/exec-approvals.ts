@@ -448,6 +448,21 @@ export function resolveExecApprovalsFromFile(params: {
   };
 }
 
+export function resolveExplicitExecApprovalsPolicy(params: {
+  file: ExecApprovalsFile;
+  agentId?: string;
+}): { security?: ExecSecurity; ask?: ExecAsk } {
+  const file = normalizeExecApprovals(params.file);
+  const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
+  const agent = file.agents?.[agentKey];
+  const wildcard = file.agents?.["*"];
+  const defaults = file.defaults;
+  return {
+    security: agent?.security ?? wildcard?.security ?? defaults?.security,
+    ask: agent?.ask ?? wildcard?.ask ?? defaults?.ask,
+  };
+}
+
 export function requiresExecApproval(params: {
   ask: ExecAsk;
   security: ExecSecurity;
