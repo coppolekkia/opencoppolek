@@ -102,4 +102,67 @@ describe("incremental PCM-to-mulaw conversion", () => {
     const result = convertPcmChunkToMulaw8k(Buffer.alloc(0), 8000, state);
     expect(result.length).toBe(0);
   });
+
+  it("defers interpolation at chunk edge instead of clamping s1", () => {
+    // 5 samples at 20kHz (ratio=2.5): position 2.5 needs interpolation
+    // between sample[2] and sample[3], but if chunk is only 3 samples,
+    // sample[3] would be clamped. The fix defers to the next chunk.
+    const sampleRate = 20000;
+    const fullPcm = Buffer.alloc(10); // 5 samples
+    for (let i = 0; i < 5; i++) {
+      fullPcm.writeInt16LE((i + 1) * 1000, i * 2);
+    }
+
+    const reference = convertPcmToMulaw8k(fullPcm, sampleRate);
+
+    // Split: 3 samples then 2 samples (6 bytes, 4 bytes)
+    const state = createPcmToMulawStreamState();
+    const chunks: Buffer[] = [];
+
+    const c1 = convertPcmChunkToMulaw8k(fullPcm.subarray(0, 6), sampleRate, state);
+    if (c1.length > 0) chunks.push(c1);
+
+    const c2 = convertPcmChunkToMulaw8k(fullPcm.subarray(6, 10), sampleRate, state);
+    if (c2.length > 0) chunks.push(c2);
+
+    flushPcmToMulawStream(state);
+
+    const incremental = Buffer.concat(chunks);
+    expect(incremental).toEqual(reference);
+  });
+
+  it("non-aligned chunks produce consistent output across boundaries", () => {
+    // 24kHz -> 8kHz (ratio=3) with chunk sizes not aligned to ratio
+    const sampleRate = 24000;
+    const numSamples = 100;
+    const pcm = Buffer.alloc(numSamples * 2);
+    for (let i = 0; i < numSamples; i++) {
+      pcm.writeInt16LE(Math.round(Math.sin((i / numSamples) * Math.PI * 2) * 10000), i * 2);
+    }
+
+    const reference = convertPcmToMulaw8k(pcm, sampleRate);
+
+    // Split into 7-sample chunks (14 bytes) — not aligned to ratio=3
+    const chunkBytes = 14;
+    const state = createPcmToMulawStreamState();
+    const chunks: Buffer[] = [];
+
+    for (let offset = 0; offset < pcm.length; offset += chunkBytes) {
+      const chunk = pcm.subarray(offset, Math.min(offset + chunkBytes, pcm.length));
+      const result = convertPcmChunkToMulaw8k(chunk, sampleRate, state);
+      if (result.length > 0) chunks.push(result);
+    }
+    flushPcmToMulawStream(state);
+
+    const incremental = Buffer.concat(chunks);
+    // Chunked output may have at most 1 extra sample per chunk from frac=0
+    // edge positions (valid data, no clamped interpolation). The important
+    // guarantee is no clamped-interpolation overproduction.
+    const maxExtraPerChunk = 1;
+    const numChunks = Math.ceil(pcm.length / chunkBytes);
+    expect(incremental.length).toBeLessThanOrEqual(reference.length + numChunks * maxExtraPerChunk);
+    // Values for the common prefix should match
+    const minLen = Math.min(incremental.length, reference.length);
+    expect(incremental.subarray(0, minLen)).toEqual(reference.subarray(0, minLen));
+  });
 });

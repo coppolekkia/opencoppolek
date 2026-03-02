@@ -119,13 +119,26 @@ export function convertPcmChunkToMulaw8k(
   const inputSamples = Math.floor(pcm.length / 2);
   const ratio = inputSampleRate / TELEPHONY_SAMPLE_RATE;
 
-  // Calculate how many output samples this chunk produces, continuing from srcPosCarry
   const outputSamples: number[] = [];
   let srcPos = state.srcPosCarry;
+  let brokeForInterp = false;
 
   while (srcPos < inputSamples) {
     const srcIndex = Math.floor(srcPos);
     const frac = srcPos - srcIndex;
+
+    // Defer to next chunk when interpolation needs a neighbor beyond this chunk,
+    // preventing clamped s1 which causes overproduction and audio artifacts
+    if (srcIndex + 1 >= inputSamples && frac > 1e-10) {
+      const tailStart = srcIndex * 2;
+      const tail = pcm.subarray(tailStart);
+      state.leftover = state.leftover ? Buffer.concat([tail, state.leftover]) : Buffer.from(tail);
+      state.srcPosCarry = frac;
+      state.inputSamplesConsumed += srcIndex;
+      brokeForInterp = true;
+      break;
+    }
+
     const s0 = pcm.readInt16LE(srcIndex * 2);
     const s1Index = Math.min(srcIndex + 1, inputSamples - 1);
     const s1 = pcm.readInt16LE(s1Index * 2);
@@ -134,9 +147,10 @@ export function convertPcmChunkToMulaw8k(
     srcPos += ratio;
   }
 
-  // Carry fractional position into next chunk
-  state.srcPosCarry = srcPos - inputSamples;
-  state.inputSamplesConsumed += inputSamples;
+  if (!brokeForInterp) {
+    state.srcPosCarry = srcPos - inputSamples;
+    state.inputSamplesConsumed += inputSamples;
+  }
 
   if (outputSamples.length === 0) {
     return Buffer.alloc(0);

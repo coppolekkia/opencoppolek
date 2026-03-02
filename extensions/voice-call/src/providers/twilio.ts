@@ -619,30 +619,49 @@ export class TwilioProvider implements VoiceCallProvider {
 
     // Try streaming path first (lower latency)
     if (ttsProvider.synthesizeForTelephonyStream) {
+      let framesEmitted = false;
       try {
-        const streamResult = await ttsProvider.synthesizeForTelephonyStream(text);
         await handler.queueTts(streamSid, async (signal) => {
+          // Start synthesis inside the queue callback so OpenAI timeout
+          // doesn't count queue-wait time behind earlier playback
+          const streamResult = await ttsProvider.synthesizeForTelephonyStream!(text);
           const state = createPcmToMulawStreamState();
-          // Destroy the stream on abort so `for await` exits immediately
-          // instead of blocking on one more network read
           const onAbort = () => streamResult.stream.destroy();
           signal.addEventListener("abort", onAbort, { once: true });
+
+          // Buffer mu-law bytes across network chunks so short tail frames
+          // from non-aligned chunks don't each incur a full 20ms delay
+          let mulawCarry = Buffer.alloc(0);
+
           try {
             for await (const chunk of streamResult.stream) {
               if (signal.aborted) break;
               const pcmChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
               const mulaw = convertPcmChunkToMulaw8k(pcmChunk, streamResult.sampleRate, state);
               if (mulaw.length === 0) continue;
-              for (const frame of chunkAudio(mulaw, CHUNK_SIZE)) {
+
+              const combined = mulawCarry.length > 0 ? Buffer.concat([mulawCarry, mulaw]) : mulaw;
+              const fullFrameBytes = Math.floor(combined.length / CHUNK_SIZE) * CHUNK_SIZE;
+              mulawCarry =
+                fullFrameBytes < combined.length
+                  ? Buffer.from(combined.subarray(fullFrameBytes))
+                  : Buffer.alloc(0);
+
+              for (let offset = 0; offset < fullFrameBytes; offset += CHUNK_SIZE) {
                 if (signal.aborted) break;
-                handler.sendAudio(streamSid, frame);
+                handler.sendAudio(streamSid, combined.subarray(offset, offset + CHUNK_SIZE));
+                framesEmitted = true;
                 await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
                 if (signal.aborted) break;
               }
             }
 
             if (!signal.aborted) {
-              // Flush any leftover byte (discards incomplete sample)
+              // Send any remaining buffered mu-law bytes as a final short frame
+              if (mulawCarry.length > 0) {
+                handler.sendAudio(streamSid, mulawCarry);
+                framesEmitted = true;
+              }
               flushPcmToMulawStream(state);
               handler.sendMark(streamSid, `tts-${Date.now()}`);
             }
@@ -653,6 +672,12 @@ export class TwilioProvider implements VoiceCallProvider {
         });
         return;
       } catch (err) {
+        // Only fall back to buffered if no frames were sent yet —
+        // replaying after partial playback causes garbled/duplicated speech
+        if (framesEmitted) {
+          console.error("[voice-call] TTS streaming failed after partial playback:", String(err));
+          return;
+        }
         console.warn("[voice-call] TTS streaming failed, falling back to buffered:", String(err));
       }
     }
