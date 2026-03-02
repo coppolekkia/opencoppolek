@@ -114,7 +114,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return feishuOutbound.sendText!({ ...ctx });
+    return feishuOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
     // Send text first if provided
