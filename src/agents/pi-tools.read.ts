@@ -11,6 +11,7 @@ import {
 } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { resolveUserPath } from "../utils.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -429,6 +430,10 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   if ("file_path" in normalized && !("path" in normalized)) {
     normalized.path = normalized.file_path;
     delete normalized.file_path;
+  }
+  const normalizedPath = normalized.path;
+  if (typeof normalizedPath === "string" && normalizedPath.trim().startsWith("~")) {
+    normalized.path = resolveUserPath(normalizedPath);
   }
   // old_string → oldText (edit)
   if ("old_string" in normalized && !("oldText" in normalized)) {
