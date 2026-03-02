@@ -21,6 +21,9 @@ const serviceReadRuntime = vi.fn();
 const inspectPortUsage = vi.fn();
 const classifyPortListener = vi.fn();
 const formatPortDiagnostics = vi.fn();
+const waitForGatewayHealthyRestart = vi.fn();
+const renderRestartDiagnostics = vi.fn();
+const terminateStaleGatewayPids = vi.fn();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -99,6 +102,12 @@ vi.mock("../infra/ports.js", () => ({
 vi.mock("./update-cli/restart-helper.js", () => ({
   prepareRestartScript: (...args: unknown[]) => prepareRestartScript(...args),
   runRestartScript: (...args: unknown[]) => runRestartScript(...args),
+}));
+
+vi.mock("./daemon-cli/restart-health.js", () => ({
+  waitForGatewayHealthyRestart: (...args: unknown[]) => waitForGatewayHealthyRestart(...args),
+  renderRestartDiagnostics: (...args: unknown[]) => renderRestartDiagnostics(...args),
+  terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
 }));
 
 // Mock doctor (heavy module; should not run in unit tests)
@@ -269,6 +278,9 @@ describe("update-cli", () => {
     inspectPortUsage.mockClear();
     classifyPortListener.mockClear();
     formatPortDiagnostics.mockClear();
+    waitForGatewayHealthyRestart.mockClear();
+    renderRestartDiagnostics.mockClear();
+    terminateStaleGatewayPids.mockClear();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -339,6 +351,14 @@ describe("update-cli", () => {
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     setTty(false);
     setStdoutTty(false);
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      runtime: { status: "running", pid: 4242 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      healthy: true,
+      staleGatewayPids: [],
+    });
+    renderRestartDiagnostics.mockReturnValue(["Service runtime: status=running, pid=4242"]);
+    terminateStaleGatewayPids.mockResolvedValue([]);
   });
 
   it("exports updateCommand and registerUpdateCli", async () => {
@@ -645,6 +665,28 @@ describe("update-cli", () => {
 
     const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
     expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(false);
+  });
+
+  it("uses gateway status --deep in unhealthy restart advice", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      runtime: { status: "running", pid: 4242 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      healthy: false,
+      staleGatewayPids: [],
+    });
+    renderRestartDiagnostics.mockReturnValue(["Service runtime: status=running, pid=4242"]);
+    vi.mocked(defaultRuntime.log).mockClear();
+
+    await updateCommand({ restart: true });
+
+    const logText = vi
+      .mocked(defaultRuntime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(logText).toContain("openclaw gateway status --deep");
+    expect(logText).not.toContain("openclaw gateway status --probe");
   });
 
   it.each([

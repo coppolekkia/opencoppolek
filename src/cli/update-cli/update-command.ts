@@ -542,8 +542,6 @@ async function maybeRestartService(params: {
       }
 
       if (!params.opts.json && restarted) {
-        defaultRuntime.log(theme.success("Daemon restarted successfully."));
-        defaultRuntime.log("");
         process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
         try {
           const interactiveDoctor =
@@ -558,7 +556,7 @@ async function maybeRestartService(params: {
         }
       }
 
-      if (!params.opts.json && restartInitiated) {
+      if (!params.opts.json && (restarted || restartInitiated)) {
         const service = resolveGatewayService();
         let health = await waitForGatewayHealthyRestart({
           service,
