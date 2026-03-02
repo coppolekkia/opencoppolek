@@ -315,6 +315,13 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayServiceConfig = {
+  /** Custom launcher script path for the gateway LaunchAgent/systemd service.
+   *  When set, the service uses this script as ProgramArguments instead of
+   *  directly invoking node + entry.js. Supports ~ expansion. */
+  launcher?: string;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -356,6 +363,8 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** Service launcher configuration for LaunchAgent/systemd. */
+  service?: GatewayServiceConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

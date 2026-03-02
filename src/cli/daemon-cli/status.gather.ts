@@ -119,11 +119,6 @@ export async function gatherDaemonStatus(
     service.readCommand(process.env).catch(() => null),
     service.readRuntime(process.env).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
-  const configAudit = await auditGatewayServiceConfig({
-    env: process.env,
-    command,
-  });
-
   const serviceEnv = command?.environment ?? undefined;
   const mergedDaemonEnv = {
     ...(process.env as Record<string, string | undefined>),
@@ -148,6 +143,12 @@ export async function gatherDaemonStatus(
   ]);
   const cliCfg = cliIO.loadConfig();
   const daemonCfg = daemonIO.loadConfig();
+
+  const configAudit = await auditGatewayServiceConfig({
+    env: process.env,
+    command,
+    launcher: daemonCfg.gateway?.service?.launcher ?? cliCfg.gateway?.service?.launcher,
+  });
 
   const cliConfigSummary: ConfigSummary = {
     path: cliSnapshot?.path ?? cliConfigPath,

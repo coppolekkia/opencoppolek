@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   auditGatewayServiceConfig,
@@ -80,6 +82,57 @@ describe("auditGatewayServiceConfig", () => {
     });
     expect(
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
+    ).toBe(true);
+  });
+
+  it("does not flag gateway-command-missing when launcher matches installed command", async () => {
+    // Use os.homedir() + path.join to match what resolveLauncherConfigPath produces
+    // (avoids forward-slash vs backslash mismatches on Windows).
+    const home = os.homedir();
+    const launcherPath = path.join(home, ".openclaw", "scripts", "gateway-launcher.sh");
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "darwin",
+      launcher: "~/.openclaw/scripts/gateway-launcher.sh",
+      command: {
+        programArguments: [launcherPath],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayCommandMissing),
+    ).toBe(false);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayLauncherMismatch),
+    ).toBe(false);
+  });
+
+  it("flags launcher mismatch when installed command differs from configured launcher", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      launcher: "~/.openclaw/scripts/gateway-launcher.sh",
+      command: {
+        programArguments: ["/some/other/script.sh"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayLauncherMismatch),
+    ).toBe(true);
+  });
+
+  it("flags gateway-command-missing when no launcher and no gateway subcommand", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/Users/me/.openclaw/scripts/gateway-launcher.sh"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayCommandMissing),
     ).toBe(true);
   });
 

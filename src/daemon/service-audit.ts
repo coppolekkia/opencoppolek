@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
@@ -39,6 +40,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
+  gatewayLauncherMismatch: "gateway-launcher-mismatch",
   gatewayTokenDrift: "gateway-token-drift",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
@@ -199,6 +201,34 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
       code: SERVICE_AUDIT_CODES.gatewayCommandMissing,
       message: "Service command does not include the gateway subcommand",
       level: "aggressive",
+    });
+  }
+}
+
+/** Resolve a launcher config value to an absolute path (mirrors daemon-install-helpers).
+ *  Does NOT call path.resolve — relative paths are rejected at install time,
+ *  so this avoids cwd-dependent resolution during audit. */
+function resolveLauncherConfigPath(raw: string): string {
+  const expanded =
+    raw.startsWith("~/") || raw.startsWith("~\\") ? path.join(os.homedir(), raw.slice(2)) : raw;
+  return expanded;
+}
+
+function auditLauncherCommand(
+  programArguments: string[] | undefined,
+  launcher: string,
+  issues: ServiceConfigIssue[],
+) {
+  if (!programArguments || programArguments.length === 0) {
+    return;
+  }
+  const resolvedLauncher = resolveLauncherConfigPath(launcher);
+  const installedCommand = programArguments[0];
+  if (installedCommand !== resolvedLauncher) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayLauncherMismatch,
+      message: "Installed service command does not match configured launcher",
+      detail: `expected ${resolvedLauncher}, got ${installedCommand}`,
     });
   }
 }
@@ -386,11 +416,18 @@ export async function auditGatewayServiceConfig(params: {
   command: GatewayServiceCommand;
   platform?: NodeJS.Platform;
   expectedGatewayToken?: string;
+  /** When set, the service uses a custom launcher script; validate against ProgramArguments. */
+  launcher?: string;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
 
-  auditGatewayCommand(params.command?.programArguments, issues);
+  if (params.launcher) {
+    // Validate that the installed ProgramArguments matches the configured launcher.
+    auditLauncherCommand(params.command?.programArguments, params.launcher, issues);
+  } else {
+    auditGatewayCommand(params.command?.programArguments, issues);
+  }
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayServicePath(params.command, issues, params.env, platform);
   await auditGatewayRuntime(params.env, params.command, issues, platform);

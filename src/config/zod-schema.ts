@@ -723,6 +723,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        service: z
+          .object({
+            launcher: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

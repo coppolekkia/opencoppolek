@@ -224,6 +224,7 @@ export async function maybeRepairGatewayServiceConfig(
     env: process.env,
     command,
     expectedGatewayToken,
+    launcher: cfg.gateway?.service?.launcher,
   });
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
   const systemNodeInfo = needsNodeRuntime

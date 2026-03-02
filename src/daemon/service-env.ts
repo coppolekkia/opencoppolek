@@ -236,6 +236,7 @@ export function buildServiceEnvironment(params: {
   port: number;
   token?: string;
   launchdLabel?: string;
+  entryPath?: string;
   platform?: NodeJS.Platform;
 }): Record<string, string | undefined> {
   const { env, port, token, launchdLabel } = params;
@@ -261,6 +262,7 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
     OPENCLAW_SERVICE_VERSION: VERSION,
+    OPENCLAW_ENTRY: params.entryPath,
   };
 }
 
