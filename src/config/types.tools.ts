@@ -492,6 +492,15 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      ssrfPolicy?: {
+        /**
+         * Allow requests that resolve to the RFC 2544 benchmark address range (198.18.0.0/15).
+         * Enable this when running a local proxy such as Clash or mihomo in fake-ip mode,
+         * where DNS queries return virtual IPs in that range before being transparently
+         * forwarded to the real destination.
+         */
+        allowRfc2544BenchmarkRange?: boolean;
+      };
       firecrawl?: {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;

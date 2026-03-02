@@ -642,6 +642,10 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.ssrfPolicy":
+    "SSRF policy for web_fetch. Use to allow specific address ranges blocked by default (e.g. local proxy fake-ip ranges). Keep defaults unless you run a transparent proxy on the same host.",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Allow requests to the RFC 2544 benchmark address range (198.18.0.0/15). Enable when running a local proxy such as Clash or mihomo in fake-ip mode, where DNS returns virtual IPs in that range before forwarding to the real destination. Disable (default) in all other environments.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":

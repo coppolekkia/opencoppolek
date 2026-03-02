@@ -164,4 +164,55 @@ describe("config schema regressions", () => {
       expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
     }
   });
+
+  it("accepts tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange (Clash/mihomo fake-ip)", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            ssrfPolicy: {
+              allowRfc2544BenchmarkRange: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts tools.web.fetch.readability", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            readability: false,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts tools.web.fetch.firecrawl configuration", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            firecrawl: {
+              enabled: true,
+              apiKey: "fc-test-key",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: true,
+              maxAgeMs: 172800000,
+              timeoutSeconds: 30,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

@@ -39,6 +39,7 @@ function setMockFetch(
 
 async function createWebFetchToolForTest(params?: {
   firecrawl?: { enabled?: boolean; apiKey?: string };
+  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
 }) {
   const { createWebFetchTool } = await import("./web-tools.js");
   return createWebFetchTool({
@@ -48,6 +49,7 @@ async function createWebFetchToolForTest(params?: {
           fetch: {
             cacheTtlMinutes: 0,
             firecrawl: params?.firecrawl ?? { enabled: false },
+            ssrfPolicy: params?.ssrfPolicy,
           },
         },
       },
@@ -140,6 +142,36 @@ describe("web_fetch SSRF protection", () => {
     expect(result?.details).toMatchObject({
       status: 200,
       extractor: "raw",
+    });
+  });
+
+  describe("RFC 2544 benchmark range (198.18.0.0/15 — Clash/mihomo fake-ip)", () => {
+    // Use IP literals directly to bypass DNS resolution and exercise the SSRF
+    // pre-check path (assertAllowedHostOrIpOrThrow) without needing a lookupFn mock.
+    it("blocks 198.18.x.x literal by default (no ssrfPolicy configured)", async () => {
+      setMockFetch();
+      const tool = await createWebFetchToolForTest();
+
+      await expectBlockedUrl(tool, "http://198.18.0.1/test", /private|internal|blocked|special/i);
+    });
+
+    it("allows 198.18.x.x literal when allowRfc2544BenchmarkRange is true", async () => {
+      setMockFetch().mockResolvedValue(textResponse("ok"));
+      const tool = await createWebFetchToolForTest({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      });
+
+      const result = await tool?.execute?.("call", { url: "http://198.18.0.1/test" });
+      expect(result?.details).toMatchObject({ status: 200 });
+    });
+
+    it("still blocks 198.18.x.x literal when allowRfc2544BenchmarkRange is false", async () => {
+      setMockFetch();
+      const tool = await createWebFetchToolForTest({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: false },
+      });
+
+      await expectBlockedUrl(tool, "http://198.18.0.1/test", /private|internal|blocked|special/i);
     });
   });
 });

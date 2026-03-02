@@ -446,6 +446,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  allowRfc2544BenchmarkRange: boolean;
 };
 
 function toFirecrawlContentParams(
@@ -533,6 +534,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           "User-Agent": params.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
+      },
+      policy: {
+        allowRfc2544BenchmarkRange: params.allowRfc2544BenchmarkRange,
       },
     });
     res = result.response;
@@ -766,6 +770,14 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        allowRfc2544BenchmarkRange:
+          fetch &&
+          "ssrfPolicy" in fetch &&
+          typeof fetch.ssrfPolicy === "object" &&
+          fetch.ssrfPolicy !== null &&
+          "allowRfc2544BenchmarkRange" in fetch.ssrfPolicy
+            ? fetch.ssrfPolicy.allowRfc2544BenchmarkRange === true
+            : false,
       });
       return jsonResult(result);
     },
