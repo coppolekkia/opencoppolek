@@ -920,6 +920,10 @@ export function buildKilocodeProvider(): ProviderConfig {
   };
 }
 
+function hasConfiguredApiKey(provider?: ProviderConfig): boolean {
+  return typeof provider?.apiKey === "string" && provider.apiKey.trim().length > 0;
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -940,7 +944,9 @@ export async function resolveImplicitProviders(params: {
   if (minimaxOauthProfile.length > 0) {
     providers["minimax-portal"] = {
       ...buildMinimaxPortalProvider(),
-      apiKey: MINIMAX_OAUTH_PLACEHOLDER,
+      ...(hasConfiguredApiKey(params.explicitProviders?.["minimax-portal"])
+        ? {}
+        : { apiKey: MINIMAX_OAUTH_PLACEHOLDER }),
     };
   }
 
