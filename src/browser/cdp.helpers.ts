@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
+import { getDirectAgentForCdp, withNoProxyForLocalhost } from "./cdp-proxy-bypass.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
@@ -113,32 +114,30 @@ function createCdpSender(ws: WebSocket) {
 }
 
 export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
+  const res = await fetchChecked(url, timeoutMs, init);
+  return (await res.json()) as T;
+}
+
+async function fetchChecked(url: string, timeoutMs = 1500, init?: RequestInit): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+    // Bypass proxy for loopback CDP connections (#31219)
+    const res = await withNoProxyForLocalhost(() =>
+      fetch(url, { ...init, headers, signal: ctrl.signal }),
+    );
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
-    return (await res.json()) as T;
+    return res;
   } finally {
     clearTimeout(t);
   }
 }
 
 export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-  } finally {
-    clearTimeout(t);
-  }
+  await fetchChecked(url, timeoutMs, init);
 }
 
 export async function withCdpSocket<T>(
@@ -151,9 +150,12 @@ export async function withCdpSocket<T>(
     typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
       : 5000;
+  // Bypass proxy for loopback CDP connections (#31219)
+  const agent = getDirectAgentForCdp(wsUrl);
   const ws = new WebSocket(wsUrl, {
     handshakeTimeout: handshakeTimeoutMs,
     ...(Object.keys(headers).length ? { headers } : {}),
+    ...(agent ? { agent } : {}),
   });
   const { send, closeWithError } = createCdpSender(ws);
 
