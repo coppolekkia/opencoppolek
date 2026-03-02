@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { maskApiKey } from "../utils/mask-api-key.js";
 import {
   ensureAuthProfileStore,
   resolveAuthProfileDisplayLabel,
@@ -9,26 +8,14 @@ import {
 import { getCustomProviderApiKey, resolveEnvApiKey } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-function formatApiKeySnippet(apiKey: string): string {
-  const compact = apiKey.replace(/\s+/g, "");
-  if (!compact) {
-    return "unknown";
-  }
-  return maskApiKey(compact);
-}
-
-function formatCredentialSnippet(params: {
+function formatCredentialSource(params: {
   value: string | undefined;
   ref: { source: string; id: string } | undefined;
-}): string {
-  const value = typeof params.value === "string" ? params.value.trim() : "";
-  if (value) {
-    return formatApiKeySnippet(value);
-  }
+}): string | undefined {
   if (params.ref) {
     return `ref(${params.ref.source}:${params.ref.id})`;
   }
-  return "unknown";
+  return undefined;
 }
 
 export function resolveModelAuthLabel(params: {
@@ -69,13 +56,13 @@ export function resolveModelAuthLabel(params: {
       return `oauth${label ? ` (${label})` : ""}`;
     }
     if (profile.type === "token") {
-      return `token ${formatCredentialSnippet({ value: profile.token, ref: profile.tokenRef })}${
-        label ? ` (${label})` : ""
-      }`;
+      const refHint = formatCredentialSource({ value: profile.token, ref: profile.tokenRef });
+      const suffix = [refHint, label].filter(Boolean).join(", ");
+      return `token${suffix ? ` (${suffix})` : ""}`;
     }
-    return `api-key ${formatCredentialSnippet({ value: profile.key, ref: profile.keyRef })}${
-      label ? ` (${label})` : ""
-    }`;
+    const refHint = formatCredentialSource({ value: profile.key, ref: profile.keyRef });
+    const suffix = [refHint, label].filter(Boolean).join(", ");
+    return `api-key${suffix ? ` (${suffix})` : ""}`;
   }
 
   const envKey = resolveEnvApiKey(providerKey);
@@ -83,12 +70,12 @@ export function resolveModelAuthLabel(params: {
     if (envKey.source.includes("OAUTH_TOKEN")) {
       return `oauth (${envKey.source})`;
     }
-    return `api-key ${formatApiKeySnippet(envKey.apiKey)} (${envKey.source})`;
+    return `api-key (env: ${envKey.source})`;
   }
 
   const customKey = getCustomProviderApiKey(params.cfg, providerKey);
   if (customKey) {
-    return `api-key ${formatApiKeySnippet(customKey)} (models.json)`;
+    return `api-key (models.json)`;
   }
 
   return "unknown";

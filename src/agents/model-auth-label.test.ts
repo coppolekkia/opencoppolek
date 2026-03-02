@@ -45,10 +45,12 @@ describe("resolveModelAuthLabel", () => {
       sessionEntry: { authProfileOverride: "github-copilot:default" } as never,
     });
 
-    expect(label).toContain("token ref(env:GITHUB_TOKEN)");
+    expect(label).toContain("token");
+    expect(label).toContain("ref(env:GITHUB_TOKEN)");
+    expect(label).not.toMatch(/[A-Za-z0-9]{6,}\.\.\./);
   });
 
-  it("masks short api-key profile values", () => {
+  it("does not leak api-key value in label", () => {
     const shortSecret = "abc123";
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
@@ -70,7 +72,7 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toContain("api-key");
-    expect(label).toContain("...");
     expect(label).not.toContain(shortSecret);
+    expect(label).not.toContain("...");
   });
 });
