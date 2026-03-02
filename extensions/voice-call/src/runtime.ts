@@ -70,6 +70,7 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           skipVerification: config.skipSignatureVerification,
           streamPath: config.streaming?.enabled ? config.streaming.streamPath : undefined,
           webhookSecurity: config.webhookSecurity,
+          inboundGreeting: config.inboundGreeting,
         },
       );
     case "plivo":

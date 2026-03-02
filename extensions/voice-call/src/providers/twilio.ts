@@ -61,6 +61,8 @@ export interface TwilioProviderOptions {
   streamPath?: string;
   /** Skip webhook signature verification (development only) */
   skipVerification?: boolean;
+  /** Greeting message to play for inbound calls */
+  inboundGreeting?: string;
   /** Webhook security options (forwarded headers/allowlist) */
   webhookSecurity?: WebhookSecurityConfig;
 }
@@ -407,9 +409,13 @@ export class TwilioProvider implements VoiceCallProvider {
     }
 
     // Handle subsequent webhook requests (status callbacks, etc.)
-    // For inbound calls, answer immediately with stream
+    // For inbound calls, answer with optional greeting then connect stream
     if (direction === "inbound") {
       const streamUrl = callSid ? this.getStreamUrlForCall(callSid) : null;
+      const greeting = this.options.inboundGreeting?.trim();
+      if (streamUrl && greeting) {
+        return this.getGreetingThenStreamXml(greeting, streamUrl);
+      }
       return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
     }
 
@@ -490,6 +496,31 @@ export class TwilioProvider implements VoiceCallProvider {
     <Stream url="${escapeXml(cleanUrl)}">${paramXml}
     </Stream>
   </Connect>
+</Response>`;
+  }
+
+  /**
+   * Generate TwiML that speaks a greeting message before connecting the media stream.
+   * Used for inbound calls when inboundGreeting is configured.
+   */
+  private getGreetingThenStreamXml(greeting: string, streamUrl: string): string {
+    // Reuse the same URL/token extraction as getStreamConnectXml —
+    // Twilio strips query params from WebSocket URLs.
+    const parsed = new URL(streamUrl);
+    const token = parsed.searchParams.get("token");
+    parsed.searchParams.delete("token");
+    const cleanUrl = parsed.toString();
+
+    const paramXml = token ? `\n      <Parameter name="token" value="${escapeXml(token)}" />` : "";
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>${escapeXml(greeting)}</Say>
+  <Connect>
+    <Stream url="${escapeXml(cleanUrl)}">${paramXml}
+    </Stream>
+  </Connect>
+  <Pause length="3600" />
 </Response>`;
   }
 
