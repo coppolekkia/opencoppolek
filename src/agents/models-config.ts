@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import {
+  type OpenClawConfig,
+  getRuntimeConfigSourceSnapshot,
+  loadConfig,
+} from "../config/config.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
@@ -117,7 +121,11 @@ export async function ensureOpenClawModelsJson(
   const cfg = config ?? loadConfig();
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
 
-  const explicitProviders = cfg.models?.providers ?? {};
+  // When runtime secrets are resolved, loadConfig() may return a materialized snapshot
+  // with plaintext apiKey values. Prefer the source snapshot (with SecretRef inputs)
+  // when available so models.json does not persist resolved secrets to disk.
+  const sourceCfg = getRuntimeConfigSourceSnapshot();
+  const explicitProviders = sourceCfg?.models?.providers ?? cfg.models?.providers ?? {};
   const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
