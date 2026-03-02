@@ -75,7 +75,8 @@ export function resolveModel(
     const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
     if (forwardCompat) {
       // Apply baseUrl override before normalization to avoid double /v1 issues with anthropic-messages
-      const configuredBaseUrl = cfg?.models?.providers?.[provider]?.baseUrl;
+      // Use normalized provider key to match config (supports aliases like aws-bedrock -> amazon-bedrock)
+      const configuredBaseUrl = cfg?.models?.providers?.[normalizedProvider]?.baseUrl;
       const modelWithBaseUrl = configuredBaseUrl
         ? { ...forwardCompat, baseUrl: configuredBaseUrl }
         : forwardCompat;
@@ -130,7 +131,9 @@ export function resolveModel(
     };
   }
   // Apply baseUrl override before discovered-model normalization to avoid double /v1 issues
-  const configuredBaseUrl = cfg?.models?.providers?.[provider]?.baseUrl;
+  // Use normalized provider key to match config (supports aliases like aws-bedrock -> amazon-bedrock)
+  const normalizedProvider = normalizeProviderId(provider);
+  const configuredBaseUrl = cfg?.models?.providers?.[normalizedProvider]?.baseUrl;
   const modelWithBaseUrl = configuredBaseUrl ? { ...model, baseUrl: configuredBaseUrl } : model;
   const resolvedModel = normalizeModelCompat(modelWithBaseUrl);
   return { model: resolvedModel, authStorage, modelRegistry };
