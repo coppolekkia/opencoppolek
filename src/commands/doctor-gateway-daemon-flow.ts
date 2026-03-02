@@ -1,6 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveGatewayPort } from "../config/config.js";
+import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveNodeLaunchAgentLabel,
@@ -15,6 +15,7 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { isWSL } from "../infra/wsl.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -171,14 +172,59 @@ export async function maybeRepairGatewayDaemon(params: {
           },
           DEFAULT_GATEWAY_DAEMON_RUNTIME,
         );
-        const port = resolveGatewayPort(params.cfg, process.env);
+        let cfgForInstall = params.cfg;
+        const configToken = params.cfg.gateway?.auth?.token?.trim() || undefined;
+        const envToken =
+          process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+        const token = configToken || envToken;
+        const resolvedAuth = resolveGatewayAuth({
+          authConfig: params.cfg.gateway?.auth,
+          tailscaleMode: params.cfg.gateway?.tailscale?.mode ?? "off",
+        });
+        const shouldPersistToken = Boolean(token) && resolvedAuth.mode === "token" && !configToken;
+        if (shouldPersistToken && token) {
+          try {
+            const snapshot = await readConfigFileSnapshot();
+            if (snapshot.exists && !snapshot.valid) {
+              note(
+                "Config file exists but is invalid; cannot persist gateway token before service install. Fix config and rerun doctor.",
+                "Gateway",
+              );
+              return;
+            }
+            const baseConfig = snapshot.exists ? snapshot.config : {};
+            const baseToken = baseConfig.gateway?.auth?.token?.trim();
+            const nextConfig = {
+              ...baseConfig,
+              gateway: {
+                ...baseConfig.gateway,
+                auth: {
+                  ...baseConfig.gateway?.auth,
+                  mode: "token" as const,
+                  token,
+                },
+              },
+            };
+            if (baseToken !== token || baseConfig.gateway?.auth?.mode !== "token") {
+              await writeConfigFile(nextConfig);
+            }
+            cfgForInstall = nextConfig;
+          } catch (err) {
+            note(
+              `Could not persist gateway token to config before service install: ${String(err)}`,
+              "Gateway",
+            );
+            return;
+          }
+        }
+
+        const port = resolveGatewayPort(cfgForInstall, process.env);
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port,
-          token: params.cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
-          config: params.cfg,
+          config: cfgForInstall,
         });
         try {
           await service.install({

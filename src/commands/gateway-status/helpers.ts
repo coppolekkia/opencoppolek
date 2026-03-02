@@ -174,8 +174,8 @@ export function resolveAuthForTarget(
     typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway.auth.password.trim() : "";
 
   return {
-    token: envToken || cfgToken || undefined,
-    password: envPassword || cfgPassword || undefined,
+    token: cfgToken || envToken || undefined,
+    password: cfgPassword || envPassword || undefined,
   };
 }
 

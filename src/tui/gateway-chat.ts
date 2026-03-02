@@ -6,6 +6,7 @@ import {
   resolveExplicitGatewayAuth,
 } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
+import { resolveGatewayCredentialsFromConfig } from "../gateway/credentials.js";
 import { GATEWAY_CLIENT_CAPS } from "../gateway/protocol/client-info.js";
 import {
   type HelloOk,
@@ -236,9 +237,6 @@ export class GatewayChatClient {
 
 export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
   const config = loadConfig();
-  const isRemoteMode = config.gateway?.mode === "remote";
-  const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const authToken = config.gateway?.auth?.token;
 
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
@@ -253,27 +251,15 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
     ...(urlOverride ? { url: urlOverride } : {}),
   }).url;
 
-  const token =
-    explicitAuth.token ||
-    (!urlOverride
-      ? isRemoteMode
-        ? typeof remote?.token === "string" && remote.token.trim().length > 0
-          ? remote.token.trim()
-          : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          (typeof authToken === "string" && authToken.trim().length > 0
-            ? authToken.trim()
-            : undefined)
-      : undefined);
-
-  const password =
-    explicitAuth.password ||
-    (!urlOverride
-      ? process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-        (typeof remote?.password === "string" && remote.password.trim().length > 0
-          ? remote.password.trim()
-          : undefined)
-      : undefined);
+  const { token, password } = resolveGatewayCredentialsFromConfig({
+    cfg: config,
+    env: process.env,
+    explicitAuth,
+    ...(urlOverride ? { urlOverride } : {}),
+    // TUI should track configured local auth by default, even if shell/.env has stale token values.
+    localTokenPrecedence: "config-first",
+    localPasswordPrecedence: "config-first",
+  });
 
   return { url, token, password };
 }

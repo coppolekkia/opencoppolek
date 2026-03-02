@@ -1,6 +1,7 @@
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { confirm, select } from "./configure.shared.js";
@@ -88,13 +89,59 @@ export async function maybeInstallDaemon(params: {
         progress.setLabel("Preparing Gateway service…");
 
         const cfg = loadConfig();
+        let cfgForInstall = cfg;
+        const explicitToken = params.gatewayToken?.trim() || undefined;
+        const configToken = cfg.gateway?.auth?.token?.trim() || undefined;
+        const envToken =
+          process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+        const token = explicitToken || configToken || envToken;
+        const resolvedAuth = resolveGatewayAuth({
+          authConfig: cfg.gateway?.auth,
+          tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+        });
+        const shouldPersistToken =
+          Boolean(token) &&
+          (Boolean(explicitToken) || (resolvedAuth.mode === "token" && !configToken));
+        if (shouldPersistToken && token) {
+          try {
+            const snapshot = await readConfigFileSnapshot();
+            if (snapshot.exists && !snapshot.valid) {
+              installError =
+                "Config file exists but is invalid; cannot persist gateway token before service install. Fix config and rerun.";
+              progress.setLabel("Gateway service install failed.");
+              return;
+            }
+            const baseConfig = snapshot.exists ? snapshot.config : {};
+            const nextToken = explicitToken || token;
+            const baseToken = baseConfig.gateway?.auth?.token?.trim();
+            const nextConfig = {
+              ...baseConfig,
+              gateway: {
+                ...baseConfig.gateway,
+                auth: {
+                  ...baseConfig.gateway?.auth,
+                  mode: "token" as const,
+                  token: nextToken,
+                },
+              },
+            };
+            if (baseToken !== nextToken || baseConfig.gateway?.auth?.mode !== "token") {
+              await writeConfigFile(nextConfig);
+            }
+            cfgForInstall = nextConfig;
+          } catch (err) {
+            installError = `Could not persist gateway token to config: ${String(err)}`;
+            progress.setLabel("Gateway service install failed.");
+            return;
+          }
+        }
+
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port: params.port,
-          token: params.gatewayToken,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
-          config: cfg,
+          config: cfgForInstall,
         });
 
         progress.setLabel("Installing Gateway service…");

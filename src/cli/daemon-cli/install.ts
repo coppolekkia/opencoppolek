@@ -32,7 +32,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
 
-  const cfg = loadConfig();
+  let cfg = loadConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail("Invalid port");
@@ -84,11 +84,11 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const needsToken =
     resolvedAuth.mode === "token" && !resolvedAuth.token && !resolvedAuth.allowTailscale;
 
-  let token: string | undefined =
-    opts.token ||
-    cfg.gateway?.auth?.token ||
-    process.env.OPENCLAW_GATEWAY_TOKEN ||
-    process.env.CLAWDBOT_GATEWAY_TOKEN;
+  const explicitToken = opts.token?.trim() || undefined;
+  const configToken = cfg.gateway?.auth?.token?.trim() || undefined;
+  const envToken =
+    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  let token: string | undefined = explicitToken || configToken || envToken;
 
   if (!token && needsToken) {
     token = randomToken();
@@ -98,55 +98,50 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     } else {
       defaultRuntime.log(warnMsg);
     }
+  }
 
-    // Persist to config file so the gateway reads it at runtime
-    // (launchd does not inherit shell env vars, and CLI tools also
-    // read gateway.auth.token from config for gateway calls).
+  // Persist token to config for token-auth service installs.
+  // This keeps daemon runtime auth aligned with CLI/config auth without relying on embedded env vars.
+  const shouldPersistToken =
+    Boolean(token) && (Boolean(explicitToken) || (resolvedAuth.mode === "token" && !configToken));
+  if (shouldPersistToken && token) {
     try {
       const snapshot = await readConfigFileSnapshot();
       if (snapshot.exists && !snapshot.valid) {
-        // Config file exists but is corrupt/unparseable — don't risk overwriting.
-        // Token is still embedded in the plist EnvironmentVariables.
-        const msg = "Warning: config file exists but is invalid; skipping token persistence.";
-        if (json) {
-          warnings.push(msg);
-        } else {
-          defaultRuntime.log(msg);
-        }
+        fail(
+          "Config file exists but is invalid; cannot persist gateway token for daemon install. Fix config and rerun.",
+        );
+        return;
       } else {
         const baseConfig = snapshot.exists ? snapshot.config : {};
-        if (!baseConfig.gateway?.auth?.token) {
-          await writeConfigFile({
-            ...baseConfig,
-            gateway: {
-              ...baseConfig.gateway,
-              auth: {
-                ...baseConfig.gateway?.auth,
-                mode: baseConfig.gateway?.auth?.mode ?? "token",
-                token,
-              },
+        const baseToken = baseConfig.gateway?.auth?.token?.trim();
+        const nextToken = explicitToken || token;
+        const nextConfig = {
+          ...baseConfig,
+          gateway: {
+            ...baseConfig.gateway,
+            auth: {
+              ...baseConfig.gateway?.auth,
+              mode: "token" as const,
+              token: nextToken,
             },
-          });
-        } else {
-          // Another process wrote a token between loadConfig() and now.
-          token = baseConfig.gateway.auth.token;
+          },
+        };
+        if (baseToken !== nextToken || baseConfig.gateway?.auth?.mode !== "token") {
+          await writeConfigFile(nextConfig);
         }
+        cfg = nextConfig;
+        token = nextToken;
       }
     } catch (err) {
-      // Non-fatal: token is still embedded in the plist EnvironmentVariables.
-      const msg = `Warning: could not persist token to config: ${String(err)}`;
-      if (json) {
-        warnings.push(msg);
-      } else {
-        defaultRuntime.log(msg);
-      }
+      fail(`Could not persist gateway token to config: ${String(err)}`);
+      return;
     }
   }
 
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token,
     runtime: runtimeRaw,
     warn: (message) => {
       if (json) {
