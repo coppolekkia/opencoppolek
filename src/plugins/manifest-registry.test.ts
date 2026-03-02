@@ -198,6 +198,40 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(true);
   });
 
+  it("allows hardlinked manifests for bundled plugins (package-manager installs)", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
+    const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
+    fs.writeFileSync(
+      outsideManifest,
+      JSON.stringify({ id: "hardlink-bundled", configSchema: { type: "object" } }),
+      "utf-8",
+    );
+    try {
+      fs.linkSync(outsideManifest, linkedManifest);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "hardlink-bundled",
+        rootDir,
+        origin: "bundled",
+      }),
+    ]);
+    expect(registry.diagnostics).toHaveLength(0);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.id).toBe("hardlink-bundled");
+  });
+
   it("rejects manifest paths that escape plugin root via hardlink", () => {
     if (process.platform === "win32") {
       return;
