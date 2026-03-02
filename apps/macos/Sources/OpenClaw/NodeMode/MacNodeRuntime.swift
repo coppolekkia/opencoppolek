@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import OpenClawIPC
 import OpenClawKit
@@ -58,6 +59,8 @@ actor MacNodeRuntime {
                 return try await self.handleLocationInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
+            case OpenClawSystemCommand.runPrepare.rawValue:
+                return try await self.handleSystemRunPrepare(req)
             case OpenClawSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
             case OpenClawSystemCommand.which.rawValue:
@@ -433,6 +436,130 @@ actor MacNodeRuntime {
             guard poll, Date() < deadline else { return false }
             try? await Task.sleep(nanoseconds: 120_000_000)
         }
+    }
+
+    private static func fileStatus(at path: String, followSymlink: Bool) -> stat? {
+        var info = stat()
+        let status = path.withCString { cPath in
+            followSymlink ? Darwin.stat(cPath, &info) : Darwin.lstat(cPath, &info)
+        }
+        return status == 0 ? info : nil
+    }
+
+    private static func isDirectory(_ info: stat) -> Bool {
+        (info.st_mode & S_IFMT) == S_IFDIR
+    }
+
+    private static func isSymlink(_ info: stat) -> Bool {
+        (info.st_mode & S_IFMT) == S_IFLNK
+    }
+
+    private static func sameFileIdentity(_ lhs: stat, _ rhs: stat) -> Bool {
+        lhs.st_dev == rhs.st_dev && lhs.st_ino == rhs.st_ino
+    }
+
+    private static func isWritableByCurrentProcess(_ path: String) -> Bool {
+        path.withCString { Darwin.access($0, W_OK) == 0 }
+    }
+
+    private static func hasMutableSymlinkPathComponent(_ targetPath: String) -> Bool {
+        let absolutePath = URL(fileURLWithPath: targetPath).standardizedFileURL.path
+        let components = (absolutePath as NSString).pathComponents
+        guard !components.isEmpty else { return false }
+
+        var cursor = components[0] == "/" ? "/" : components[0]
+        for component in components.dropFirst() {
+            cursor = (cursor as NSString).appendingPathComponent(component)
+            guard let componentStatus = self.fileStatus(at: cursor, followSymlink: false) else {
+                return true
+            }
+            if !self.isSymlink(componentStatus) {
+                continue
+            }
+            let parent = (cursor as NSString).deletingLastPathComponent
+            let parentDir = parent.isEmpty ? "/" : parent
+            if self.isWritableByCurrentProcess(parentDir) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func resolvePreparedCwd(_ rawCwd: String?) -> Result<String?, String> {
+        let trimmed = rawCwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else {
+            return .success(nil)
+        }
+
+        let base = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let requestedCwd = URL(fileURLWithPath: trimmed, relativeTo: base).standardizedFileURL.path
+        guard let requestedLStat = self.fileStatus(at: requestedCwd, followSymlink: false),
+              let requestedStat = self.fileStatus(at: requestedCwd, followSymlink: true)
+        else {
+            return .failure("SYSTEM_RUN_DENIED: approval requires an existing canonical cwd")
+        }
+        guard self.isDirectory(requestedStat) else {
+            return .failure("SYSTEM_RUN_DENIED: approval requires cwd to be a directory")
+        }
+        if self.hasMutableSymlinkPathComponent(requestedCwd) {
+            return .failure(
+                "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink path components)")
+        }
+        if self.isSymlink(requestedLStat) {
+            return .failure("SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink cwd)")
+        }
+
+        let resolvedCwd = URL(fileURLWithPath: requestedCwd).resolvingSymlinksInPath().path
+        guard let resolvedStat = self.fileStatus(at: resolvedCwd, followSymlink: true) else {
+            return .failure("SYSTEM_RUN_DENIED: approval requires an existing canonical cwd")
+        }
+        let identityMatches =
+            self.sameFileIdentity(requestedStat, requestedLStat) &&
+            self.sameFileIdentity(requestedStat, resolvedStat) &&
+            self.sameFileIdentity(requestedLStat, resolvedStat)
+        guard identityMatches else {
+            return .failure("SYSTEM_RUN_DENIED: approval cwd identity mismatch")
+        }
+
+        return .success(resolvedCwd)
+    }
+
+    private func handleSystemRunPrepare(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(OpenClawSystemRunParams.self, from: req.paramsJSON)
+        guard !params.command.isEmpty else {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
+        }
+
+        let validation = ExecSystemRunCommandValidator.resolve(
+            command: params.command,
+            rawCommand: params.rawCommand)
+        let cmdText: String
+        switch validation {
+        case let .ok(resolved):
+            cmdText = resolved.displayCommand
+        case let .invalid(message):
+            return Self.errorResponse(req, code: .invalidRequest, message: message)
+        }
+
+        let preparedCwd: String?
+        switch Self.resolvePreparedCwd(params.cwd) {
+        case let .success(value):
+            preparedCwd = value
+        case let .failure(message):
+            return Self.errorResponse(req, code: .unavailable, message: message)
+        }
+        let normalizedAgentId = params.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSessionKey = params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedRawCommand = params.rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let payload = OpenClawSystemRunPreparePayload(
+            cmdText: cmdText,
+            plan: OpenClawSystemRunApprovalPlan(
+                argv: params.command,
+                cwd: preparedCwd,
+                rawCommand: normalizedRawCommand?.isEmpty == false ? normalizedRawCommand : nil,
+                agentId: normalizedAgentId?.isEmpty == false ? normalizedAgentId : nil,
+                sessionKey: normalizedSessionKey?.isEmpty == false ? normalizedSessionKey : nil))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: try Self.encodePayload(payload))
     }
 
     private func handleSystemRun(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
