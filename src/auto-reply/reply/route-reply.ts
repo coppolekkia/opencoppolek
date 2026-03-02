@@ -27,6 +27,8 @@ export type RouteReplyParams = {
   to: string;
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
+  /** Optional durable turn id for outbox-linking and restart-safe recovery. */
+  turnId?: string;
   /** Provider account id (multi-account). */
   accountId?: string;
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
@@ -37,6 +39,8 @@ export type RouteReplyParams = {
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
+  /** Dispatch kind for outbox tracking and recovery filtering. */
+  kind?: "tool" | "block" | "final";
 };
 
 export type RouteReplyResult = {
@@ -133,11 +137,13 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       channel: channelId,
       to,
       accountId: accountId ?? undefined,
+      turnId: params.turnId,
       payloads: [normalized],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       session: outboundSession,
       abortSignal,
+      dispatchKind: params.kind,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {

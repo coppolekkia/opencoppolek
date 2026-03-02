@@ -88,6 +88,7 @@ const resolveSessionStoreEntry = (
 
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
+  attemptedFinal?: number;
   counts: Record<ReplyDispatchKind, number>;
 };
 
@@ -154,7 +155,7 @@ export async function dispatchReplyFromConfig(params: {
 
   if (shouldSkipDuplicateInbound(ctx)) {
     recordProcessed("skipped", { reason: "duplicate" });
-    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    return { queuedFinal: false, attemptedFinal: 0, counts: dispatcher.getQueuedCounts() };
   }
 
   const sessionStoreEntry = resolveSessionStoreEntry(ctx, cfg);
@@ -272,6 +273,7 @@ export async function dispatchReplyFromConfig(params: {
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
     mirror?: boolean,
+    kind?: "tool" | "block" | "final",
   ): Promise<void> => {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
@@ -285,12 +287,14 @@ export async function dispatchReplyFromConfig(params: {
       payload,
       channel: originatingChannel,
       to: originatingTo,
+      turnId: ctx.MessageTurnId,
       sessionKey: ctx.SessionKey,
       accountId: ctx.AccountId,
       threadId: ctx.MessageThreadId,
       cfg,
       abortSignal,
       mirror,
+      kind,
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -307,33 +311,37 @@ export async function dispatchReplyFromConfig(params: {
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
+      let attemptedFinal = 0;
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        attemptedFinal += 1;
         const result = await routeReply({
           payload,
           channel: originatingChannel,
           to: originatingTo,
+          turnId: ctx.MessageTurnId,
           sessionKey: ctx.SessionKey,
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          kind: "final",
         });
         queuedFinal = result.ok;
         if (result.ok) {
           routedFinalCount += 1;
-        }
-        if (!result.ok) {
+        } else {
           logVerbose(
             `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
           );
         }
       } else {
+        attemptedFinal += 1;
         queuedFinal = dispatcher.sendFinalReply(payload);
       }
       const counts = dispatcher.getQueuedCounts();
       counts.final += routedFinalCount;
       recordProcessed("completed", { reason: "fast_abort" });
       markIdle("message_completed");
-      return { queuedFinal, counts };
+      return { queuedFinal, attemptedFinal, counts };
     }
 
     const bypassAcpForCommand = shouldBypassAcpDispatchForCommand(ctx, cfg);
@@ -357,7 +365,7 @@ export async function dispatchReplyFromConfig(params: {
       const counts = dispatcher.getQueuedCounts();
       recordProcessed("completed", { reason: "send_policy_deny" });
       markIdle("message_completed");
-      return { queuedFinal: false, counts };
+      return { queuedFinal: false, attemptedFinal: 0, counts };
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
@@ -428,7 +436,7 @@ export async function dispatchReplyFromConfig(params: {
               return;
             }
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(deliveryPayload, undefined, false);
+              await sendPayloadAsync(deliveryPayload, undefined, false, "tool");
             } else {
               dispatcher.sendToolResult(deliveryPayload);
             }
@@ -460,7 +468,7 @@ export async function dispatchReplyFromConfig(params: {
               ttsAuto: sessionTtsAuto,
             });
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              await sendPayloadAsync(ttsPayload, context?.abortSignal, false, "block");
             } else {
               dispatcher.sendBlockReply(ttsPayload);
             }
@@ -475,6 +483,7 @@ export async function dispatchReplyFromConfig(params: {
 
     let queuedFinal = false;
     let routedFinalCount = 0;
+    let attemptedFinal = 0;
     for (const reply of replies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
@@ -490,15 +499,18 @@ export async function dispatchReplyFromConfig(params: {
         ttsAuto: sessionTtsAuto,
       });
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        attemptedFinal += 1;
         // Route final reply to originating channel.
         const result = await routeReply({
           payload: ttsReply,
           channel: originatingChannel,
           to: originatingTo,
+          turnId: ctx.MessageTurnId,
           sessionKey: ctx.SessionKey,
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          kind: "final",
         });
         if (!result.ok) {
           logVerbose(
@@ -510,6 +522,7 @@ export async function dispatchReplyFromConfig(params: {
           routedFinalCount += 1;
         }
       } else {
+        attemptedFinal += 1;
         queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
       }
     }
@@ -541,25 +554,28 @@ export async function dispatchReplyFromConfig(params: {
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
           if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+            attemptedFinal += 1;
             const result = await routeReply({
               payload: ttsOnlyPayload,
               channel: originatingChannel,
               to: originatingTo,
+              turnId: ctx.MessageTurnId,
               sessionKey: ctx.SessionKey,
               accountId: ctx.AccountId,
               threadId: ctx.MessageThreadId,
               cfg,
+              kind: "final",
             });
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
               routedFinalCount += 1;
-            }
-            if (!result.ok) {
+            } else {
               logVerbose(
                 `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
               );
             }
           } else {
+            attemptedFinal += 1;
             const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
             queuedFinal = didQueue || queuedFinal;
           }
@@ -575,7 +591,7 @@ export async function dispatchReplyFromConfig(params: {
     counts.final += routedFinalCount;
     recordProcessed("completed");
     markIdle("message_completed");
-    return { queuedFinal, counts };
+    return { queuedFinal, attemptedFinal, counts };
   } catch (err) {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
