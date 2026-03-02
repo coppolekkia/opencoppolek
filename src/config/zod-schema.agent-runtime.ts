@@ -268,6 +268,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("searxng"),
       ])
       .optional(),
     apiKey: z.string().optional().register(sensitive),
@@ -302,6 +303,16 @@ export const ToolsWebSearchSchema = z
         apiKey: z.string().optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    searxng: z
+      .object({
+        url: z.string().optional(),
+        engines: z.array(z.string()).optional(),
+        categories: z.string().optional(),
+        language: z.string().optional(),
+        safeSearch: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
       })
       .strict()
       .optional(),
