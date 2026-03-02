@@ -363,6 +363,7 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
       dispatcher,
       sessionKey,
+      images: params.replyOptions?.images,
       inboundAudio,
       sessionTtsAuto,
       ttsChannel,
