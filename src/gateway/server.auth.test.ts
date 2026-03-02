@@ -370,6 +370,35 @@ describe("gateway server auth/connect", () => {
       }
     });
 
+    test("rejects excess concurrent pending handshakes", async () => {
+      vi.useRealTimers();
+      const prevPendingLimit = process.env.OPENCLAW_TEST_MAX_PENDING_HANDSHAKES;
+      process.env.OPENCLAW_TEST_MAX_PENDING_HANDSHAKES = "2";
+      const sockets: WebSocket[] = [];
+      try {
+        const first = await openWs(port);
+        sockets.push(first);
+        const second = await openWs(port);
+        sockets.push(second);
+        const third = await openWs(port);
+        sockets.push(third);
+
+        const thirdClosed = await waitForWsClose(third, 1000);
+        expect(thirdClosed).toBe(true);
+        expect(first.readyState).toBe(WebSocket.OPEN);
+        expect(second.readyState).toBe(WebSocket.OPEN);
+      } finally {
+        for (const ws of sockets) {
+          ws.close();
+        }
+        if (prevPendingLimit === undefined) {
+          delete process.env.OPENCLAW_TEST_MAX_PENDING_HANDSHAKES;
+        } else {
+          process.env.OPENCLAW_TEST_MAX_PENDING_HANDSHAKES = prevPendingLimit;
+        }
+      }
+    });
+
     test("connect (req) handshake returns hello-ok payload", async () => {
       const { CONFIG_PATH, STATE_DIR } = await import("../config/config.js");
       const ws = await openWs(port);

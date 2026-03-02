@@ -9,7 +9,7 @@ import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
-import { getHandshakeTimeoutMs } from "../server-constants.js";
+import { getHandshakeTimeoutMs, getMaxPendingHandshakes } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
@@ -103,7 +103,23 @@ export function attachGatewayWsConnectionHandler(params: {
     buildRequestContext,
   } = params;
 
+  const pendingHandshakes = new Set<WebSocket>();
+
   wss.on("connection", (socket, upgradeReq) => {
+    const maxPendingHandshakes = getMaxPendingHandshakes();
+    if (pendingHandshakes.size >= maxPendingHandshakes) {
+      logWsControl.warn(
+        `rejecting websocket before auth: pending handshake limit reached (${maxPendingHandshakes})`,
+      );
+      try {
+        socket.close(1013, "too many pending handshakes");
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    pendingHandshakes.add(socket);
+
     let client: GatewayWsClient | null = null;
     let closed = false;
     const openedAt = Date.now();
@@ -196,6 +212,7 @@ export function attachGatewayWsConnectionHandler(params: {
       );
 
     socket.once("close", (code, reason) => {
+      pendingHandshakes.delete(socket);
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
       const logOrigin = sanitizeLogValue(requestOrigin);
@@ -297,6 +314,9 @@ export function attachGatewayWsConnectionHandler(params: {
       },
       setHandshakeState: (next) => {
         handshakeState = next;
+        if (next !== "pending") {
+          pendingHandshakes.delete(socket);
+        }
       },
       setCloseCause,
       setLastFrameMeta,

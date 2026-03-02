@@ -30,6 +30,16 @@ export const getHandshakeTimeoutMs = () => {
   }
   return DEFAULT_HANDSHAKE_TIMEOUT_MS;
 };
+export const DEFAULT_MAX_PENDING_HANDSHAKES = 64;
+export const getMaxPendingHandshakes = () => {
+  if (process.env.VITEST && process.env.OPENCLAW_TEST_MAX_PENDING_HANDSHAKES) {
+    const parsed = Number(process.env.OPENCLAW_TEST_MAX_PENDING_HANDSHAKES);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return DEFAULT_MAX_PENDING_HANDSHAKES;
+};
 export const TICK_INTERVAL_MS = 30_000;
 export const HEALTH_REFRESH_INTERVAL_MS = 60_000;
 export const DEDUPE_TTL_MS = 5 * 60_000;
