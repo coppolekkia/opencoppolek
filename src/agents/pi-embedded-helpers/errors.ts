@@ -628,6 +628,11 @@ const ERROR_PATTERNS = {
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
+    // Chinese provider quota messages (e.g. GLM error 1310)
+    "使用上限",
+    /达到.*上限/,
+    "用量.*超",
+    "配额",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
