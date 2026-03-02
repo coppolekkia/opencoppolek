@@ -183,12 +183,18 @@ export async function prepareSlackMessage(params: {
   const isThreadReply = threadContext.isThreadReply;
   // Keep channel/group sessions thread-scoped to avoid cross-thread context bleed.
   // For DMs, preserve existing auto-thread behavior when replyToMode="all".
+  // For channels/groups with replyToMode="off" and top-level messages (no thread_ts),
+  // use channel-level session key instead of thread-level to maintain conversation continuity.
   const autoThreadId =
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
       : undefined;
   const canonicalThreadId = isRoomish
-    ? (threadContext.incomingThreadTs ?? message.ts)
+    ? // For channels/groups: use thread-level sessions only when:
+      // 1. Message is in a thread (has thread_ts), OR
+      // 2. replyToMode is "all" or "first" (threading enabled)
+      // Otherwise (replyToMode="off" and top-level), use channel-level session
+      threadContext.incomingThreadTs || (replyToMode !== "off" ? message.ts : undefined)
     : isThreadReply
       ? threadTs
       : autoThreadId;

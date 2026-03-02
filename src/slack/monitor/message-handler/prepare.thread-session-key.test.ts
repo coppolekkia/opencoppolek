@@ -61,8 +61,8 @@ const account: ResolvedSlackAccount = {
 };
 
 describe("thread-level session keys", () => {
-  it("uses thread-level session key for channel messages", async () => {
-    const ctx = buildCtx();
+  it("uses thread-level session key for channel messages when replyToMode=all", async () => {
+    const ctx = buildCtx({ replyToMode: "all" });
     ctx.resolveUserName = async () => ({ name: "Alice" });
 
     const message: SlackMessageEvent = {
@@ -81,7 +81,7 @@ describe("thread-level session keys", () => {
     });
 
     expect(prepared).toBeTruthy();
-    // Channel messages should get thread-level session key with :thread: suffix
+    // Channel messages should get thread-level session key with :thread: suffix when replyToMode=all
     // The resolved session key is in ctxPayload.SessionKey, not route.sessionKey
     const sessionKey = prepared!.ctxPayload.SessionKey as string;
     expect(sessionKey).toContain(":thread:");
@@ -138,5 +138,87 @@ describe("thread-level session keys", () => {
     // DMs should NOT have :thread: in the session key
     const sessionKey = prepared!.ctxPayload.SessionKey as string;
     expect(sessionKey).not.toContain(":thread:");
+  });
+
+  it("uses channel-level session key for top-level messages when replyToMode=off", async () => {
+    const ctx = buildCtx({ replyToMode: "off" });
+    ctx.resolveUserName = async () => ({ name: "Dave" });
+
+    const message: SlackMessageEvent = {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U4",
+      text: "top-level message",
+      ts: "1770408540.123456",
+    } as SlackMessageEvent;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    // When replyToMode=off and message is top-level, should use channel-level session key
+    const sessionKey = prepared!.ctxPayload.SessionKey as string;
+    expect(sessionKey).not.toContain(":thread:");
+    // Should contain channel identifier
+    expect(sessionKey).toContain("slack:channel:C123");
+  });
+
+  it("still uses thread-level session key for thread replies when replyToMode=off", async () => {
+    const ctx = buildCtx({ replyToMode: "off" });
+    ctx.resolveUserName = async () => ({ name: "Eve" });
+
+    const message: SlackMessageEvent = {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U5",
+      text: "thread reply",
+      ts: "1770408550.789012",
+      thread_ts: "1770408540.123456",
+    } as SlackMessageEvent;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    // Thread replies should still use thread-level session key even when replyToMode=off
+    const sessionKey = prepared!.ctxPayload.SessionKey as string;
+    expect(sessionKey).toContain(":thread:");
+    expect(sessionKey).toContain("1770408540.123456");
+    expect(sessionKey).not.toContain("1770408550.789012");
+  });
+
+  it("uses thread-level session key for top-level messages when replyToMode=first", async () => {
+    const ctx = buildCtx({ replyToMode: "first" });
+    ctx.resolveUserName = async () => ({ name: "Frank" });
+
+    const message: SlackMessageEvent = {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U6",
+      text: "top-level message",
+      ts: "1770408560.456789",
+    } as SlackMessageEvent;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    // When replyToMode=first, top-level messages should use thread-level session key
+    // (threading is enabled, so each message gets its own thread session)
+    const sessionKey = prepared!.ctxPayload.SessionKey as string;
+    expect(sessionKey).toContain(":thread:");
+    expect(sessionKey).toContain("1770408560.456789");
   });
 });
