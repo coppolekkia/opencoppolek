@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Infra/Unhandled rejections: classify Node/undici `TypeError: terminated` fetch-abort failures (`Fetch.onAborted`) as transient network errors so gateway runtime keeps running instead of exiting on these recoverable disconnects. (#31855)
 - Zalo/Pairing auth tests: add webhook regression coverage asserting DM pairing-store reads/writes remain account-scoped, preventing cross-account authorization bleed in multi-account setups. (#26121) Thanks @bmendonca3.
 - Zalouser/Pairing auth tests: add account-scoped DM pairing-store regression coverage (`monitor.account-scope.test.ts`) to prevent cross-account allowlist bleed in multi-account setups. (#26672) Thanks @bmendonca3.
 - Security/Web tools SSRF guard: keep DNS pinning for untrusted `web_fetch` and citation-redirect URL checks when proxy env vars are set, and require explicit dangerous opt-in before env-proxy routing can bypass pinned dispatch for trusted/operator-controlled endpoints. Thanks @tdjackey for reporting.
