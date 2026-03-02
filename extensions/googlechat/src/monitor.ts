@@ -490,6 +490,15 @@ async function processMessageWithPipeline(params: {
       return;
     }
 
+    if (Array.isArray(groupEntry?.users) && groupEntry.users.length === 0) {
+      logVerbose(
+        core,
+        runtime,
+        `drop group message (explicit empty users allowlist override, space=${spaceId})`,
+      );
+      return;
+    }
+
     if (groupUsers.length > 0) {
       warnDeprecatedUsersEmailEntries(
         core,
