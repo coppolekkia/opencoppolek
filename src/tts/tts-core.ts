@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { Readable } from "node:stream";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
@@ -632,6 +633,82 @@ export async function openaiTTS(params: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export type OpenaiTTSStreamResult = {
+  stream: Readable;
+  cleanup: () => void;
+};
+
+/**
+ * Streaming variant of openaiTTS. Returns a Node.js Readable stream of raw PCM/mp3/opus
+ * bytes instead of buffering the entire response into a Buffer.
+ */
+export async function openaiTTSStream(params: {
+  text: string;
+  apiKey: string;
+  model: string;
+  voice: string;
+  responseFormat: "mp3" | "opus" | "pcm";
+  timeoutMs: number;
+}): Promise<OpenaiTTSStreamResult> {
+  const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
+
+  if (!isValidOpenAIModel(model)) {
+    throw new Error(`Invalid model: ${model}`);
+  }
+  if (!isValidOpenAIVoice(voice)) {
+    throw new Error(`Invalid voice: ${voice}`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) {
+      return;
+    }
+    cleaned = true;
+    clearTimeout(timeout);
+    controller.abort();
+  };
+
+  const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: text,
+      voice,
+      response_format: responseFormat,
+    }),
+    signal: controller.signal,
+  }).catch((err) => {
+    cleanup();
+    throw err;
+  });
+
+  if (!response.ok) {
+    cleanup();
+    throw new Error(`OpenAI TTS API error (${response.status})`);
+  }
+
+  if (!response.body) {
+    cleanup();
+    throw new Error("OpenAI TTS API returned no body");
+  }
+
+  const stream = Readable.fromWeb(
+    response.body as unknown as import("node:stream/web").ReadableStream,
+  );
+  stream.on("end", cleanup);
+  stream.on("error", cleanup);
+
+  return { stream, cleanup };
 }
 
 export function inferEdgeExtension(outputFormat: string): string {
