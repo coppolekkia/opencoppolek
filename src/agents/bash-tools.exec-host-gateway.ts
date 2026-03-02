@@ -72,7 +72,9 @@ export async function processGatewayAllowlist(
     ask: params.ask,
   });
   const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
+  // `ask=off` in exec-approvals.json must be able to suppress prompts even when
+  // the runtime/tool layer default ask mode is stricter (for example "on-miss").
+  const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=gateway security=deny");

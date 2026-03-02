@@ -61,7 +61,9 @@ export async function executeNodeHostCommand(
     ask: params.ask,
   });
   const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
+  // Keep node behavior aligned with gateway: exec-approvals ask=off should
+  // suppress interactive approval prompts.
+  const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=node security=deny");
