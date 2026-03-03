@@ -2,7 +2,7 @@ import {
   applyWindowsSpawnProgramPolicy,
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgramCandidate,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/windows-spawn-compat";
 
 type SpawnTarget = {
   command: string;
