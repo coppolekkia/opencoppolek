@@ -43,6 +43,31 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "requires",
 ] as const;
 
+function coalesceAssistantTexts(chunks: string[]): string {
+  let merged = "";
+  for (const chunk of chunks) {
+    if (!chunk) {
+      continue;
+    }
+    if (!merged) {
+      merged = chunk;
+      continue;
+    }
+    // Some providers emit incremental snapshots ("Per" -> "Perfeito"), while
+    // others emit hard fragments ("Per" + "feito"). Prefer the longer snapshot
+    // only for prefix growth; otherwise append the fragment.
+    if (chunk.startsWith(merged)) {
+      merged = chunk;
+      continue;
+    }
+    if (merged.startsWith(chunk)) {
+      continue;
+    }
+    merged += chunk;
+  }
+  return merged;
+}
+
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = (error ?? "").toLowerCase();
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
@@ -102,6 +127,7 @@ export function buildEmbeddedRunPayloads(params: {
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
+  preserveAssistantTextChunks?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -243,13 +269,17 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = (
+  const rawAnswerTexts = (
     params.assistantTexts.length
       ? params.assistantTexts
       : fallbackAnswerText
         ? [fallbackAnswerText]
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts =
+    params.preserveAssistantTextChunks || rawAnswerTexts.length <= 1
+      ? rawAnswerTexts
+      : [coalesceAssistantTexts(rawAnswerTexts)];
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {

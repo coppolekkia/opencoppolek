@@ -121,6 +121,49 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadText(payloads, errorJsonPretty.trim());
   });
 
+  it("coalesces fragmented assistant text chunks into one payload", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Per", "feito, @jarbas! 👊"],
+      lastAssistant: makeStoppedAssistant(),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Perfeito, @jarbas! 👊");
+  });
+
+  it("prefers longer snapshot updates over shorter assistant text snapshots", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Per", "Perfeito, @jarbas! 👊"],
+      lastAssistant: makeStoppedAssistant(),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Perfeito, @jarbas! 👊");
+  });
+
+  it("does not replace fragments on non-prefix substring overlap", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["error", "server error"],
+      lastAssistant: makeStoppedAssistant(),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("errorserver error");
+  });
+
+  it("preserves chunk boundaries when block replies were already streamed", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["First block line", "Second block line"],
+      lastAssistant: makeStoppedAssistant(),
+      preserveAssistantTextChunks: true,
+    });
+
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "First block line",
+      "Second block line",
+    ]);
+  });
+
   it("adds a fallback error when a tool fails and no assistant output exists", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "tab not found" },
