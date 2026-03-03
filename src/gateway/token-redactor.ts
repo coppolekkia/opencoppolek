@@ -8,13 +8,17 @@
 
 import { inspect } from "util";
 
+// Matches known-sensitive JSON field names with optional prefix
+// (e.g. authToken, botToken) but NO trailing suffix — avoids
+// false positives on tokenizer, secretaryEmail, apiKeywords, etc.
 const SENSITIVE_FIELD_PATTERN =
-  /("(?:\w*(?:token|password|secret|api_key|apiKey))\w*"\s*:\s*")([^"]+)(")/gi;
+  /("(?:\w*(?:token|password|secret|api_key|apiKey))"\s*:\s*")([^"]+)(")/gi;
 
+// Same scoping for util.inspect format (unquoted keys, single quotes)
 const INSPECT_FIELD_PATTERN =
-  /((?:\w*(?:token|password|secret|api_key|apiKey))\w*:\s*')([^']+)(')/gi;
+  /((?:\w*(?:token|password|secret|api_key|apiKey)):\s*')([^']+)(')/gi;
 
-// Match any non-whitespace after "Bearer" — covers all opaque token formats
+// Match any non-whitespace after "Bearer" — covers all opaque formats
 const BEARER_PATTERN = /(bearer\s+)(\S+)/gi;
 
 export function mask(token: string): string {
@@ -95,7 +99,7 @@ export function installLogRedaction(): void {
     };
   }
 
-  installed = true; // set only after all methods are patched
+  installed = true;
 }
 
 export function uninstallLogRedaction(): void {
