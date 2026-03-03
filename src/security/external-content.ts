@@ -339,3 +339,47 @@ export function wrapWebContent(
   // Marker sanitization happens in wrapExternalContent
   return wrapExternalContent(content, { source, includeWarning });
 }
+
+/**
+ * Strips external content security markers and warnings from text.
+ * Intended for sanitizing assistant output before sending to users,
+ * preventing internal ARIA/browser snapshot markers from leaking
+ * into user-visible chat.
+ */
+export function stripExternalContentFromOutput(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const lower = text.toLowerCase();
+  if (
+    !lower.includes("external_untrusted_content") &&
+    !lower.includes("security notice") &&
+    !lower.includes("marker_sanitized")
+  ) {
+    return text;
+  }
+  let result = text;
+  // Remove entire external content blocks (markers + content between them)
+  // Handles both legacy markers (no id) and current id-based markers
+  result = result.replace(
+    /<<<EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>\n?/gi,
+    "",
+  );
+  // Remove orphaned opening/closing markers
+  result = result.replace(/<<<EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>\n?/gi, "");
+  result = result.replace(
+    /<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>\n?/gi,
+    "",
+  );
+  // Remove sanitized marker placeholders
+  result = result.replace(/\[\[(?:END_)?MARKER_SANITIZED\]\]\n?/g, "");
+  // Remove SECURITY NOTICE blocks (header + bullet-point continuation lines).
+  // Only match continuation lines starting with `- ` or whitespace-then-`- ` (indented bullets),
+  // so that user-authored indented text following a SECURITY NOTICE line is not consumed.
+  // The production EXTERNAL_CONTENT_WARNING constant inserts a blank line after the warning
+  // block, which naturally terminates the match.
+  result = result.replace(/SECURITY NOTICE:[^\n]*(?:\n[ \t]*- [^\n]*)*/g, "");
+  // Clean up excessive blank lines left after stripping
+  result = result.replace(/\n{3,}/g, "\n\n");
+  return result.trim();
+}
