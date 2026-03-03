@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   handleChatEvent,
+  loadChatHistory,
   syncChatHistoryDuringRun,
   type ChatEventPayload,
   type ChatState,
@@ -634,6 +635,33 @@ describe("syncChatHistoryDuringRun", () => {
 
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "fresh" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("high");
+  });
+
+  it("filters silent assistant replies while syncing history", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+        { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
+      ],
+      thinkingLevel: "high",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [],
+      chatThinkingLevel: null,
+    });
+
+    await syncChatHistoryDuringRun(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+      { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("high");
   });

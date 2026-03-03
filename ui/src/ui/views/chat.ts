@@ -678,9 +678,15 @@ function collectToolCallRefs(messages: unknown[]): ToolCallRef[] {
 
 function messageKey(message: unknown, index: number): string {
   const m = message as Record<string, unknown>;
-  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
+  const toolCallId =
+    typeof m.toolCallId === "string"
+      ? m.toolCallId
+      : typeof m.tool_call_id === "string"
+        ? m.tool_call_id
+        : "";
   if (toolCallId) {
-    return `tool:${toolCallId}`;
+    const runId = normalizeToken(m.runId);
+    return runId ? `tool:${runId}:${toolCallId}` : `tool:${toolCallId}`;
   }
   const id = typeof m.id === "string" ? m.id : "";
   if (id) {

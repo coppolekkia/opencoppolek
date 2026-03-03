@@ -130,7 +130,7 @@ export async function syncChatHistoryDuringRun(state: ChatState) {
       return;
     }
     const nextMessages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = nextMessages;
+    state.chatMessages = nextMessages.filter((message) => !isAssistantSilentReply(message));
     if (typeof res.thinkingLevel === "string") {
       state.chatThinkingLevel = res.thinkingLevel;
     }
