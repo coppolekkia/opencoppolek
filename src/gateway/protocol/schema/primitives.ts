@@ -4,7 +4,7 @@ import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 
 export const NonEmptyString = Type.String({ minLength: 1 });
 export const SessionLabelString = Type.String({
-  minLength: 1,
+  minLength: 0,
   maxLength: SESSION_LABEL_MAX_LENGTH,
 });
 
