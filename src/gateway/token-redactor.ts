@@ -8,15 +8,12 @@
 
 import { inspect } from "util";
 
-// JSON format: "token": "value"
 const SENSITIVE_FIELD_PATTERN =
   /("(?:\w*(?:token|password|secret|api_key|apiKey))\w*"\s*:\s*")([^"]+)(")/gi;
 
-// util.inspect format: token: 'value' (unquoted keys, single-quoted values)
 const INSPECT_FIELD_PATTERN =
-  /((?:\w*(?:token|password|secret|api_key|apiKey)):\s*')([^']+)(')/gi;
+  /((?:\w*(?:token|password|secret|api_key|apiKey))\w*:\s*')([^']+)(')/gi;
 
-// Case-insensitive per RFC 6750, full token68 charset per RFC 7235.
 const BEARER_PATTERN = /(bearer\s+)([\w\-\.+/=~]+)/gi;
 
 export function mask(token: string): string {
@@ -46,11 +43,16 @@ function stringify(arg: any): any {
       const val = (arg as any)[key];
       if (typeof val === "string") {
         (clone as any)[key] = redactTokens(val);
-} catch {
-  (clone as any)[key] = redactTokens(
-    inspect(val, { depth: 3, maxStringLength: 200, breakLength: Infinity }),
-  );
-}
+      } else if (typeof val === "object" && val !== null) {
+        try {
+          (clone as any)[key] = JSON.parse(
+            redactTokens(JSON.stringify(val)),
+          );
+        } catch {
+          (clone as any)[key] = redactTokens(
+            inspect(val, { depth: 3, maxStringLength: 200, breakLength: Infinity }),
+          );
+        }
       } else {
         (clone as any)[key] = val;
       }
