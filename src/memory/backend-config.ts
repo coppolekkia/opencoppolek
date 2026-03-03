@@ -301,7 +301,7 @@ export function resolveMemoryBackendConfig(params: {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
   if (backend !== "qmd") {
-    return { backend: "builtin", citations };
+    return { backend: backend === "postgres" ? "postgres" : "builtin", citations };
   }
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
