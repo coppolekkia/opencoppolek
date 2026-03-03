@@ -32,7 +32,7 @@ const TARGETS_CFG = {
     exec: {
       enabled: true,
       mode: "targets",
-      targets: [{ channel: "telegram", to: "123" }],
+      targets: [{ channel: "whatsapp", to: "123" }],
     },
   },
 } as OpenClawConfig;
@@ -300,7 +300,7 @@ describe("exec approval forwarder", () => {
         exec: {
           enabled: true,
           mode: "targets",
-          targets: [{ channel: "telegram", to: "123" }],
+          targets: [{ channel: "whatsapp", to: "123" }],
         },
       },
     } as OpenClawConfig;

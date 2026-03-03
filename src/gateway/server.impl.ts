@@ -29,7 +29,10 @@ import {
 } from "../infra/control-ui-assets.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
-import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
+import {
+  createExecApprovalForwarder,
+  type ExecApprovalForwarder,
+} from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
@@ -717,9 +720,43 @@ export async function startGatewayServer(
   }
 
   const execApprovalManager = new ExecApprovalManager();
-  const execApprovalForwarder = createExecApprovalForwarder();
+  const textForwarder = createExecApprovalForwarder();
+
+  // Wire Telegram inline-button handler alongside the text forwarder.
+  // The handler sends button-based messages directly via sendMessageTelegram;
+  // the text forwarder skips Telegram targets (shouldSkipTelegramForwarding).
+  let composedForwarder: ExecApprovalForwarder = textForwarder;
+  if (cfgAtStart.channels?.telegram) {
+    try {
+      const { createTelegramExecApprovalHandler } =
+        await import("../telegram/exec-approval-handler.js");
+      const telegramHandler = createTelegramExecApprovalHandler();
+      composedForwarder = {
+        handleRequested: async (req) => {
+          const [textResult] = await Promise.allSettled([
+            textForwarder.handleRequested(req),
+            telegramHandler.handleRequested(req),
+          ]);
+          return textResult.status === "fulfilled" ? textResult.value : false;
+        },
+        handleResolved: async (resolved) => {
+          await Promise.allSettled([
+            textForwarder.handleResolved(resolved),
+            telegramHandler.handleResolved(resolved),
+          ]);
+        },
+        stop: () => {
+          textForwarder.stop();
+          telegramHandler.stop();
+        },
+      };
+    } catch {
+      // Telegram module not available
+    }
+  }
+
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
-    forwarder: execApprovalForwarder,
+    forwarder: composedForwarder,
   });
   const secretsHandlers = createSecretsHandlers({
     reloadSecrets: async () => {
