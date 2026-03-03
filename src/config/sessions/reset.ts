@@ -133,7 +133,7 @@ export function resolveChannelResetConfig(params: {
   if (!key) {
     return undefined;
   }
-  return resetByChannel[key] ?? resetByChannel[key.toLowerCase()] ?? resetByChannel["*"];
+  return resetByChannel[key] ?? resetByChannel[key.toLowerCase()];
 }
 
 export function evaluateSessionFreshness(params: {
