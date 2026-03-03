@@ -1,5 +1,11 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import {
+  isAcpSessionKey,
+  parseAgentSessionKey,
+  isSubagentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -171,6 +177,71 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
   return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`;
 }
 
+function normalizeSessionIdentityKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function resolveSessionIdentityAliases(value: string): Set<string> {
+  const normalized = normalizeSessionIdentityKey(value);
+  const aliases = new Set<string>();
+  if (!normalized) {
+    return aliases;
+  }
+  aliases.add(normalized);
+
+  if (normalized === "main") {
+    aliases.add("agent:main:main");
+    return aliases;
+  }
+
+  const parsed = parseAgentSessionKey(normalized);
+  if (!parsed || parsed.agentId !== "main") {
+    return aliases;
+  }
+
+  // Webchat may surface either full main session keys or their aliases.
+  if (parsed.rest === "main") {
+    aliases.add("main");
+  }
+  if (!parsed.rest.includes(":")) {
+    aliases.add(parsed.rest);
+  }
+  return aliases;
+}
+
+function areEquivalentSessionIdentities(left: string, right: string): boolean {
+  const leftAliases = resolveSessionIdentityAliases(left);
+  const rightAliases = resolveSessionIdentityAliases(right);
+  for (const alias of leftAliases) {
+    if (rightAliases.has(alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasRequesterBoundAcpSession(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+}): boolean {
+  if (!isAcpSessionKey(params.targetSessionKey)) {
+    return false;
+  }
+  const requesterKey = normalizeSessionIdentityKey(params.requesterSessionKey);
+  if (!requesterKey) {
+    return false;
+  }
+  const bindings = getSessionBindingService().listBySession(params.targetSessionKey);
+  return bindings.some((record) => {
+    if (record.status !== "active" || record.targetKind !== "session") {
+      return false;
+    }
+    const channel = record.conversation.channel.trim().toLowerCase();
+    const conversationId = normalizeSessionIdentityKey(record.conversation.conversationId);
+    return channel === "webchat" && areEquivalentSessionIdentities(conversationId, requesterKey);
+  });
+}
+
 export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;
@@ -189,6 +260,15 @@ export async function createSessionVisibilityGuard(params: {
     const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
     const isCrossAgent = targetAgentId !== requesterAgentId;
     if (isCrossAgent) {
+      if (
+        params.action === "send" &&
+        hasRequesterBoundAcpSession({
+          requesterSessionKey: params.requesterSessionKey,
+          targetSessionKey,
+        })
+      ) {
+        return { allowed: true };
+      }
       if (params.visibility !== "all") {
         return {
           allowed: false,
