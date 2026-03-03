@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Doctor/Control UI origin seeding: include loopback/default-bind installs in `gateway.controlUi.allowedOrigins` migration repair so `openclaw doctor` backfills localhost origins after upgrade and avoids Control UI origin-rejection loops. (#33124)
 - Telegram/DM draft finalization reliability: require verified final-text draft emission before treating preview finalization as delivered, and fall back to normal payload send when final draft delivery is not confirmed (preventing missing final responses and preserving media/button delivery). (#32118) Thanks @OpenCils.
 - Discord/audit wildcard warnings: ignore "*" wildcard keys when counting unresolved guild channels so doctor/status no longer warns on allow-all configs. (#33125) Thanks @thewilloftheshadow.
 - Discord/channel resolution: default bare numeric recipients to channels, harden allowlist numeric ID handling with safe fallbacks, and avoid inbound WS heartbeat stalls. (#33142) Thanks @thewilloftheshadow.
