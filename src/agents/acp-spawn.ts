@@ -30,6 +30,7 @@ import {
   isSessionBindingError,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { ensureWebchatSessionBindingAdapterRegistered } from "../infra/outbound/webchat-session-binding-adapter.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -133,17 +134,32 @@ function summarizeError(err: unknown): string {
 }
 
 function resolveConversationIdForThreadBinding(params: {
+  channel?: string;
   to?: string;
   threadId?: string | number;
+  agentSessionKey?: string;
 }): string | undefined {
-  return resolveConversationIdFromTargets({
+  const resolved = resolveConversationIdFromTargets({
     threadId: params.threadId,
     targets: [params.to],
   });
+  if (resolved) {
+    return resolved;
+  }
+
+  const channel = params.channel?.trim().toLowerCase();
+  if (channel === "webchat") {
+    const fallback = params.agentSessionKey?.trim();
+    if (fallback) {
+      return fallback;
+    }
+  }
+  return undefined;
 }
 
 function prepareAcpThreadBinding(params: {
   cfg: OpenClawConfig;
+  agentSessionKey?: string;
   channel?: string;
   accountId?: string;
   to?: string;
@@ -184,6 +200,9 @@ function prepareAcpThreadBinding(params: {
       }),
     };
   }
+  if (policy.channel === "webchat") {
+    ensureWebchatSessionBindingAdapterRegistered(policy.accountId);
+  }
   const bindingService = getSessionBindingService();
   const capabilities = bindingService.getCapabilities({
     channel: policy.channel,
@@ -202,6 +221,8 @@ function prepareAcpThreadBinding(params: {
     };
   }
   const conversationId = resolveConversationIdForThreadBinding({
+    channel: policy.channel,
+    agentSessionKey: params.agentSessionKey,
     to: params.to,
     threadId: params.threadId,
   });
@@ -292,6 +313,7 @@ export async function spawnAcpDirect(
   if (requestThreadBinding) {
     const prepared = prepareAcpThreadBinding({
       cfg,
+      agentSessionKey: ctx.agentSessionKey,
       channel: ctx.agentChannel,
       accountId: ctx.agentAccountId,
       to: ctx.agentTo,

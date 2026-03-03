@@ -33,10 +33,20 @@ export function resolveAcpCommandThreadId(params: HandleCommandsParams): string 
 }
 
 export function resolveAcpCommandConversationId(params: HandleCommandsParams): string | undefined {
-  return resolveConversationIdFromTargets({
+  const resolved = resolveConversationIdFromTargets({
     threadId: params.ctx.MessageThreadId,
     targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
   });
+  if (resolved) {
+    return resolved;
+  }
+  if (resolveAcpCommandChannel(params) === "webchat") {
+    const sessionKey = normalizeString(params.ctx.SessionKey);
+    if (sessionKey) {
+      return sessionKey;
+    }
+  }
+  return undefined;
 }
 
 export function isAcpCommandDiscordChannel(params: HandleCommandsParams): boolean {
