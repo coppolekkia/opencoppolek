@@ -136,4 +136,34 @@ describe("openaiTTSStream", () => {
       }),
     ).rejects.toThrow();
   });
+
+  it("does not abort stream when playback exceeds timeoutMs", async () => {
+    const pcmData = Buffer.alloc(160);
+    // Slow stream that takes longer than timeoutMs to deliver all chunks
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await new Promise((r) => setTimeout(r, 60));
+        controller.enqueue(pcmData);
+        controller.close();
+      },
+    });
+
+    fetchSpy.mockResolvedValueOnce(new Response(stream, { status: 200 }));
+
+    const result = await openaiTTSStream({
+      text: "hello",
+      apiKey: "test-key",
+      model: "gpt-4o-mini-tts",
+      voice: "alloy",
+      responseFormat: "pcm",
+      timeoutMs: 30, // Very short timeout — only covers connection
+    });
+
+    // Stream should complete without abort since timeout is cleared after response
+    const chunks: Buffer[] = [];
+    for await (const chunk of result.stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    expect(Buffer.concat(chunks).length).toBe(160);
+  });
 });

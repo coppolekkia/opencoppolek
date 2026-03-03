@@ -702,6 +702,11 @@ export async function openaiTTSStream(params: {
     throw new Error("OpenAI TTS API returned no body");
   }
 
+  // Clear the connection timeout now that the response body is available.
+  // The timeout should only cover the initial fetch, not playback duration
+  // (which involves per-frame pacing delays that can exceed timeoutMs).
+  clearTimeout(timeout);
+
   const stream = Readable.fromWeb(
     response.body as unknown as import("node:stream/web").ReadableStream,
   );
