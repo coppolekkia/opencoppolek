@@ -37,6 +37,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { hasNonzeroUsage } from "../agents/usage.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import {
   formatThinkingLevels,
@@ -68,6 +69,7 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -76,6 +78,7 @@ import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
@@ -929,6 +932,45 @@ async function agentCommandInternal(
         fallbackProvider,
         fallbackModel,
         result,
+      });
+    }
+
+    // Emit model.usage diagnostic event for OTEL/metrics parity with the
+    // messaging-channel reply path (agent-runner.ts). Fixes #28133.
+    const usage = result.meta?.agentMeta?.usage;
+    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
+      const input = usage.input ?? 0;
+      const output = usage.output ?? 0;
+      const cacheRead = usage.cacheRead ?? 0;
+      const cacheWrite = usage.cacheWrite ?? 0;
+      const promptTokens = input + cacheRead + cacheWrite;
+      const totalTokens = usage.total ?? promptTokens + output;
+      const providerUsed = result.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
+      const modelUsed = result.meta?.agentMeta?.model ?? fallbackModel ?? model;
+      const costConfig = resolveModelCostConfig({
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+      });
+      const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      emitDiagnosticEvent({
+        type: "model.usage",
+        sessionKey,
+        sessionId,
+        channel: opts.replyChannel ?? opts.channel ?? "cli",
+        provider: providerUsed,
+        model: modelUsed,
+        usage: {
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          promptTokens,
+          total: totalTokens,
+        },
+        lastCallUsage: result.meta?.agentMeta?.lastCallUsage,
+        costUsd,
+        durationMs: Date.now() - startedAt,
       });
     }
 
