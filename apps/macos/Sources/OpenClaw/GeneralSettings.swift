@@ -15,6 +15,10 @@ struct GeneralSettings: View {
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
+    @State private var remoteTokenDraft = ""
+    @State private var remoteTokenImportMessage: String?
+    @State private var remoteTokenImportShakeCount = 0
+    @State private var remoteTokenImportInProgress = false
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -166,6 +170,42 @@ struct GeneralSettings: View {
             if self.state.remoteTransport == .ssh {
                 DisclosureGroup(isExpanded: self.$showRemoteAdvanced) {
                     VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent("Gateway token") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                SecureField("Paste gateway.auth.token from remote host", text: self.$remoteTokenDraft)
+                                    .horizontalShake(trigger: self.remoteTokenImportShakeCount)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 280)
+                                    .onSubmit {
+                                        Task { await self.validateAndSaveRemoteGatewayTokenDraft() }
+                                    }
+                                HStack(spacing: 8) {
+                                    Button("Validate & Save") {
+                                        Task { await self.validateAndSaveRemoteGatewayTokenDraft() }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(self.remoteTokenImportInProgress)
+                                    if self.remoteTokenImportInProgress {
+                                        ProgressView().controlSize(.small)
+                                    }
+                                }
+                            }
+                        }
+                        LabeledContent("Token import") {
+                            HStack(spacing: 8) {
+                                Button("Import from clipboard") {
+                                    Task { await self.importRemoteGatewayTokenFromClipboard() }
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(self.remoteTokenImportInProgress)
+                                if let message = self.remoteTokenImportMessage {
+                                    Text(message)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(4)
+                                }
+                            }
+                        }
                         LabeledContent("Identity file") {
                             TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
                                 .textFieldStyle(.roundedBorder)
@@ -229,7 +269,10 @@ struct GeneralSettings: View {
             }
         }
         .transition(.opacity)
-        .onAppear { self.gatewayDiscovery.start() }
+        .onAppear {
+            self.remoteTokenDraft = OpenClawConfigFile.remoteGatewayToken() ?? ""
+            self.gatewayDiscovery.start()
+        }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
 
@@ -616,6 +659,118 @@ extension GeneralSettings {
             options: options,
             remoteCommand: ["echo", "ok"])
         return ["/usr/bin/ssh"] + args
+    }
+
+    @MainActor
+    private func validateAndSaveRemoteGatewayTokenDraft() async {
+        guard !self.remoteTokenImportInProgress else { return }
+        self.remoteTokenImportInProgress = true
+        defer { self.remoteTokenImportInProgress = false }
+
+        let previousToken = OpenClawConfigFile.remoteGatewayToken() ?? ""
+        guard let token = OpenClawConfigFile.extractGatewayToken(self.remoteTokenDraft) else {
+            NSSound.beep()
+            withAnimation(.easeInOut(duration: 0.35)) {
+                self.remoteTokenImportShakeCount += 1
+            }
+            self.remoteTokenImportMessage =
+                "Token rejected. Paste the raw gateway token or a dashboard URL containing #token=..."
+            return
+        }
+        if token == previousToken {
+            self.remoteTokenImportMessage = "Token already matches your current gateway token. No changes made."
+            self.remoteTokenDraft = previousToken
+            return
+        }
+
+        self.remoteTokenImportMessage = "Verifying token with gateway…"
+        do {
+            try await RemoteGatewayTokenVerifier.verify(token: token)
+        } catch {
+            NSSound.beep()
+            withAnimation(.easeInOut(duration: 0.35)) {
+                self.remoteTokenImportShakeCount += 1
+            }
+            self.remoteTokenImportMessage = RemoteGatewayTokenVerifier.failureMessage(for: error)
+            return
+        }
+
+        switch OpenClawConfigFile.setRemoteGatewayToken(token) {
+        case .set:
+            self.remoteTokenDraft = token
+            self.remoteTokenImportMessage = "Token verified and saved to gateway.remote.token."
+        case .unchanged:
+            self.remoteTokenDraft = OpenClawConfigFile.remoteGatewayToken() ?? ""
+            self.remoteTokenImportMessage = "Token already matches your current gateway token. No changes made."
+        case .rejectedInvalid:
+            NSSound.beep()
+            withAnimation(.easeInOut(duration: 0.35)) {
+                self.remoteTokenImportShakeCount += 1
+            }
+            self.remoteTokenImportMessage =
+                "Token rejected. Paste the raw gateway token or a dashboard URL containing #token=..."
+        case .cleared:
+            self.remoteTokenDraft = ""
+            self.remoteTokenImportMessage = "Gateway token cleared."
+        }
+    }
+
+    @MainActor
+    private func importRemoteGatewayTokenFromClipboard() async {
+        guard !self.remoteTokenImportInProgress else { return }
+        self.remoteTokenImportInProgress = true
+        defer { self.remoteTokenImportInProgress = false }
+
+        let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
+        let previousToken = OpenClawConfigFile.remoteGatewayToken() ?? ""
+        guard let token = OpenClawConfigFile.extractGatewayToken(clipboard) else {
+            NSSound.beep()
+            withAnimation(.easeInOut(duration: 0.35)) {
+                self.remoteTokenImportShakeCount += 1
+            }
+            if !previousToken.isEmpty {
+                self.remoteTokenImportMessage =
+                    "Clipboard import rejected (no token found). Kept your existing gateway token. To import a token run `openclaw dashboard --no-open` on the gateway host and copy the URL containing #token=..."
+            } else {
+                self.remoteTokenImportMessage =
+                    "Clipboard has no gateway token. On the gateway host run `openclaw dashboard --no-open`, copy the URL containing #token=..., then import again."
+            }
+            return
+        }
+        if token == previousToken {
+            self.remoteTokenImportMessage = "Clipboard token already matches your current gateway token. No changes made."
+            return
+        }
+        self.remoteTokenImportMessage = "Verifying token with gateway…"
+        do {
+            try await RemoteGatewayTokenVerifier.verify(token: token)
+        } catch {
+            NSSound.beep()
+            withAnimation(.easeInOut(duration: 0.35)) {
+                self.remoteTokenImportShakeCount += 1
+            }
+            self.remoteTokenImportMessage = RemoteGatewayTokenVerifier.failureMessage(for: error)
+            return
+        }
+        switch OpenClawConfigFile.setRemoteGatewayToken(token) {
+        case .set:
+            self.remoteTokenDraft = token
+            self.remoteTokenImportMessage = "Token verified and saved to gateway.remote.token."
+        case .unchanged:
+            self.remoteTokenDraft = OpenClawConfigFile.remoteGatewayToken() ?? ""
+            self.remoteTokenImportMessage = "Clipboard token already matches your current gateway token. No changes made."
+        case .rejectedInvalid:
+            NSSound.beep()
+            withAnimation(.easeInOut(duration: 0.35)) {
+                self.remoteTokenImportShakeCount += 1
+            }
+            self.remoteTokenImportMessage =
+                "Token rejected. Paste the raw gateway token or a dashboard URL containing #token=..."
+        case .cleared:
+            self.remoteTokenDraft = OpenClawConfigFile.remoteGatewayToken() ?? ""
+            self.remoteTokenImportMessage =
+                "Clipboard import rejected. Existing token was kept."
+        }
     }
 
     private func formatSSHFailure(_ response: Response, target: String) -> String {
