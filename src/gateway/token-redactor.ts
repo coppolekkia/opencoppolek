@@ -14,7 +14,7 @@ const SENSITIVE_FIELD_PATTERN =
 
 // util.inspect format: token: 'value' (unquoted keys, single-quoted values)
 const INSPECT_FIELD_PATTERN =
-  /((?:\w*(?:token|password|secret|api_key|apiKey))\w*:\s*')([^']+)(')/gi;
+  /((?:\w*(?:token|password|secret|api_key|apiKey)):\s*')([^']+)(')/gi;
 
 // Case-insensitive per RFC 6750, full token68 charset per RFC 7235.
 const BEARER_PATTERN = /(bearer\s+)([\w\-\.+/=~]+)/gi;
