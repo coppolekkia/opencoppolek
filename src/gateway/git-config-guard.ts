@@ -19,10 +19,13 @@ export function checkConfigInGitRepo(configDir: string): void {
   const resolved = resolve(configDir);
   const gitRoot = findGitRoot(resolved);
   if (gitRoot) {
-    const rel = relative(gitRoot, resolved);
+    // Normalize to forward slashes for .gitignore (Windows compat)
+    const rel = relative(gitRoot, resolved).replace(/\\/g, "/");
+    // If configDir IS the git root, advise ignoring the config file directly
+    const gitignoreEntry = rel === "" ? "openclaw.json" : `${rel}/`;
     console.warn(
-      `[security] WARNING: OpenClaw config directory is inside a git repo (${gitRoot}).` +
-        ` Tokens in openclaw.json may be committed. Add ${rel}/ to .gitignore.`,
+      `[security] WARNING: OpenClaw config directory is inside a git repo (${gitRoot}). ` +
+        `Tokens in openclaw.json may be committed. Add ${gitignoreEntry} to .gitignore.`,
     );
   }
 }
