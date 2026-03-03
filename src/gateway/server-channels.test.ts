@@ -87,8 +87,7 @@ function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
   setActivePluginRegistry(registry);
 }
 
-function createManager() {
-  const log = createSubsystemLogger("gateway/server-channels-test");
+function createManager(log = createSubsystemLogger("gateway/server-channels-test")) {
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
   const runtime = runtimeForLogger(log);
   const channelRuntimeEnvs = { discord: runtime } as Record<ChannelId, RuntimeEnv>;
@@ -151,6 +150,21 @@ describe("server-channels auto restart", () => {
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs and skips plugins without gateway.startAccount", async () => {
+    installTestRegistry(createTestPlugin());
+    const log = createSubsystemLogger("gateway/server-channels-test");
+    const infoSpy = vi.spyOn(log, "info");
+    const manager = createManager(log);
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining("gateway.startAccount is not implemented"),
+    );
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default?.running).toBeFalsy();
   });
 
   it("marks enabled/configured when account descriptors omit them", () => {

@@ -123,6 +123,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const plugin = getChannelPlugin(channelId);
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
+      channelLogs[channelId].info?.(
+        "gateway.startAccount is not implemented; skipping managed channel startup",
+      );
       return;
     }
     const { preserveRestartAttempts = false, preserveManualStop = false } = opts;
