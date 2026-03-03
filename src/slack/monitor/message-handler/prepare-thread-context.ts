@@ -91,9 +91,11 @@ export async function resolveSlackThreadContextData(params: {
   isEffectivelyNewSession = !threadSessionPreviousTimestamp;
   if (threadSessionPreviousTimestamp) {
     // Session exists - check if it's stale (will be reset)
+    // NOTE: Must use provider name (not room ID) to match what initSessionState does
+    // via ctx.OriginatingChannel, so both use the same reset policy lookup
     const channelReset = resolveChannelResetConfig({
       sessionCfg: params.ctx.cfg.session,
-      channel: params.message.channel,
+      channel: "slack",
     });
     const resetPolicy = resolveSessionResetPolicy({
       sessionCfg: params.ctx.cfg.session,
