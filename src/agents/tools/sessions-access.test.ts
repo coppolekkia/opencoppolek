@@ -210,6 +210,32 @@ describe("createSessionVisibilityGuard", () => {
     expect(guard.check("agent:codex:acp:test-3")).toEqual({ allowed: true });
   });
 
+  it("allows ACP sends when binding metadata stores requester session identity", async () => {
+    ensureWebchatSessionBindingAdapterRegistered("default");
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-4",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "channel:legacy-route",
+      },
+      placement: "child",
+      metadata: {
+        requesterSessionKey: "agent:main:main",
+      },
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "main",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:test-4")).toEqual({ allowed: true });
+  });
+
   it("blocks cross-agent send when agent-to-agent is disabled", async () => {
     const guard = await createSessionVisibilityGuard({
       action: "send",

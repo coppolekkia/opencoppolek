@@ -236,6 +236,16 @@ function hasRequesterBoundAcpSession(params: {
     if (record.status !== "active" || record.targetKind !== "session") {
       return false;
     }
+    const metadataRequesterSessionKey =
+      typeof record.metadata?.requesterSessionKey === "string"
+        ? normalizeSessionIdentityKey(record.metadata.requesterSessionKey)
+        : "";
+    if (
+      metadataRequesterSessionKey &&
+      areEquivalentSessionIdentities(metadataRequesterSessionKey, requesterKey)
+    ) {
+      return true;
+    }
     const channel = record.conversation.channel.trim().toLowerCase();
     const conversationId = normalizeSessionIdentityKey(record.conversation.conversationId);
     return channel === "webchat" && areEquivalentSessionIdentities(conversationId, requesterKey);

@@ -153,5 +153,7 @@ describe("spawnAcpDirect (webchat thread mode)", () => {
       conversationId: requesterSessionKey,
     });
     expect(binding?.targetSessionKey).toBe(childSessionKey);
+    const metadata = binding?.metadata as { requesterSessionKey?: string } | undefined;
+    expect(metadata?.requesterSessionKey).toBe(requesterSessionKey);
   });
 });

@@ -153,6 +153,7 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const senderId = commandParams.command.senderId?.trim() || "";
+  const requesterSessionKey = commandParams.ctx.SessionKey?.trim() || undefined;
   if (threadId) {
     const existingBinding = bindingService.resolveByConversation({
       channel: spawnPolicy.channel,
@@ -197,6 +198,7 @@ async function bindSpawnedAcpSessionToThread(params: {
         }),
         agentId: params.agentId,
         label,
+        ...(requesterSessionKey ? { requesterSessionKey } : {}),
         boundBy: senderId || "unknown",
         introText: resolveThreadBindingIntroText({
           agentId: params.agentId,

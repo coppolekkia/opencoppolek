@@ -330,6 +330,7 @@ export async function spawnAcpDirect(
 
   const acpManager = getAcpSessionManager();
   const bindingService = getSessionBindingService();
+  const requesterBindingSessionKey = ctx.agentSessionKey?.trim() || undefined;
   let binding: SessionBindingRecord | null = null;
   let sessionCreated = false;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
@@ -373,6 +374,9 @@ export async function spawnAcpDirect(
           }),
           agentId: targetAgentId,
           label: params.label || undefined,
+          ...(requesterBindingSessionKey
+            ? { requesterSessionKey: requesterBindingSessionKey }
+            : {}),
           boundBy: "system",
           introText: resolveThreadBindingIntroText({
             agentId: targetAgentId,
