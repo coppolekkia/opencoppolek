@@ -33,6 +33,7 @@ import {
   sendMethodNotAllowed,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
+import { ErrorCodes, errorShape } from "./protocol/schema/error-codes.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -303,7 +304,7 @@ export async function handleToolsInvokeHttpRequest(
   if (!tool) {
     sendJson(res, 404, {
       ok: false,
-      error: { type: "not_found", message: `Tool not available: ${toolName}` },
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Tool not available: ${toolName}`),
     });
     return true;
   }
@@ -323,14 +324,17 @@ export async function handleToolsInvokeHttpRequest(
     if (inputStatus !== null) {
       sendJson(res, inputStatus, {
         ok: false,
-        error: { type: "tool_error", message: getErrorMessage(err) || "invalid tool arguments" },
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          getErrorMessage(err) || "invalid tool arguments",
+        ),
       });
       return true;
     }
     logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
     sendJson(res, 500, {
       ok: false,
-      error: { type: "tool_error", message: "tool execution failed" },
+      error: errorShape(ErrorCodes.UNAVAILABLE, "tool execution failed"),
     });
   }
 
