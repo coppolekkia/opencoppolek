@@ -511,12 +511,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .targetSentTimestamp;
       logVerbose(`signal: bare reaction (${emojiLabel}) from ${senderDisplayBare}`);
       if (!isRemove) {
-        // P2: prefer group info from the reaction payload itself; fall back to dataMessage.groupInfo.
-        const bareReactionGroupInfo =
-          (bareReaction as { groupInfo?: { groupId?: string; groupName?: string } | null })
-            .groupInfo ?? dataMessage?.groupInfo;
-        const groupId = bareReactionGroupInfo?.groupId ?? undefined;
-        const groupName = bareReactionGroupInfo?.groupName ?? undefined;
+        // P2: per-field fallback so a present-but-empty reaction.groupInfo doesn't shadow
+        // a populated dataMessage.groupInfo (e.g. Signal emits groupInfo={} on the reaction
+        // envelope while the real groupId/groupName live on dataMessage.groupInfo).
+        const bareReactionGroupInfo = bareReaction as {
+          groupInfo?: { groupId?: string; groupName?: string } | null;
+        };
+        const groupId =
+          bareReactionGroupInfo.groupInfo?.groupId ?? dataMessage?.groupInfo?.groupId ?? undefined;
+        const groupName =
+          bareReactionGroupInfo.groupInfo?.groupName ??
+          dataMessage?.groupInfo?.groupName ??
+          undefined;
         const isGroup = Boolean(groupId);
         // Apply full access policy (dmPolicy/groupPolicy/pairing) — same as handleReactionOnlyInbound.
         const bareAccessDecision = resolveAccessDecision(isGroup);
