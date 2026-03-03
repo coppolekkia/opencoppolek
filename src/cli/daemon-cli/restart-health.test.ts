@@ -96,6 +96,66 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.staleGatewayPids).toEqual([9000]);
   });
 
+  it("treats busy-without-listeners as healthy when runtime is running", async () => {
+    const service = {
+      readRuntime: vi.fn(async () => ({ status: "running", pid: 8100 })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: [],
+      errors: ["Error: spawn lsof ENOENT"],
+    });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.staleGatewayPids).toEqual([]);
+  });
+
+  it("does not treat busy-without-listeners as healthy when no diagnostic errors are present", async () => {
+    const service = {
+      readRuntime: vi.fn(async () => ({ status: "running", pid: 8100 })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: [],
+      errors: [],
+    });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.staleGatewayPids).toEqual([]);
+  });
+
+  it("treats busy-without-listeners as healthy when runtime pid is unavailable", async () => {
+    const service = {
+      readRuntime: vi.fn(async () => ({ status: "running" })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: [],
+      errors: [],
+    });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.staleGatewayPids).toEqual([]);
+  });
+
   it("treats unknown listeners as stale on Windows when enabled", async () => {
     const snapshot = await inspectUnknownListenerFallback({
       runtime: { status: "stopped" },
