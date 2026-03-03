@@ -2,11 +2,6 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { truncateText } from "./format.ts";
 
-marked.setOptions({
-  gfm: true,
-  breaks: true,
-});
-
 const allowedTags = [
   "a",
   "b",
@@ -118,6 +113,8 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   const rendered = marked.parse(`${truncated.text}${suffix}`, {
     renderer: htmlEscapeRenderer,
+    gfm: true,
+    breaks: true,
   }) as string;
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   const enhanced = decorateDiffCodeBlocks(sanitized);

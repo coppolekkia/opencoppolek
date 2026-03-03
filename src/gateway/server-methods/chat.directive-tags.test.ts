@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { GATEWAY_CLIENT_CAPS } from "../protocol/client-info.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -34,6 +35,7 @@ vi.mock("../session-utils.js", async (importOriginal) => {
       entry: {
         sessionId: mockState.sessionId,
         sessionFile: mockState.transcriptPath,
+        ...mockState.sessionEntry,
       },
       canonicalKey: "main",
     }),

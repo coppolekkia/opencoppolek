@@ -8,6 +8,7 @@ import {
 } from "../sessions/session-key-utils.js";
 import {
   classifySessionKeyShape,
+  isValidAgentId,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "./session-key.js";
