@@ -14,7 +14,8 @@ const SENSITIVE_FIELD_PATTERN =
 const INSPECT_FIELD_PATTERN =
   /((?:\w*(?:token|password|secret|api_key|apiKey))\w*:\s*')([^']+)(')/gi;
 
-const BEARER_PATTERN = /(bearer\s+)([\w\-\.+/=~]+)/gi;
+// Match any non-whitespace after "Bearer" — covers all opaque token formats
+const BEARER_PATTERN = /(bearer\s+)(\S+)/gi;
 
 export function mask(token: string): string {
   if (token.length <= 16) return "****";
@@ -80,7 +81,6 @@ let savedOriginals: Record<string, (...args: any[]) => void> = {};
 
 export function installLogRedaction(): void {
   if (installed) return;
-  installed = true;
 
   const methods = [
     "log", "info", "debug", "warn", "error", "trace", "dir", "table",
@@ -94,6 +94,8 @@ export function installLogRedaction(): void {
       savedOriginals[level].apply(console, redacted);
     };
   }
+
+  installed = true; // set only after all methods are patched
 }
 
 export function uninstallLogRedaction(): void {
