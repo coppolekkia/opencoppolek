@@ -8,7 +8,7 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
-  waitForAbortSignal,
+  waitUntilAbort,
   type ChannelPlugin,
   type OpenClawConfig,
   type ChannelSetupInput,
@@ -334,7 +334,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       });
 
       // Keep webhook channels pending for the account lifecycle.
-      await waitForAbortSignal(ctx.abortSignal);
+      await waitUntilAbort(ctx.abortSignal);
       stop();
     },
     logoutAccount: async ({ accountId, cfg }) => {
