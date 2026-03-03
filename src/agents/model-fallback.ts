@@ -3,6 +3,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -441,6 +442,8 @@ export async function runWithModelFallback<T>(params: {
   fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
+  /** When provided, a system event is enqueued on successful fallback so the agent is aware of the model switch. */
+  sessionKey?: string;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
@@ -502,6 +505,15 @@ export async function runWithModelFallback<T>(params: {
 
     const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
     if ("success" in attemptRun) {
+      if (i > 0 && params.sessionKey) {
+        const primary = candidates[0];
+        const lastAttempt = attempts[attempts.length - 1];
+        const reason = lastAttempt?.reason ?? "unknown";
+        enqueueSystemEvent(
+          `Model fallback: ${primary.provider}/${primary.model} → ${candidate.provider}/${candidate.model} (reason: ${reason})`,
+          { sessionKey: params.sessionKey },
+        );
+      }
       return attemptRun.success;
     }
     const err = attemptRun.error;
