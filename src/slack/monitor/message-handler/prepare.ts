@@ -639,6 +639,8 @@ export async function prepareSlackMessage(params: {
   }
 
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
+  // For channels, use the actual channel ID as OriginatingChannel so session reset config can match
+  const originatingChannel = isDirectMessage ? "slack" : message.channel;
 
   const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
     isRoomish,
@@ -724,7 +726,7 @@ export async function prepareSlackMessage(params: {
         ? effectiveMedia.map((m) => m.contentType ?? "")
         : undefined,
     CommandAuthorized: commandAuthorized,
-    OriginatingChannel: "slack" as const,
+    OriginatingChannel: originatingChannel,
     OriginatingTo: slackTo,
   }) satisfies FinalizedMsgContext;
   const pinnedMainDmOwner = isDirectMessage
