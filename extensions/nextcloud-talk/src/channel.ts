@@ -8,11 +8,11 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
+  waitForAbortSignal,
   type ChannelPlugin,
   type OpenClawConfig,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk";
-import { waitForAbortSignal } from "openclaw/plugin-sdk";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
