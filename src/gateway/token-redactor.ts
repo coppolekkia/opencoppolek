@@ -46,12 +46,11 @@ function stringify(arg: any): any {
       const val = (arg as any)[key];
       if (typeof val === "string") {
         (clone as any)[key] = redactTokens(val);
-      } else if (typeof val === "object" && val !== null) {
-        try {
-          (clone as any)[key] = JSON.parse(redactTokens(JSON.stringify(val)));
-        } catch {
-          (clone as any)[key] = "[nested object: redaction failed]";
-        }
+} catch {
+  (clone as any)[key] = redactTokens(
+    inspect(val, { depth: 3, maxStringLength: 200, breakLength: Infinity }),
+  );
+}
       } else {
         (clone as any)[key] = val;
       }
