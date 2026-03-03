@@ -1,5 +1,11 @@
 import { randomBytes } from "crypto";
-import { readFileSync, writeFileSync, renameSync, unlinkSync } from "fs";
+import {
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  unlinkSync,
+  chmodSync,
+} from "fs";
 import { dirname, join } from "path";
 import { mask } from "./token-redactor.js";
 
@@ -14,18 +20,13 @@ function generateToken(bytes: number = 24): string {
   return randomBytes(bytes).toString("hex");
 }
 
-/**
- * Atomically write content to a file.
- * Forces 0o600 permissions to match the main config writer
- * (src/config/io.ts). On Windows, falls back gracefully if
- * rename fails due to EPERM/EEXIST.
- */
 function atomicWriteFileSync(filePath: string, content: string): void {
   const dir = dirname(filePath);
   const tmpPath = join(dir, `.openclaw-tmp-${process.pid}-${Date.now()}`);
 
   try {
     writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
+    chmodSync(tmpPath, 0o600); // enforce regardless of umask
   } catch (writeErr) {
     try { unlinkSync(tmpPath); } catch { /* ignore */ }
     throw writeErr;
@@ -39,7 +40,6 @@ function atomicWriteFileSync(filePath: string, content: string): void {
         unlinkSync(filePath);
         renameSync(tmpPath, filePath);
       } catch (fallbackErr: any) {
-        // Do NOT delete tmpPath — it is the only copy of the new config.
         const recovery = new Error(
           `Failed to write config. New config preserved at ${tmpPath}. ` +
             `Rename it to ${filePath} manually to recover.`,
@@ -54,13 +54,6 @@ function atomicWriteFileSync(filePath: string, content: string): void {
   }
 }
 
-/**
- * Rotate the gateway auth token in the config file.
- * Callers should serialize rotation attempts (single-operator model).
- *
- * Note: Uses JSON.parse. If configs adopt JSON5 (comments, trailing
- * commas), switch to parseConfigJson5 from src/config/io.ts.
- */
 export function rotateToken(configPath: string): RotationResult {
   const raw = readFileSync(configPath, "utf-8");
   const config = JSON.parse(raw);
