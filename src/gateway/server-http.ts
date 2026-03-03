@@ -59,6 +59,7 @@ import {
   type PluginHttpRequestHandler,
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
+import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -154,6 +155,7 @@ function handleGatewayProbeRequest(
   req: IncomingMessage,
   res: ServerResponse,
   requestPath: string,
+  getReadiness?: ReadinessChecker,
 ): boolean {
   const status = GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath);
   if (!status) {
@@ -169,14 +171,28 @@ function handleGatewayProbeRequest(
     return true;
   }
 
-  res.statusCode = 200;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
-  if (method === "HEAD") {
-    res.end();
-    return true;
+
+  let statusCode: number;
+  let body: string;
+
+  if (status === "ready" && getReadiness) {
+    try {
+      const result = getReadiness();
+      statusCode = result.ready ? 200 : 503;
+      body = JSON.stringify(result);
+    } catch {
+      statusCode = 503;
+      body = JSON.stringify({ ready: false, failing: ["internal"], uptimeMs: 0 });
+    }
+  } else {
+    statusCode = 200;
+    body = JSON.stringify({ ok: true, status });
   }
-  res.end(JSON.stringify({ ok: true, status }));
+
+  res.statusCode = statusCode;
+  res.end(method !== "HEAD" ? body : undefined);
   return true;
 }
 
@@ -518,6 +534,7 @@ export function createGatewayHttpServer(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
@@ -535,6 +552,7 @@ export function createGatewayHttpServer(opts: {
     shouldEnforcePluginGatewayAuth,
     resolvedAuth,
     rateLimiter,
+    getReadiness,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -572,6 +590,11 @@ export function createGatewayHttpServer(opts: {
         ? resolvePluginRoutePathContext(requestPath)
         : null;
       const requestStages: GatewayHttpRequestStage[] = [
+        // Probes run first — unauthenticated, must never be shadowed by SPA catch-alls.
+        {
+          name: "gateway-probes",
+          run: () => handleGatewayProbeRequest(req, res, requestPath, getReadiness),
+        },
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
@@ -687,11 +710,6 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-
-      requestStages.push({
-        name: "gateway-probes",
-        run: () => handleGatewayProbeRequest(req, res, requestPath),
-      });
 
       if (await runGatewayHttpRequestStages(requestStages)) {
         return;
