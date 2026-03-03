@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { __testing as sessionBindingTesting, getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import {
+  __testing as webchatBindingTesting,
+  ensureWebchatSessionBindingAdapterRegistered,
+} from "../../infra/outbound/webchat-session-binding-adapter.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
@@ -8,6 +13,11 @@ import {
   resolveSandboxedSessionToolContext,
   resolveSessionToolsVisibility,
 } from "./sessions-access.js";
+
+beforeEach(() => {
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  webchatBindingTesting.resetWebchatSessionBindingAdaptersForTests();
+});
 
 describe("resolveSessionToolsVisibility", () => {
   it("defaults to tree when unset or invalid", () => {
@@ -108,6 +118,124 @@ describe("createAgentToAgentPolicy", () => {
 });
 
 describe("createSessionVisibilityGuard", () => {
+  it("allows cross-agent sends to ACP sessions bound to the current webchat conversation", async () => {
+    ensureWebchatSessionBindingAdapterRegistered("default");
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-1",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:main",
+      },
+      placement: "child",
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "agent:main:main",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:test-1")).toEqual({ allowed: true });
+  });
+
+  it("treats main alias and canonical session key as equivalent for webchat ACP bindings", async () => {
+    ensureWebchatSessionBindingAdapterRegistered("default");
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-1",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:main",
+      },
+      placement: "child",
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "main",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:test-1")).toEqual({ allowed: true });
+  });
+
+  it("treats canonical requester key as equivalent when webchat binding stores main alias", async () => {
+    ensureWebchatSessionBindingAdapterRegistered("default");
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-2",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "main",
+      },
+      placement: "child",
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "agent:main:main",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:test-2")).toEqual({ allowed: true });
+  });
+
+  it("treats custom main-key aliases as equivalent for webchat ACP bindings", async () => {
+    ensureWebchatSessionBindingAdapterRegistered("default");
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-3",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:inbox",
+      },
+      placement: "child",
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "inbox",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:test-3")).toEqual({ allowed: true });
+  });
+
+  it("allows ACP sends when binding metadata stores requester session identity", async () => {
+    ensureWebchatSessionBindingAdapterRegistered("default");
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-4",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "channel:legacy-route",
+      },
+      placement: "child",
+      metadata: {
+        requesterSessionKey: "agent:main:main",
+      },
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "main",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:codex:acp:test-4")).toEqual({ allowed: true });
+  });
+
   it("blocks cross-agent send when agent-to-agent is disabled", async () => {
     const guard = await createSessionVisibilityGuard({
       action: "send",

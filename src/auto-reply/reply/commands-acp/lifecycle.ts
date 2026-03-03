@@ -33,6 +33,7 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { ensureWebchatSessionBindingAdapterRegistered } from "../../../infra/outbound/webchat-session-binding-adapter.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpCommandAccountId,
@@ -104,6 +105,9 @@ async function bindSpawnedAcpSessionToThread(params: {
     };
   }
 
+  if (spawnPolicy.channel === "webchat") {
+    ensureWebchatSessionBindingAdapterRegistered(spawnPolicy.accountId);
+  }
   const bindingService = getSessionBindingService();
   const capabilities = bindingService.getCapabilities({
     channel: spawnPolicy.channel,
@@ -149,6 +153,7 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const senderId = commandParams.command.senderId?.trim() || "";
+  const requesterSessionKey = commandParams.ctx.SessionKey?.trim() || undefined;
   if (threadId) {
     const existingBinding = bindingService.resolveByConversation({
       channel: spawnPolicy.channel,
@@ -193,6 +198,7 @@ async function bindSpawnedAcpSessionToThread(params: {
         }),
         agentId: params.agentId,
         label,
+        ...(requesterSessionKey ? { requesterSessionKey } : {}),
         boundBy: senderId || "unknown",
         introText: resolveThreadBindingIntroText({
           agentId: params.agentId,

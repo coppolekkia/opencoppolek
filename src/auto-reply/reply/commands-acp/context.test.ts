@@ -48,4 +48,21 @@ describe("commands-acp context", () => {
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
     expect(isAcpCommandDiscordChannel(params)).toBe(false);
   });
+
+  it("falls back to SessionKey as conversation id for webchat", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      SessionKey: "agent:main:main",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "webchat",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "agent:main:main",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("agent:main:main");
+  });
 });

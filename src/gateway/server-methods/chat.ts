@@ -12,6 +12,7 @@ import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { resolveSessionThreadInfo } from "../../sessions/session-key-utils.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -80,6 +81,14 @@ function stripDisallowedChatControlChars(message: string): string {
     }
   }
   return output;
+}
+
+function normalizeOptionalNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized || undefined;
 }
 
 export function sanitizeChatSendMessageInput(
@@ -720,6 +729,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: string;
       thinking?: string;
       deliver?: boolean;
+      threadId?: string;
+      threadLabel?: string;
+      parentSessionKey?: string;
       attachments?: Array<{
         type?: string;
         mimeType?: string;
@@ -857,9 +869,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         : INTERNAL_MESSAGE_CHANNEL;
       const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
       const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
-      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
+      const threadInfo = resolveSessionThreadInfo(rawSessionKey);
+      const explicitThreadId = normalizeOptionalNonEmptyString(p.threadId);
+      const explicitParentSessionKey = normalizeOptionalNonEmptyString(p.parentSessionKey);
+      const explicitThreadLabel = normalizeOptionalNonEmptyString(p.threadLabel);
+      const messageThreadId =
+        explicitThreadId ??
+        threadInfo.threadId ??
+        (hasDeliverableRoute ? routeThreadIdCandidate : undefined);
+      const parentSessionKey = explicitParentSessionKey ?? threadInfo.parentSessionKey ?? undefined;
       // Inject timestamp so agents know the current date/time.
-      // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
+      // Only BodyForAgent gets the timestamp 鈥?Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
 
@@ -879,6 +899,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         ChatType: "direct",
         CommandAuthorized: true,
         MessageSid: clientRunId,
+        ParentSessionKey: parentSessionKey,
+        ThreadLabel: explicitThreadLabel,
         SenderId: clientInfo?.id,
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
