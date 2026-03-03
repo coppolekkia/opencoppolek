@@ -7,6 +7,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import { getDateStampUTC } from "./date-time.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
 export function resolveDefaultAgentWorkspaceDir(
@@ -541,10 +542,14 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
+      const content =
+        entry.name === DEFAULT_AGENTS_FILENAME
+          ? loaded.content.replaceAll("YYYY-MM-DD", getDateStampUTC())
+          : loaded.content;
       result.push({
         name: entry.name,
         path: entry.filePath,
-        content: loaded.content,
+        content,
         missing: false,
       });
     } else {
@@ -629,10 +634,14 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
+      const content =
+        baseName === DEFAULT_AGENTS_FILENAME
+          ? loaded.content.replaceAll("YYYY-MM-DD", getDateStampUTC())
+          : loaded.content;
       files.push({
         name: baseName as WorkspaceBootstrapFileName,
         path: filePath,
-        content: loaded.content,
+        content,
         missing: false,
       });
       continue;
