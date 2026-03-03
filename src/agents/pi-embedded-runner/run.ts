@@ -54,7 +54,7 @@ import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
+import { rollbackEmbeddedAttemptSession, runEmbeddedAttempt } from "./run/attempt.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -784,6 +784,29 @@ export async function runEmbeddedPiAgent(
             sessionIdUsed,
             lastAssistant,
           } = attempt;
+          const rollbackRetryAttempt = async (reason: string): Promise<void> => {
+            if ((attempt.compactionCount ?? 0) > 0) {
+              return;
+            }
+            try {
+              await rollbackEmbeddedAttemptSession({
+                sessionFile: params.sessionFile,
+                baseEntryId: attempt.retryBranchBaseEntryId,
+              });
+              if (log.isEnabled("debug")) {
+                log.debug(
+                  `[retry-rewind] restored session branch before retry ` +
+                    `reason=${reason} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                    `baseEntryId=${attempt.retryBranchBaseEntryId ?? "root"}`,
+                );
+              }
+            } catch (err) {
+              log.warn(
+                `[retry-rewind] failed before retry reason=${reason} ` +
+                  `sessionKey=${params.sessionKey ?? params.sessionId} error=${String(err)}`,
+              );
+            }
+          };
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
@@ -1060,6 +1083,7 @@ export async function runEmbeddedPiAgent(
               promptFailoverReason !== "timeout" &&
               (await advanceAuthProfile())
             ) {
+              await rollbackRetryAttempt("prompt_failover_profile_rotate");
               continue;
             }
             const fallbackThinking = pickFallbackThinkingLevel({
@@ -1067,6 +1091,7 @@ export async function runEmbeddedPiAgent(
               attempted: attemptedThinking,
             });
             if (fallbackThinking) {
+              await rollbackRetryAttempt("prompt_fallback_thinking");
               log.warn(
                 `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
               );
@@ -1076,6 +1101,7 @@ export async function runEmbeddedPiAgent(
             // FIX: Throw FailoverError for prompt errors when fallbacks configured
             // This enables model fallback for quota/rate limit errors during prompt submission
             if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
+              await rollbackRetryAttempt("prompt_model_fallback");
               throw new FailoverError(errorText, {
                 reason: promptFailoverReason ?? "unknown",
                 provider,
@@ -1092,6 +1118,7 @@ export async function runEmbeddedPiAgent(
             attempted: attemptedThinking,
           });
           if (fallbackThinking && !aborted) {
+            await rollbackRetryAttempt("assistant_fallback_thinking");
             log.warn(
               `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
@@ -1166,6 +1193,7 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
+              await rollbackRetryAttempt("assistant_failover_profile_rotate");
               continue;
             }
 
@@ -1196,6 +1224,7 @@ export async function runEmbeddedPiAgent(
               const status =
                 resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
+              await rollbackRetryAttempt("assistant_model_fallback");
               throw new FailoverError(message, {
                 reason: assistantFailoverReason ?? "unknown",
                 provider: activeErrorContext.provider,

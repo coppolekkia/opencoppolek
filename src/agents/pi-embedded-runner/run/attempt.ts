@@ -414,6 +414,26 @@ export function wrapStreamFnTrimToolCallNames(
   };
 }
 
+export async function rollbackEmbeddedAttemptSession(params: {
+  sessionFile: string;
+  baseEntryId?: string | null;
+}): Promise<void> {
+  const sessionLock = await acquireSessionWriteLock({
+    sessionFile: params.sessionFile,
+  });
+  try {
+    const sessionManager = SessionManager.open(params.sessionFile);
+    const baseEntryId = params.baseEntryId?.trim();
+    if (baseEntryId) {
+      sessionManager.branch(baseEntryId);
+      return;
+    }
+    sessionManager.resetLeaf();
+  } finally {
+    await sessionLock.release();
+  }
+}
+
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
@@ -1344,6 +1364,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
+      let retryBranchBaseEntryId: string | null = null;
       try {
         const promptStartedAt = Date.now();
 
@@ -1403,6 +1424,7 @@ export async function runEmbeddedAttempt(
               `runId=${params.runId} sessionId=${params.sessionId}`,
           );
         }
+        retryBranchBaseEntryId = sessionManager.getLeafEntry()?.id ?? null;
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
@@ -1696,6 +1718,7 @@ export async function runEmbeddedAttempt(
         ),
         attemptUsage: getUsageTotals(),
         compactionCount: getCompactionCount(),
+        retryBranchBaseEntryId,
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
       };
