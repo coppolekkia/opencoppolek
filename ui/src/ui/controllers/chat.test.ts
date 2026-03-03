@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   handleChatEvent,
+  loadChatHistory,
   sendChatMessage,
   syncChatHistoryDuringRun,
   type ChatEventPayload,

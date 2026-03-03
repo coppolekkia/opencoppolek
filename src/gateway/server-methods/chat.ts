@@ -852,11 +852,31 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      const routeChannelCandidate = normalizeMessageChannel(
+        entry?.deliveryContext?.channel ?? entry?.lastChannel,
+      );
+      const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
+      const routeAccountIdCandidate =
+        entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
+      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      const hasDeliverableRoute =
+        routeChannelCandidate &&
+        routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
+        typeof routeToCandidate === "string" &&
+        routeToCandidate.trim().length > 0;
+      const originatingChannel = hasDeliverableRoute
+        ? routeChannelCandidate
+        : INTERNAL_MESSAGE_CHANNEL;
+      const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
+      const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
       const threadInfo = resolveSessionThreadInfo(rawSessionKey);
       const explicitThreadId = normalizeOptionalNonEmptyString(p.threadId);
       const explicitParentSessionKey = normalizeOptionalNonEmptyString(p.parentSessionKey);
       const explicitThreadLabel = normalizeOptionalNonEmptyString(p.threadLabel);
-      const messageThreadId = explicitThreadId ?? threadInfo.threadId ?? undefined;
+      const messageThreadId =
+        explicitThreadId ??
+        threadInfo.threadId ??
+        (hasDeliverableRoute ? routeThreadIdCandidate : undefined);
       const parentSessionKey = explicitParentSessionKey ?? threadInfo.parentSessionKey ?? undefined;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp 鈥?Body stays raw for UI display.
@@ -879,7 +899,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         ChatType: "direct",
         CommandAuthorized: true,
         MessageSid: clientRunId,
-        MessageThreadId: messageThreadId,
         ParentSessionKey: parentSessionKey,
         ThreadLabel: explicitThreadLabel,
         SenderId: clientInfo?.id,
