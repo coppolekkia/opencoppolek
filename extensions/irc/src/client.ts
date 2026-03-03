@@ -81,13 +81,15 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
   });
 }
 
-function buildFallbackNick(nick: string): string {
+const MAX_FALLBACK_NICK_ATTEMPTS = 5;
+
+export function buildFallbackNick(nick: string, attempt = 0): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-\[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
-  const suffix = "_";
+  const suffix = attempt <= 0 ? "_" : `_${attempt}`;
   const maxNickLen = 30;
-  if (base.length >= maxNickLen) {
+  if (base.length + suffix.length > maxNickLen) {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
   }
   return `${base}${suffix}`;
@@ -130,7 +132,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let ready = false;
   let closed = false;
   let nickServRecoverAttempted = false;
-  let fallbackNickAttempted = false;
+  let fallbackNickAttempt = 0;
 
   const socket = options.tls
     ? tls.connect({
@@ -184,9 +186,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       }
     }
 
-    if (!fallbackNickAttempted) {
-      fallbackNickAttempted = true;
-      const fallbackNick = buildFallbackNick(desiredNick);
+    if (fallbackNickAttempt < MAX_FALLBACK_NICK_ATTEMPTS) {
+      const fallbackNick = buildFallbackNick(desiredNick, fallbackNickAttempt);
+      fallbackNickAttempt++;
       if (fallbackNick.toLowerCase() !== currentNick.toLowerCase()) {
         try {
           sendRaw(`NICK ${fallbackNick}`);
