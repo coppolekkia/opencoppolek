@@ -5,6 +5,8 @@ import {
   renameSync,
   unlinkSync,
   chmodSync,
+  openSync,
+  closeSync,
 } from "fs";
 import { dirname, join } from "path";
 import { mask } from "./token-redactor.js";
@@ -26,7 +28,7 @@ function atomicWriteFileSync(filePath: string, content: string): void {
 
   try {
     writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
-    chmodSync(tmpPath, 0o600); // enforce regardless of umask
+    chmodSync(tmpPath, 0o600);
   } catch (writeErr) {
     try { unlinkSync(tmpPath); } catch { /* ignore */ }
     throw writeErr;
@@ -54,29 +56,52 @@ function atomicWriteFileSync(filePath: string, content: string): void {
   }
 }
 
-export function rotateToken(configPath: string): RotationResult {
-  const raw = readFileSync(configPath, "utf-8");
-  const config = JSON.parse(raw);
-
-  if (typeof config !== "object" || config === null || Array.isArray(config)) {
-    throw new Error(
-      `Cannot rotate: ${configPath} does not contain a JSON object`,
-    );
-  }
-
-  const oldToken: string = config?.gateway?.auth?.token || "";
-  const newToken = generateToken();
-
-  if (!config.gateway) config.gateway = {};
-  if (!config.gateway.auth) config.gateway.auth = {};
-  config.gateway.auth.token = newToken;
-
-  atomicWriteFileSync(configPath, JSON.stringify(config, null, 2));
-
-  return {
-    previousTokenPrefix: oldToken ? mask(oldToken) : "(none)",
-    newTokenPrefix: mask(newToken),
-    rotatedAt: new Date().toISOString(),
-    configPath,
+/**
+ * Acquire an exclusive lockfile. Returns a release function.
+ * Prevents TOCTOU races when multiple callers rotate concurrently.
+ */
+function acquireLock(configPath: string): () => void {
+  const lockPath = `${configPath}.lock`;
+  const fd = openSync(lockPath, "wx"); // fails if lock exists
+  return () => {
+    closeSync(fd);
+    try { unlinkSync(lockPath); } catch { /* ignore */ }
   };
+}
+
+/**
+ * Rotate the gateway auth token in the config file.
+ * Uses an exclusive lockfile to prevent concurrent rotation races.
+ */
+export function rotateToken(configPath: string): RotationResult {
+  const releaseLock = acquireLock(configPath);
+
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    const config = JSON.parse(raw);
+
+    if (typeof config !== "object" || config === null || Array.isArray(config)) {
+      throw new Error(
+        `Cannot rotate: ${configPath} does not contain a JSON object`,
+      );
+    }
+
+    const oldToken: string = config?.gateway?.auth?.token || "";
+    const newToken = generateToken();
+
+    if (!config.gateway) config.gateway = {};
+    if (!config.gateway.auth) config.gateway.auth = {};
+    config.gateway.auth.token = newToken;
+
+    atomicWriteFileSync(configPath, JSON.stringify(config, null, 2));
+
+    return {
+      previousTokenPrefix: oldToken ? mask(oldToken) : "(none)",
+      newTokenPrefix: mask(newToken),
+      rotatedAt: new Date().toISOString(),
+      configPath,
+    };
+  } finally {
+    releaseLock();
+  }
 }
