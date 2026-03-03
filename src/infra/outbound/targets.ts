@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
+import { resolveBoundAccountId } from "../../routing/bindings.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { parseTelegramTarget, resolveTelegramTargetChatType } from "../../telegram/targets.js";
@@ -173,6 +174,7 @@ export function resolveOutboundTarget(params: {
   allowFrom?: string[];
   cfg?: OpenClawConfig;
   accountId?: string | null;
+  agentId?: string;
   mode?: ChannelOutboundTargetMode;
 }): OutboundTargetResolution {
   if (params.channel === INTERNAL_MESSAGE_CHANNEL) {
@@ -195,12 +197,21 @@ export function resolveOutboundTarget(params: {
     };
   }
 
+  // Resolve accountId - check in order: explicit, bound account, default
+  let effectiveAccountId = params.accountId ?? undefined;
+  if (!effectiveAccountId && params.agentId && params.cfg) {
+    const boundAccountId = resolveBoundAccountId(params.cfg, params.agentId, params.channel);
+    if (boundAccountId) {
+      effectiveAccountId = boundAccountId;
+    }
+  }
+
   const allowFromRaw =
     params.allowFrom ??
     (params.cfg && plugin.config.resolveAllowFrom
       ? plugin.config.resolveAllowFrom({
           cfg: params.cfg,
-          accountId: params.accountId ?? undefined,
+          accountId: effectiveAccountId ?? undefined,
         })
       : undefined);
   const allowFrom = allowFromRaw?.map((entry) => String(entry));
@@ -211,7 +222,7 @@ export function resolveOutboundTarget(params: {
     (params.cfg && plugin.config.resolveDefaultTo
       ? plugin.config.resolveDefaultTo({
           cfg: params.cfg,
-          accountId: params.accountId ?? undefined,
+          accountId: effectiveAccountId ?? undefined,
         })
       : undefined);
 
@@ -221,7 +232,7 @@ export function resolveOutboundTarget(params: {
       cfg: params.cfg,
       to: effectiveTo,
       allowFrom,
-      accountId: params.accountId ?? undefined,
+      accountId: effectiveAccountId ?? undefined,
       mode: params.mode ?? "explicit",
     });
   }

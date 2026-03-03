@@ -63,6 +63,7 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
     to,
     cfg,
     accountId: origin?.accountId,
+    agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
     mode: "implicit",
   });
   if (!resolved.ok) {

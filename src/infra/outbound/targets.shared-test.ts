@@ -100,6 +100,64 @@ export function runResolveOutboundTargetCoreTests(): void {
       }
     });
 
+    it("resolves accountId from agent binding when not explicitly provided", () => {
+      const cfg = {
+        bindings: [
+          {
+            agentId: "maestro",
+            match: { channel: "telegram", accountId: "maestro_account" },
+          },
+        ],
+      };
+      const res = resolveOutboundTarget({
+        channel: "telegram",
+        to: "123456789",
+        cfg,
+        agentId: "maestro",
+        mode: "explicit",
+      });
+      expect(res.ok).toBe(true);
+    });
+
+    it("prefers explicit accountId over agent binding", () => {
+      const cfg = {
+        bindings: [
+          {
+            agentId: "maestro",
+            match: { channel: "telegram", accountId: "maestro_account" },
+          },
+        ],
+      };
+      const res = resolveOutboundTarget({
+        channel: "telegram",
+        to: "123456789",
+        cfg,
+        accountId: "explicit_account",
+        agentId: "maestro",
+        mode: "explicit",
+      });
+      expect(res.ok).toBe(true);
+    });
+
+    it("falls back to default account when agent binding not found", () => {
+      const cfg = {
+        bindings: [
+          {
+            agentId: "maestro",
+            match: { channel: "telegram", accountId: "maestro_account" },
+          },
+        ],
+      };
+      const res = resolveOutboundTarget({
+        channel: "telegram",
+        to: "123456789",
+        cfg,
+        agentId: "unknown_agent",
+        mode: "explicit",
+      });
+      expect(res.ok).toBe(true);
+    });
+
     it("rejects telegram with missing target", () => {
       const res = resolveOutboundTarget({ channel: "telegram", to: " " });
       expect(res.ok).toBe(false);

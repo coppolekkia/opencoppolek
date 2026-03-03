@@ -60,27 +60,37 @@ export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): str
   return Array.from(ids).toSorted((a, b) => a.localeCompare(b));
 }
 
-export function resolveDefaultAgentBoundAccountId(
+export function resolveBoundAccountId(
   cfg: OpenClawConfig,
+  agentId: string,
   channelId: string,
 ): string | null {
   const normalizedChannel = normalizeBindingChannelId(channelId);
   if (!normalizedChannel) {
     return null;
   }
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const normalizedAgentId = normalizeAgentId(agentId);
   for (const binding of listBindings(cfg)) {
     const resolved = resolveNormalizedBindingMatch(binding);
     if (
       !resolved ||
       resolved.channelId !== normalizedChannel ||
-      resolved.agentId !== defaultAgentId
+      resolved.agentId !== normalizedAgentId
     ) {
       continue;
     }
     return resolved.accountId;
   }
   return null;
+}
+
+export function resolveDefaultAgentBoundAccountId(
+  cfg: OpenClawConfig,
+  channelId: string,
+): string | null {
+  // Delegate to resolveBoundAccountId using the repository default agent.
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  return resolveBoundAccountId(cfg, defaultAgentId, channelId);
 }
 
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {

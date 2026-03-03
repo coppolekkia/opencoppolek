@@ -180,11 +180,25 @@ export const sendHandlers: GatewayRequestHandlers = {
 
     const work = (async (): Promise<InflightResult> => {
       try {
+        const providedSessionKey =
+          typeof request.sessionKey === "string" && request.sessionKey.trim()
+            ? request.sessionKey.trim().toLowerCase()
+            : undefined;
+        const explicitAgentId =
+          typeof request.agentId === "string" && request.agentId.trim()
+            ? request.agentId.trim()
+            : undefined;
+        const sessionAgentId = providedSessionKey
+          ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+          : undefined;
+        const defaultAgentId = resolveSessionAgentId({ config: cfg });
+        const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
         const resolved = resolveOutboundTarget({
           channel: outboundChannel,
           to,
           cfg,
           accountId,
+          agentId: effectiveAgentId,
           mode: "explicit",
         });
         if (!resolved.ok) {
@@ -205,19 +219,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         const mirrorMediaUrls = mirrorPayloads.flatMap(
           (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
         );
-        const providedSessionKey =
-          typeof request.sessionKey === "string" && request.sessionKey.trim()
-            ? request.sessionKey.trim().toLowerCase()
-            : undefined;
-        const explicitAgentId =
-          typeof request.agentId === "string" && request.agentId.trim()
-            ? request.agentId.trim()
-            : undefined;
-        const sessionAgentId = providedSessionKey
-          ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
-          : undefined;
-        const defaultAgentId = resolveSessionAgentId({ config: cfg });
-        const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
         // If callers omit sessionKey, derive a target session key from the outbound route.
         const derivedRoute = !providedSessionKey
           ? await resolveOutboundSessionRoute({
@@ -400,6 +401,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
+      const defaultAgentId = resolveSessionAgentId({ config: cfg });
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       const outbound = plugin?.outbound;
       if (!outbound?.sendPoll) {
@@ -415,6 +417,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         to,
         cfg,
         accountId,
+        agentId: defaultAgentId,
         mode: "explicit",
       });
       if (!resolved.ok) {
