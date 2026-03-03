@@ -5,6 +5,7 @@ import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinkin
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import { createTransport } from "../transport/factory.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   isValidAgentId,
@@ -699,17 +700,16 @@ export async function spawnSubagentDirect(
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   try {
-    const response = await callGateway<{ runId: string }>({
-      method: "agent",
-      params: {
-        message: childTaskMessage,
-        sessionKey: childSessionKey,
+    const transport = createTransport();
+    const response = await transport.send({
+      message: childTaskMessage,
+      sessionKey: childSessionKey,
+      runId: childIdem,
+      metadata: {
         channel: requesterOrigin?.channel,
         to: requesterOrigin?.to ?? undefined,
         accountId: requesterOrigin?.accountId ?? undefined,
         threadId: requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
-        idempotencyKey: childIdem,
-        deliver: false,
         lane: AGENT_LANE_SUBAGENT,
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
@@ -720,7 +720,6 @@ export async function spawnSubagentDirect(
         groupChannel: ctx.agentGroupChannel ?? undefined,
         groupSpace: ctx.agentGroupSpace ?? undefined,
       },
-      timeoutMs: 10_000,
     });
     if (typeof response?.runId === "string" && response.runId) {
       childRunId = response.runId;
