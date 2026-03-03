@@ -22,6 +22,7 @@ import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-value
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+import { warnUnsafeNumericIds } from "./validation-numeric-ids.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
@@ -423,6 +424,9 @@ function validateConfigObjectWithPluginsBase(
       }
     }
   }
+
+  // Warn about numeric IDs that lose precision after JSON.parse (e.g. Discord snowflakes).
+  warnings.push(...warnUnsafeNumericIds(raw));
 
   const heartbeatChannelIds = new Set<string>();
   for (const channelId of CHANNEL_IDS) {
