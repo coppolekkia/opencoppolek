@@ -64,15 +64,19 @@ export function resolveSessionStoreDir(storePath: string): string {
 
 /**
  * Sanitize a session key for safe use as a filesystem name.
- * Colons are replaced with `%3A` (URL-encoding style) to avoid ambiguity.
+ * Colons, slashes, and backslashes are percent-encoded to prevent path traversal.
  */
 export function sanitizeSessionKey(key: string): string {
-  return key.replace(/%/g, "%25").replace(/:/g, "%3A");
+  return key.replace(/%/g, "%25").replace(/\//g, "%2F").replace(/\\/g, "%5C").replace(/:/g, "%3A");
 }
 
 /** Reverse the sanitization to recover the original session key. */
 export function desanitizeSessionKey(fileName: string): string {
-  return fileName.replace(/%3A/g, ":").replace(/%25/g, "%");
+  return fileName
+    .replace(/%3A/g, ":")
+    .replace(/%5C/g, "\\")
+    .replace(/%2F/g, "/")
+    .replace(/%25/g, "%");
 }
 
 /** Check whether a directory-based session store exists. */
@@ -1039,13 +1043,11 @@ export async function updateSessionStoreEntry(params: {
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
-  // Directory mode: per-session-key lock serializes concurrent writes to the same session.
-  // Legacy mode: global lock to serialize the monolithic JSON read-modify-write cycle.
-  const useDirectory = isDirectoryStore(storePath);
-  const lockKey = useDirectory
-    ? `${storePath}:dir:${normalizeStoreSessionKey(sessionKey)}`
-    : storePath;
-  return await withSessionStoreLock(lockKey, async () => {
+  // All directory-mode writers share the same storePath lock so that updateSessionStore
+  // (which also holds storePath) and updateSessionStoreEntry serialize against each other,
+  // preventing lost-update races on the same session entry.
+  return await withSessionStoreLock(storePath, async () => {
+    const useDirectory = isDirectoryStore(storePath);
     const store = loadSessionStore(storePath, { skipCache: true });
     const previousSnapshot = useDirectory ? structuredClone(store) : undefined;
     const resolved = resolveStoreSessionEntry({ store, sessionKey });
@@ -1127,13 +1129,10 @@ export async function updateLastRoute(params: {
   groupResolution?: import("./types.js").GroupKeyResolution | null;
 }) {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
-  // Directory mode: per-session-key lock serializes concurrent writes to the same session.
-  // Legacy mode: global lock to serialize the monolithic JSON read-modify-write cycle.
-  const useDirectory = isDirectoryStore(storePath);
-  const lockKey = useDirectory
-    ? `${storePath}:dir:${normalizeStoreSessionKey(sessionKey)}`
-    : storePath;
+  // All directory-mode writers share the storePath lock (same as updateSessionStore) to
+  // prevent lost-update races between updateLastRoute and generic updateSessionStore calls.
   const body = async () => {
+    const useDirectory = isDirectoryStore(storePath);
     const store = loadSessionStore(storePath, { skipCache: true });
     const previousSnapshot = useDirectory ? structuredClone(store) : undefined;
     const resolved = resolveStoreSessionEntry({ store, sessionKey });
@@ -1203,5 +1202,5 @@ export async function updateLastRoute(params: {
       previousSnapshot,
     });
   };
-  return await withSessionStoreLock(lockKey, body);
+  return await withSessionStoreLock(storePath, body);
 }

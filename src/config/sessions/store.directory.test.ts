@@ -13,6 +13,7 @@ import {
   desanitizeSessionKey,
   saveSessionStore,
   updateSessionStore,
+  updateSessionStoreEntry,
 } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -78,6 +79,25 @@ describe("sanitizeSessionKey / desanitizeSessionKey", () => {
     const key = "agent:my-agent:telegram:direct:user";
     const sanitized = sanitizeSessionKey(key);
     expect(desanitizeSessionKey(sanitized)).toBe(key);
+  });
+
+  it("encodes forward slashes to prevent path traversal", () => {
+    const key = "agent:main:some/nested/path";
+    const sanitized = sanitizeSessionKey(key);
+    expect(sanitized).not.toContain("/");
+    expect(desanitizeSessionKey(sanitized)).toBe(key);
+  });
+
+  it("encodes backslashes to prevent path traversal", () => {
+    const key = "agent:main:some\\nested\\path";
+    const sanitized = sanitizeSessionKey(key);
+    expect(sanitized).not.toContain("\\");
+    expect(desanitizeSessionKey(sanitized)).toBe(key);
+  });
+
+  it("round-trips keys with all special characters", () => {
+    const key = "agent:main:100%done/with\\work";
+    expect(desanitizeSessionKey(sanitizeSessionKey(key))).toBe(key);
   });
 });
 
@@ -391,6 +411,44 @@ describe("per-session locking isolation", () => {
     const loaded = loadSessionStore(storePath);
     // Each write reads current state, so counter should be 4
     expect((loaded[key] as Record<string, unknown>).counter).toBe(4);
+  });
+});
+
+// ============================================================================
+// Lock namespace: updateSessionStoreEntry serializes with updateSessionStore
+// ============================================================================
+
+describe("lock namespace: updateSessionStoreEntry vs updateSessionStore", () => {
+  let testDir: string;
+  let storePath: string;
+
+  beforeEach(async () => {
+    testDir = await createCaseDir("lock-namespace");
+    storePath = path.join(testDir, "sessions.json");
+    const storeDir = resolveSessionStoreDir(storePath);
+    await fs.mkdir(storeDir, { recursive: true });
+  });
+
+  it("updateSessionStoreEntry and updateSessionStore do not lose each other's writes", async () => {
+    const now = Date.now();
+    const key = "agent:main:race-session";
+    await saveSessionStore(storePath, {
+      [key]: makeEntry(now, { modelOverride: "initial" }),
+    });
+
+    // Interleave both write paths sequentially (each reads current state).
+    await updateSessionStore(storePath, (s) => {
+      (s[key] as Record<string, unknown>).modelOverride = "from-updateSessionStore";
+    });
+    const result = await updateSessionStoreEntry({
+      storePath,
+      sessionKey: key,
+      update: async (entry) => ({ ...entry, modelOverride: "from-updateSessionStoreEntry" }),
+    });
+
+    expect(result?.modelOverride).toBe("from-updateSessionStoreEntry");
+    const loaded = loadSessionStore(storePath);
+    expect(loaded[key]?.modelOverride).toBe("from-updateSessionStoreEntry");
   });
 });
 
