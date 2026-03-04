@@ -478,6 +478,7 @@ function createOpenAIResponsesContextManagementWrapper(
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
+          const supportsStore = model.compat?.supportsStore !== false;
           const payloadObj = payload as {
             store?: unknown;
             previous_response_id?: unknown;
@@ -492,7 +493,7 @@ function createOpenAIResponsesContextManagementWrapper(
             context_management?: unknown;
           };
 
-          if (forceStore || sub2apiCodexCompat) {
+          if ((forceStore || sub2apiCodexCompat) && supportsStore) {
             payloadObj.store = true;
           }
 

@@ -1478,4 +1478,22 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.tool_choice).toBe("required");
   });
+
+  it("does not force store for sub2api-passthrough gpt-5.2 when supportsStore=false", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-passthrough",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-passthrough",
+        id: "gpt-5.2",
+        compat: { supportsStore: false },
+      } as unknown as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+      },
+    });
+
+    expect(payload.store).toBe(false);
+  });
 });
