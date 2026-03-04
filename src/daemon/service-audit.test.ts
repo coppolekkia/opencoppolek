@@ -118,6 +118,16 @@ describe("checkTokenDrift", () => {
     expect(result).toBeNull();
   });
 
+  it("returns null when tokens match but service token has trailing whitespace (systemd parser quirk)", () => {
+    const result = checkTokenDrift({ serviceToken: "same-token\n", configToken: "same-token" });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when tokens match but service token has surrounding spaces", () => {
+    const result = checkTokenDrift({ serviceToken: "  same-token  ", configToken: "same-token" });
+    expect(result).toBeNull();
+  });
+
   it("detects drift when config has token but service has different token", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
     expect(result).not.toBeNull();
