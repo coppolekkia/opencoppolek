@@ -3,7 +3,11 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
+
+const log = createSubsystemLogger("config/env-vars");
 
 function isBlockedConfigEnvVar(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
@@ -22,6 +26,10 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
       if (!value) {
         continue;
       }
+      if (value === REDACTED_SENTINEL) {
+        log.warn(`Skipping redacted env var from config: ${rawKey}`);
+        continue;
+      }
       const key = normalizeEnvVarKey(rawKey, { portable: true });
       if (!key) {
         continue;
@@ -38,6 +46,10 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
       continue;
     }
     if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    if (value === REDACTED_SENTINEL) {
+      log.warn(`Skipping redacted env var from config: ${rawKey}`);
       continue;
     }
     const key = normalizeEnvVarKey(rawKey, { portable: true });

@@ -3,7 +3,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
-import { applyConfigEnvVars, collectConfigRuntimeEnvVars } from "./env-vars.js";
+import {
+  applyConfigEnvVars,
+  collectConfigRuntimeEnvVars,
+  collectConfigServiceEnvVars,
+} from "./env-vars.js";
+import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 import { withEnvOverride, withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -83,6 +88,32 @@ describe("config env vars", () => {
       expect(entries[" BAD KEY"]).toBeUndefined();
       expect(entries["NOT-PORTABLE"]).toBeUndefined();
     });
+  });
+
+  it("skips redacted env vars from env.vars", () => {
+    const config = {
+      env: {
+        vars: {
+          OPENAI_API_KEY: REDACTED_SENTINEL,
+          BRAVE_API_KEY: "real-key",
+        },
+      },
+    };
+    const entries = collectConfigServiceEnvVars(config as OpenClawConfig);
+    expect(entries.OPENAI_API_KEY).toBeUndefined();
+    expect(entries.BRAVE_API_KEY).toBe("real-key");
+  });
+
+  it("skips redacted env vars from inline env keys", () => {
+    const config = {
+      env: {
+        OPENAI_API_KEY: REDACTED_SENTINEL,
+        ELEVENLABS_API_KEY: "real-key",
+      },
+    };
+    const entries = collectConfigServiceEnvVars(config as OpenClawConfig);
+    expect(entries.OPENAI_API_KEY).toBeUndefined();
+    expect(entries.ELEVENLABS_API_KEY).toBe("real-key");
   });
 
   it("loads ${VAR} substitutions from ~/.openclaw/.env on repeated runtime loads", async () => {
