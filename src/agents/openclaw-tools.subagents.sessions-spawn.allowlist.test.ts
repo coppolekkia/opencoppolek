@@ -207,6 +207,25 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   });
 
+  it("rejects unknown agent ids before attempting spawn", async () => {
+    setAllowAgents(["*"]);
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call10b", {
+      task: "do thing",
+      agentId: "does-not-exist",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: 'agentId "does-not-exist" not found',
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {
     setResearchUnsandboxedConfig({ includeSandboxedDefault: true });
 

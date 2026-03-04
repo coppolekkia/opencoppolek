@@ -13,7 +13,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -343,6 +343,15 @@ export async function spawnSubagentDirect(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  if (requestedAgentId) {
+    const configuredAgents = new Set(listAgentIds(cfg).map((value) => value.toLowerCase()));
+    if (!configuredAgents.has(targetAgentId.toLowerCase())) {
+      return {
+        status: "forbidden",
+        error: `agentId \"${targetAgentId}\" not found`,
+      };
+    }
+  }
   if (targetAgentId !== requesterAgentId) {
     const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
