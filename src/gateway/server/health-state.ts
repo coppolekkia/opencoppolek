@@ -14,6 +14,12 @@ let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
+let runtimeSnapshotOverlay: Record<string, unknown> | null = null;
+
+export function setRuntimeSnapshotOverlay(overlay: Record<string, unknown> | null) {
+  runtimeSnapshotOverlay = overlay;
+}
+
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
@@ -70,6 +76,16 @@ export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
       const snap = await getHealthSnapshot({ probe: opts?.probe });
+      if (runtimeSnapshotOverlay && snap.channels) {
+        for (const [channelId, channelData] of Object.entries(snap.channels)) {
+          const overlay = runtimeSnapshotOverlay[channelId];
+          if (overlay && typeof overlay === "object" && channelData) {
+            // Note: shallow merge; overlay should contain only flat top-level fields
+            // to avoid replacing nested objects like `accounts` in ChannelHealthSummary
+            snap.channels[channelId] = { ...channelData, ...overlay };
+          }
+        }
+      }
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {
