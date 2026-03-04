@@ -14,7 +14,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import pg from "pg";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryPostgresConfig } from "../config/types.memory.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -22,7 +23,7 @@ import {
   createEmbeddingProvider,
   type EmbeddingProvider,
 } from "./embeddings.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+import { normalizeExtraMemoryPaths } from "./internal.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -39,7 +40,15 @@ const CHUNK_SIZE_LINES = 30;
 const CHUNK_OVERLAP_LINES = 5;
 const DEFAULT_MIN_SIMILARITY = 0.3;
 const DEFAULT_MAX_CONNECTIONS = 5;
-const DEFAULT_DIMENSIONS = 1536; // OpenAI ada-002 default
+const DEFAULT_DIMENSIONS = 1536; // OpenAI text-embedding-3-small default
+
+// ── Manager Cache ───────────────────────────────────────────────────────────
+
+const PG_MANAGER_CACHE = new Map<string, PostgresMemoryManager>();
+
+function buildPgCacheKey(agentId: string, connectionString: string): string {
+  return `${agentId}:${connectionString}`;
+}
 
 // ── Schema ──────────────────────────────────────────────────────────────────
 
@@ -83,8 +92,6 @@ CREATE INDEX IF NOT EXISTS idx_memory_chunks_source ON memory_chunks(source);
 CREATE INDEX IF NOT EXISTS idx_memory_chunks_fts
   ON memory_chunks USING gin(to_tsvector('english', text));
 `;
-
-// HNSW index is created dynamically after we know the dimensions.
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -155,6 +162,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
   private readonly cfg: OpenClawConfig;
   private readonly pgConfig: MemoryPostgresConfig;
   private readonly minSimilarity: number;
+  private readonly cacheKey: string;
   private schemaReady = false;
   private indexCreated = false;
   private fileCount = 0;
@@ -169,6 +177,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
     workspaceDir: string;
     cfg: OpenClawConfig;
     pgConfig: MemoryPostgresConfig;
+    cacheKey: string;
   }) {
     this.pool = params.pool;
     this.provider = params.provider;
@@ -178,8 +187,12 @@ export class PostgresMemoryManager implements MemorySearchManager {
     this.cfg = params.cfg;
     this.pgConfig = params.pgConfig;
     this.minSimilarity = params.pgConfig.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
+    this.cacheKey = params.cacheKey;
   }
 
+  /**
+   * Get or create a PostgresMemoryManager instance (cached per agent + connection).
+   */
   static async create(params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -195,30 +208,54 @@ export class PostgresMemoryManager implements MemorySearchManager {
       );
     }
 
+    // Return cached manager if available
+    const cacheKey = buildPgCacheKey(params.agentId, connectionString);
+    const cached = PG_MANAGER_CACHE.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const pool = new pg.Pool({
       connectionString,
       max: pgConfig.maxConnections ?? DEFAULT_MAX_CONNECTIONS,
     });
 
-    // Test connection
+    // Test connection — clean up pool on failure
     try {
       const client = await pool.connect();
       client.release();
     } catch (err) {
+      await pool.end().catch(() => {});
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`Failed to connect to PostgreSQL memory backend: ${message}`);
     }
 
     const dimensions = pgConfig.embeddingDimensions ?? DEFAULT_DIMENSIONS;
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
 
-    // Create embedding provider
+    let workspaceDir: string;
+    try {
+      workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    } catch (err) {
+      await pool.end().catch(() => {});
+      throw err;
+    }
+
+    // Create embedding provider using the same pattern as MemoryIndexManager
     let provider: EmbeddingProvider | null = null;
     try {
-      provider = createEmbeddingProvider({
-        cfg: params.cfg,
-        agentId: params.agentId,
-      });
+      const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+      if (settings) {
+        const providerResult = await createEmbeddingProvider({
+          config: params.cfg,
+          agentDir: resolveAgentDir(params.cfg, params.agentId),
+          provider: settings.provider,
+          remote: settings.remote,
+          model: settings.model,
+          fallback: settings.fallback,
+          local: settings.local,
+        });
+        provider = providerResult.provider;
+      }
     } catch (err) {
       log.warn(
         `Embedding provider unavailable: ${err instanceof Error ? err.message : String(err)}`,
@@ -233,9 +270,11 @@ export class PostgresMemoryManager implements MemorySearchManager {
       workspaceDir,
       cfg: params.cfg,
       pgConfig,
+      cacheKey,
     });
 
     await manager.ensureSchema();
+    PG_MANAGER_CACHE.set(cacheKey, manager);
     return manager;
   }
 
@@ -315,7 +354,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
   ): Promise<MemorySearchResult[]> {
     if (!this.provider) return [];
 
-    const embedding = await this.provider.embed(query);
+    const embedding = await this.provider.embedQuery(query);
     if (!embedding?.length) return [];
 
     const vecStr = `[${embedding.join(",")}]`;
@@ -394,7 +433,12 @@ export class PostgresMemoryManager implements MemorySearchManager {
     from?: number;
     lines?: number;
   }): Promise<{ text: string; path: string }> {
+    // Resolve and validate the path stays within the workspace
     const fullPath = path.resolve(this.workspaceDir, params.relPath);
+    if (!fullPath.startsWith(this.workspaceDir + path.sep) && fullPath !== this.workspaceDir) {
+      throw new Error(`Path traversal denied: ${params.relPath}`);
+    }
+
     const content = await fs.readFile(fullPath, "utf-8");
     const allLines = content.split("\n");
 
@@ -407,7 +451,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
 
   status(): MemoryProviderStatus {
     return {
-      backend: "builtin", // Report as builtin-compatible
+      backend: "postgres",
       provider: "postgres",
       model: this.pgConfig.embeddingModel,
       files: this.fileCount,
@@ -468,7 +512,11 @@ export class PostgresMemoryManager implements MemorySearchManager {
     }
 
     // Extra paths from config
-    const extraPaths = normalizeExtraMemoryPaths(this.cfg, this.agentId);
+    const settings = resolveMemorySearchConfig(this.cfg, this.agentId);
+    const extraPaths = normalizeExtraMemoryPaths(
+      this.workspaceDir,
+      settings?.extraPaths,
+    );
     for (const extra of extraPaths) {
       try {
         const stat = await fs.stat(extra);
@@ -520,9 +568,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
     const content = await fs.readFile(fullPath, "utf-8");
     const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
 
-    // Check if file changed
     const client = await this.pool.connect();
     try {
+      // Check if file changed
       const existing = await client.query(
         "SELECT hash FROM memory_files WHERE path = $1 AND agent_id = $2",
         [relPath, this.agentId],
@@ -532,60 +580,69 @@ export class PostgresMemoryManager implements MemorySearchManager {
         return; // File unchanged
       }
 
-      // Upsert file record
-      await client.query(
-        `INSERT INTO memory_files (path, agent_id, source, hash, mtime, size)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (path, agent_id)
-         DO UPDATE SET hash = $4, mtime = $5, size = $6, source = $3`,
-        [relPath, this.agentId, source, hash, stat.mtimeMs, stat.size],
-      );
+      // Use transaction for atomicity
+      await client.query("BEGIN");
+      try {
+        // Upsert file record
+        await client.query(
+          `INSERT INTO memory_files (path, agent_id, source, hash, mtime, size)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (path, agent_id)
+           DO UPDATE SET hash = $4, mtime = $5, size = $6, source = $3`,
+          [relPath, this.agentId, source, hash, stat.mtimeMs, stat.size],
+        );
 
-      // Delete old chunks for this file
-      await client.query(
-        "DELETE FROM memory_chunks WHERE path = $1 AND agent_id = $2",
-        [relPath, this.agentId],
-      );
+        // Delete old chunks for this file
+        await client.query(
+          "DELETE FROM memory_chunks WHERE path = $1 AND agent_id = $2",
+          [relPath, this.agentId],
+        );
 
-      // Create new chunks
-      const lines = content.split("\n");
-      const chunks = chunkText(lines, relPath, source, this.agentId);
+        // Create new chunks
+        const lines = content.split("\n");
+        const chunks = chunkText(lines, relPath, source, this.agentId);
 
-      for (const chunk of chunks) {
-        let embedding: number[] | null = null;
-        if (this.provider) {
-          try {
-            embedding = await this.provider.embed(chunk.text);
-          } catch (err) {
-            log.warn(
-              `Embedding failed for chunk ${chunk.id}: ${err instanceof Error ? err.message : String(err)}`,
-            );
+        for (const chunk of chunks) {
+          let embedding: number[] | null = null;
+          if (this.provider) {
+            try {
+              embedding = await this.provider.embedQuery(chunk.text);
+            } catch (err) {
+              log.warn(
+                `Embedding failed for chunk ${chunk.id}: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
           }
+
+          const embeddingStr = embedding ? `[${embedding.join(",")}]` : null;
+          const modelName = this.provider ? (this.pgConfig.embeddingModel ?? "default") : null;
+
+          await client.query(
+            `INSERT INTO memory_chunks (id, agent_id, path, source, start_line, end_line, hash, text, embedding, model)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::vector, $10)
+             ON CONFLICT (id) DO UPDATE SET
+               text = $8, embedding = $9::vector, model = $10, hash = $7, updated_at = now()`,
+            [
+              chunk.id,
+              this.agentId,
+              chunk.path,
+              chunk.source,
+              chunk.startLine,
+              chunk.endLine,
+              chunk.hash,
+              chunk.text,
+              embeddingStr,
+              modelName,
+            ],
+          );
         }
 
-        const embeddingStr = embedding ? `[${embedding.join(",")}]` : null;
-
-        await client.query(
-          `INSERT INTO memory_chunks (id, agent_id, path, source, start_line, end_line, hash, text, embedding, model)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::vector, $10)
-           ON CONFLICT (id) DO UPDATE SET
-             text = $8, embedding = $9::vector, model = $10, hash = $7, updated_at = now()`,
-          [
-            chunk.id,
-            this.agentId,
-            chunk.path,
-            chunk.source,
-            chunk.startLine,
-            chunk.endLine,
-            chunk.hash,
-            chunk.text,
-            embeddingStr,
-            this.provider ? "configured" : null,
-          ],
-        );
+        await client.query("COMMIT");
+        this.dirty = true;
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
       }
-
-      this.dirty = true;
     } finally {
       client.release();
     }
@@ -642,7 +699,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
       return { ok: false, error: "No embedding provider configured" };
     }
     try {
-      const result = await this.provider.embed("test");
+      const result = await this.provider.embedQuery("test");
       return { ok: result !== null && result.length > 0 };
     } catch (err) {
       return {
@@ -665,6 +722,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
   }
 
   async close(): Promise<void> {
+    PG_MANAGER_CACHE.delete(this.cacheKey);
     await this.pool.end();
   }
 }

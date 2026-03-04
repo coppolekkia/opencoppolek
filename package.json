@@ -166,8 +166,6 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
-    "pg": "^8.13.0",
-    "@types/pg": "^8.11.0",
     "@aws-sdk/client-bedrock": "^3.1000.0",
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.0.1",
@@ -227,6 +225,7 @@
   "devDependencies": {
     "@grammyjs/types": "^3.25.0",
     "@lit-labs/signals": "^0.2.0",
+    "@types/pg": "^8.11.0",
     "@lit/context": "^1.1.6",
     "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2",
@@ -247,7 +246,13 @@
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
-    "node-llama-cpp": "3.16.2"
+    "node-llama-cpp": "3.16.2",
+    "pg": "^8.13.0"
+  },
+  "peerDependenciesMeta": {
+    "@napi-rs/canvas": { "optional": true },
+    "node-llama-cpp": { "optional": true },
+    "pg": { "optional": true }
   },
   "engines": {
     "node": ">=22.12.0"

@@ -34,8 +34,8 @@ export async function getMemorySearchManager(params: {
       return { manager };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log.warn(`postgres memory backend failed: ${message}`);
-      return { manager: null, error: message };
+      log.warn(`postgres memory backend failed; falling back to builtin: ${message}`);
+      // Fall through to builtin below
     }
   }
 

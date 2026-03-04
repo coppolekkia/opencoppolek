@@ -74,7 +74,7 @@ export type MemoryPostgresConfig = {
   embeddingProvider?: string;
   /** Embedding model override */
   embeddingModel?: string;
-  /** Embedding dimensions (default: auto-detected from provider) */
+  /** Embedding dimensions (default: 1536 for OpenAI text-embedding-3-small) */
   embeddingDimensions?: number;
   /** pgvector index type: ivfflat or hnsw (default: hnsw) */
   indexType?: "ivfflat" | "hnsw";
