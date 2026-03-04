@@ -333,7 +333,10 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
   }
-  const hasThinkingBlock = message.content.some((block) => block.type === "thinking");
+  const hasThinkingBlock = message.content.some(
+    (block) =>
+      !!block && typeof block === "object" && (block as { type?: unknown }).type === "thinking",
+  );
   if (hasThinkingBlock) {
     return;
   }
@@ -342,6 +345,9 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   let changed = false;
 
   for (const block of message.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
     if (block.type !== "text") {
       next.push(block);
       continue;
@@ -367,6 +373,8 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!changed) {
     return;
   }
+  // When we promote tagged text into structured blocks, we also normalize the
+  // message payload and drop malformed/non-object entries collected along the way.
   message.content = next;
 }
 

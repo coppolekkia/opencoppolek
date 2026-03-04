@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
   formatReasoningMessage,
+  promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
@@ -471,6 +472,25 @@ File contents here`,
       });
       expect(extractAssistantText(msg), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("promoteThinkingTagsToBlocks", () => {
+  it("does not throw on malformed assistant content entries and keeps normalized blocks", () => {
+    const message = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        null,
+        { type: "text", text: "<thinking>internal</thinking> done" },
+      ] as unknown as AssistantMessage["content"],
+      timestamp: Date.now(),
+    });
+
+    expect(() => promoteThinkingTagsToBlocks(message)).not.toThrow();
+    expect(message.content).toEqual([
+      { type: "thinking", thinking: "internal" },
+      { type: "text", text: "done" },
+    ]);
   });
 });
 
