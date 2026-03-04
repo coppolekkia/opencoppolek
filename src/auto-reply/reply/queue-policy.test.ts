@@ -45,4 +45,40 @@ describe("resolveActiveRunQueueAction", () => {
       }),
     ).toBe("enqueue-followup");
   });
+
+  it("enqueues system-origin runs while active", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: true,
+        isHeartbeat: false,
+        isSystemRun: true,
+        shouldFollowup: false,
+        queueMode: "interrupt",
+      }),
+    ).toBe("enqueue-followup");
+  });
+
+  it("still runs system-origin work immediately when no run is active", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: false,
+        isHeartbeat: false,
+        isSystemRun: true,
+        shouldFollowup: false,
+        queueMode: "interrupt",
+      }),
+    ).toBe("run-now");
+  });
+
+  it("still drops heartbeat runs even when system-origin is marked", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: true,
+        isHeartbeat: true,
+        isSystemRun: true,
+        shouldFollowup: false,
+        queueMode: "interrupt",
+      }),
+    ).toBe("drop");
+  });
 });

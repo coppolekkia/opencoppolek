@@ -58,6 +58,28 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const SYSTEM_MESSAGE_PROVIDERS = new Set(["cron", "hook", "system"]);
+
+export function isSystemOriginRun(params: {
+  messageProvider?: string;
+  sourceMessageProvider?: string;
+  sessionProvider?: string;
+  sessionSurface?: string;
+}): boolean {
+  const normalizeProvider = (provider?: string): string | undefined => {
+    const normalized = provider?.trim().toLowerCase();
+    return normalized || undefined;
+  };
+  const messageProviders = [
+    normalizeProvider(params.messageProvider),
+    normalizeProvider(params.sourceMessageProvider),
+  ];
+  const hasMessageLevelProvider = messageProviders.some(Boolean);
+  const providers = hasMessageLevelProvider
+    ? messageProviders
+    : [normalizeProvider(params.sessionProvider), normalizeProvider(params.sessionSurface)];
+  return providers.some((provider) => Boolean(provider && SYSTEM_MESSAGE_PROVIDERS.has(provider)));
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -200,6 +222,12 @@ export async function runReplyAgent(params: {
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat,
+    isSystemRun: isSystemOriginRun({
+      messageProvider: followupRun.run.messageProvider,
+      sourceMessageProvider: followupRun.run.sourceMessageProvider,
+      sessionProvider: sessionCtx.Provider,
+      sessionSurface: sessionCtx.Surface,
+    }),
     shouldFollowup,
     queueMode: resolvedQueue.mode,
   });
