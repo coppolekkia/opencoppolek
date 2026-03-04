@@ -94,7 +94,7 @@ async function promptConfigureSection(
 ): Promise<ConfigureSectionChoice> {
   return guardCancel(
     await select<ConfigureSectionChoice>({
-      message: "Select sections to configure",
+      message: "Select sections to configure (ESC to exit)",
       options: [
         ...CONFIGURE_SECTION_OPTIONS,
         {
