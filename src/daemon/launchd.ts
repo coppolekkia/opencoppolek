@@ -350,10 +350,14 @@ async function waitForPidExit(pid: number): Promise<void> {
       process.kill(pid, 0);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ESRCH" || code === "EPERM") {
+      if (code === "ESRCH") {
         return;
       }
-      return;
+      // EPERM means the process exists but we lack permission to signal it;
+      // keep polling until it exits or the deadline is reached.
+      if (code !== "EPERM") {
+        return;
+      }
     }
     await sleepMs(RESTART_PID_WAIT_INTERVAL_MS);
   }
