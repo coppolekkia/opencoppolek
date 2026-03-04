@@ -75,6 +75,9 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
 
+/** Hard cap on findings text forwarded in completion messages. */
+const MAX_FINDINGS_LENGTH = 2000;
+
 function buildCompletionDeliveryMessage(params: {
   findings: string;
   subagentName: string;
@@ -82,10 +85,16 @@ function buildCompletionDeliveryMessage(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
 }): string {
-  const findingsText = params.findings.trim();
+  let findingsText = params.findings.trim();
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
+
+  // Truncate overly long findings to prevent flooding the chat channel.
+  if (findingsText.length > MAX_FINDINGS_LENGTH) {
+    findingsText = findingsText.slice(0, MAX_FINDINGS_LENGTH) + "\n\n[… output truncated]";
+  }
+
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
   // Cron completions are standalone messages — skip the subagent status header.
   if (params.announceType === "cron job") {
@@ -316,6 +325,9 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
   } catch {
     // Best-effort: fall back to richer history parsing below.
   }
+  // Security: only extract assistant-role messages in the fallback path.
+  // toolResult/tool content may contain raw source code, API keys, or other
+  // sensitive data that must not be forwarded to the chat channel.
   const history = await callGateway<{ messages?: Array<unknown> }>({
     method: "chat.history",
     params: { sessionKey, limit: 50 },
@@ -323,6 +335,13 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
   const messages = Array.isArray(history?.messages) ? history.messages : [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i];
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "assistant") {
+      continue;
+    }
     const text = extractSubagentOutputText(msg);
     if (text) {
       return text;
