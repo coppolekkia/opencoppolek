@@ -175,6 +175,33 @@ describe("migration: JSON to directory", () => {
     const migrated = await migrateSessionStoreToDirectory(storePath);
     expect(migrated).toBe(false);
   });
+
+  it("merges legacy JSON entries into existing directory without clobbering", async () => {
+    const now = Date.now();
+
+    // Create directory store with one entry
+    const storeDir = resolveSessionStoreDir(storePath);
+    await fs.mkdir(storeDir, { recursive: true });
+    const dirEntry = makeEntry(now, { modelOverride: "dir-model" });
+    const dirKey = sanitizeSessionKey("agent:main:existing");
+    await fs.writeFile(path.join(storeDir, `${dirKey}.json`), JSON.stringify(dirEntry), "utf-8");
+
+    // Create legacy JSON with overlapping + new entries
+    const legacyStore: Record<string, SessionEntry> = {
+      "agent:main:existing": makeEntry(now - 5000, { modelOverride: "old-json-model" }),
+      "agent:main:new-entry": makeEntry(now - 1000),
+    };
+    await fs.writeFile(storePath, JSON.stringify(legacyStore, null, 2), "utf-8");
+
+    const migrated = await migrateSessionStoreToDirectory(storePath);
+    expect(migrated).toBe(true);
+
+    const loaded = loadSessionStore(storePath);
+    // Existing directory entry should NOT be overwritten by stale JSON
+    expect(loaded["agent:main:existing"]?.modelOverride).toBe("dir-model");
+    // New entry from JSON should be migrated
+    expect(loaded["agent:main:new-entry"]).toBeDefined();
+  });
 });
 
 // ============================================================================
@@ -342,7 +369,7 @@ describe("per-session locking isolation", () => {
     expect(loaded["agent:main:session-b"]?.modelOverride).toBe("model-b");
   });
 
-  it("concurrent writes to the same session serialize correctly", async () => {
+  it("sequential writes to the same session accumulate correctly", async () => {
     const now = Date.now();
     const key = "agent:main:counter";
     const storeDir = resolveSessionStoreDir(storePath);

@@ -198,9 +198,6 @@ function computeStoreDiff(
  */
 export async function migrateSessionStoreToDirectory(storePath: string): Promise<boolean> {
   return await withSessionStoreLock(storePath, async () => {
-    if (isDirectoryStore(storePath)) {
-      return false;
-    }
     let legacyExists = false;
     try {
       legacyExists = fs.statSync(storePath).isFile();
@@ -231,19 +228,40 @@ export async function migrateSessionStoreToDirectory(storePath: string): Promise
     }
 
     const storeDir = resolveSessionStoreDir(storePath);
+    const dirAlreadyExists = isDirectoryStore(storePath);
     log.info("migrating session store from JSON to directory layout", {
       entries: keys.length,
       storeDir,
+      merge: dirAlreadyExists,
     });
 
     await fs.promises.mkdir(storeDir, { recursive: true });
+    let migratedCount = 0;
     for (const [key, entry] of Object.entries(store)) {
       if (!entry) {
         continue;
       }
       // Normalize key on write so directory filenames match lookup expectations.
       const normalizedKey = normalizeStoreSessionKey(key);
+      // When merging into an existing directory, skip entries that already exist
+      // so we don't clobber newer per-file data with stale JSON values.
+      if (dirAlreadyExists) {
+        const existing = loadSessionEntryFromDir(
+          storeDir,
+          `${sanitizeSessionKey(normalizedKey)}.json`,
+        );
+        if (existing) {
+          continue;
+        }
+      }
       await writeSessionEntryToDir(storeDir, normalizedKey, entry);
+      migratedCount++;
+    }
+    if (dirAlreadyExists) {
+      log.info("merged legacy entries into existing directory store", {
+        merged: migratedCount,
+        skipped: keys.length - migratedCount,
+      });
     }
 
     // Backup and remove the old JSON file
@@ -830,22 +848,14 @@ export async function updateSessionStore<T>(
   mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
   opts?: SaveSessionStoreOptions,
 ): Promise<T> {
-  // Directory mode: no global lock — each session file is written atomically (temp + rename).
-  // Different sessions write to separate files, so they never block each other.
-  // Full maintenance (warn, prune, cap, disk budget, archival) runs via saveSessionStoreUnlocked.
-  if (isDirectoryStore(storePath)) {
+  // Both directory and legacy modes use the global lock for updateSessionStore because
+  // the generic mutator may touch any number of session keys — per-key locking is not feasible.
+  return await withSessionStoreLock(storePath, async () => {
+    const useDirectory = isDirectoryStore(storePath);
     const store = loadSessionStore(storePath, { skipCache: true });
-    const previousSnapshot = structuredClone(store);
+    const previousSnapshot = useDirectory ? structuredClone(store) : undefined;
     const result = await mutator(store);
     await saveSessionStoreUnlocked(storePath, store, opts, previousSnapshot);
-    return result;
-  }
-
-  // Legacy JSON mode: global lock around the entire read-modify-write cycle.
-  return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath, { skipCache: true });
-    const result = await mutator(store);
-    await saveSessionStoreUnlocked(storePath, store, opts);
     return result;
   });
 }
@@ -1029,11 +1039,15 @@ export async function updateSessionStoreEntry(params: {
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
-  // Directory mode: no global lock needed — per-session file writes are atomic (temp + rename).
+  // Directory mode: per-session-key lock serializes concurrent writes to the same session.
   // Legacy mode: global lock to serialize the monolithic JSON read-modify-write cycle.
-  if (isDirectoryStore(storePath)) {
+  const useDirectory = isDirectoryStore(storePath);
+  const lockKey = useDirectory
+    ? `${storePath}:dir:${normalizeStoreSessionKey(sessionKey)}`
+    : storePath;
+  return await withSessionStoreLock(lockKey, async () => {
     const store = loadSessionStore(storePath, { skipCache: true });
-    const previousSnapshot = structuredClone(store);
+    const previousSnapshot = useDirectory ? structuredClone(store) : undefined;
     const resolved = resolveStoreSessionEntry({ store, sessionKey });
     const existing = resolved.existing;
     if (!existing) {
@@ -1050,25 +1064,6 @@ export async function updateSessionStoreEntry(params: {
       resolved,
       next,
       previousSnapshot,
-    });
-  }
-  return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath, { skipCache: true });
-    const resolved = resolveStoreSessionEntry({ store, sessionKey });
-    const existing = resolved.existing;
-    if (!existing) {
-      return null;
-    }
-    const patch = await update(existing);
-    if (!patch) {
-      return existing;
-    }
-    const next = mergeSessionEntry(existing, patch);
-    return await persistResolvedSessionEntry({
-      storePath,
-      store,
-      resolved,
-      next,
     });
   });
 }
@@ -1132,12 +1127,14 @@ export async function updateLastRoute(params: {
   groupResolution?: import("./types.js").GroupKeyResolution | null;
 }) {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
-  // Directory mode: no global lock — per-session file writes are atomic (temp + rename).
+  // Directory mode: per-session-key lock serializes concurrent writes to the same session.
   // Legacy mode: global lock to serialize the monolithic JSON read-modify-write cycle.
   const useDirectory = isDirectoryStore(storePath);
-  const lockKey = useDirectory ? undefined : storePath;
+  const lockKey = useDirectory
+    ? `${storePath}:dir:${normalizeStoreSessionKey(sessionKey)}`
+    : storePath;
   const body = async () => {
-    const store = loadSessionStore(storePath, useDirectory ? { skipCache: true } : undefined);
+    const store = loadSessionStore(storePath, { skipCache: true });
     const previousSnapshot = useDirectory ? structuredClone(store) : undefined;
     const resolved = resolveStoreSessionEntry({ store, sessionKey });
     const existing = resolved.existing;
@@ -1206,8 +1203,5 @@ export async function updateLastRoute(params: {
       previousSnapshot,
     });
   };
-  if (lockKey) {
-    return await withSessionStoreLock(lockKey, body);
-  }
-  return await body();
+  return await withSessionStoreLock(lockKey, body);
 }
