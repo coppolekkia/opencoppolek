@@ -1,4 +1,5 @@
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -72,8 +73,8 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       managedSkillsDir: report.managedSkillsDir,
       skills: skills.map((s) => ({
         name: s.name,
-        description: s.description,
-        emoji: s.emoji,
+        description: s.description ? stripAnsi(s.description) : s.description,
+        emoji: s.emoji ? stripAnsi(s.emoji) : s.emoji,
         eligible: s.eligible,
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
