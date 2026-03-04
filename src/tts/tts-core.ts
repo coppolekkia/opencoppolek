@@ -718,7 +718,10 @@ export async function openaiTTSStream(params: {
   const stream = Readable.fromWeb(
     response.body as unknown as import("node:stream/web").ReadableStream,
   );
-  stream.on("data", () => {
+  // Use "readable" instead of "data" to avoid putting the stream into flowing
+  // mode. A "data" listener would consume chunks before the caller attaches
+  // its own consumer (for-await), causing silent data loss.
+  stream.on("readable", () => {
     clearTimeout(stallTimer);
     stallTimer = setTimeout(() => controller.abort(), STALL_DEADLINE_MS);
   });
