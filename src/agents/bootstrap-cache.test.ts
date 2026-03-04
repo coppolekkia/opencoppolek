@@ -98,3 +98,52 @@ describe("clearBootstrapSnapshot", () => {
     expect(mockLoad).toHaveBeenCalledTimes(2); // sk1 x1, sk2 x1
   });
 });
+
+describe("TTL expiration", () => {
+  beforeEach(() => {
+    clearAllBootstrapSnapshots();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    clearAllBootstrapSnapshots();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("reloads from disk after TTL expires", async () => {
+    const stale = [makeFile("HEARTBEAT.md", "old content")];
+    const fresh = [makeFile("HEARTBEAT.md", "new content")];
+    mockLoad.mockResolvedValueOnce(stale).mockResolvedValueOnce(fresh);
+
+    const r1 = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "agent:main:main",
+    });
+    expect(r1).toBe(stale);
+    expect(mockLoad).toHaveBeenCalledTimes(1);
+
+    // Advance past the 5-minute TTL
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+
+    const r2 = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "agent:main:main",
+    });
+    expect(r2).toBe(fresh);
+    expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns cached result before TTL expires", async () => {
+    const files = [makeFile("HEARTBEAT.md", "content")];
+    mockLoad.mockResolvedValue(files);
+
+    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "agent:main:main" });
+
+    // Advance to just under the TTL
+    vi.advanceTimersByTime(5 * 60 * 1000 - 1);
+
+    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "agent:main:main" });
+    expect(mockLoad).toHaveBeenCalledTimes(1);
+  });
+});
