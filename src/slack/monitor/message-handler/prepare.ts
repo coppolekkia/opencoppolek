@@ -638,7 +638,11 @@ export async function prepareSlackMessage(params: {
     });
   }
 
-  const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
+  // Always use channel: format for Slack targets, even in DMs.
+  // Slack API requires channel ID for reactions and other operations.
+  // Note: This also sets currentChannelId in buildSlackThreadingToolContext for DMs,
+  // which enables auto-threading in DMs when replyToMode === "all" and currentThreadTs is set.
+  const slackTo = `channel:${message.channel}`;
 
   const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
     isRoomish,
