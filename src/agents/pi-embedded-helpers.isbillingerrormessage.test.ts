@@ -534,6 +534,13 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("rate_limit");
   });
+  it("classifies zhipuai Weekly/Monthly Limit Exhausted as rate_limit", () => {
+    expect(
+      classifyFailoverReason(
+        "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54 (request_id: 20260303141547610b7f574d1b44cb)",
+      ),
+    ).toBe("rate_limit");
+  });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
     expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
