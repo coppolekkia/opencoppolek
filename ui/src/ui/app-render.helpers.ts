@@ -345,7 +345,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = key.toLowerCase();
 
   // ── Main session ─────────────────────────────────
-  if (key === "main" || key === "agent:main:main") {
+  if (key === "main" || /^agent:[^:]+:main$/.test(key)) {
     return { prefix: "", fallbackName: "Main Session" };
   }
 
@@ -394,6 +394,7 @@ export function resolveSessionDisplayName(
   const label = row?.label?.trim() || "";
   const displayName = row?.displayName?.trim() || "";
   const { prefix, fallbackName } = parseSessionKey(key);
+  const isMainSession = fallbackName === "Main Session";
 
   const applyTypedPrefix = (name: string): string => {
     if (!prefix) {
@@ -402,6 +403,12 @@ export function resolveSessionDisplayName(
     const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
+
+  // Keep main-session naming stable in chat controls. Backend metadata can
+  // briefly surface internal transient labels (e.g. "Heartbeat").
+  if (isMainSession) {
+    return fallbackName;
+  }
 
   if (label && label !== key) {
     return applyTypedPrefix(label);
