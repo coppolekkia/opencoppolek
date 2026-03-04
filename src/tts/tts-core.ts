@@ -707,10 +707,12 @@ export async function openaiTTSStream(params: {
   }
 
   // Clear the connection timeout now that headers have arrived.
-  // Install a read-deadline watchdog: if no data arrives within 30s, abort
-  // to prevent a stalled stream from hanging the TTS pipeline indefinitely.
+  // Install a read-deadline watchdog: if no data arrives, abort to prevent
+  // a stalled stream from hanging the TTS pipeline indefinitely.
+  // Use the configured timeout (capped at 30s) so operators with shorter
+  // timeouts get faster failure on mid-stream stalls.
   clearTimeout(timeout);
-  const STALL_DEADLINE_MS = 30_000;
+  const STALL_DEADLINE_MS = Math.min(timeoutMs, 30_000);
   stallTimer = setTimeout(() => controller.abort(), STALL_DEADLINE_MS);
 
   const stream = Readable.fromWeb(

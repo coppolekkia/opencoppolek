@@ -247,13 +247,13 @@ export async function speakStream(
   }
   const { call, providerCallId, provider } = connected;
 
+  transitionState(call, "speaking");
+  persistCallRecord(ctx.storePath, call);
+
+  const voice = provider.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
+  const spokenSentences: string[] = [];
+
   try {
-    transitionState(call, "speaking");
-    persistCallRecord(ctx.storePath, call);
-
-    const voice = provider.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
-    const spokenSentences: string[] = [];
-
     for await (const sentence of sentences) {
       spokenSentences.push(sentence);
       await provider.playTts({
@@ -264,7 +264,7 @@ export async function speakStream(
       });
     }
 
-    // Record transcript with full authoritative text, or reconstructed from sentences
+    // Record full transcript after all sentences played
     const transcriptText = fullText ?? spokenSentences.join(" ");
     if (transcriptText) {
       addTranscriptEntry(call, "bot", transcriptText);
@@ -272,6 +272,10 @@ export async function speakStream(
 
     return { success: true };
   } catch (err) {
+    // Record whatever was spoken before the failure so context isn't lost
+    if (spokenSentences.length > 0) {
+      addTranscriptEntry(call, "bot", spokenSentences.join(" "));
+    }
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
