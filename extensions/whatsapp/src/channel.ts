@@ -115,6 +115,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       linked: Boolean(account.authDir),
       dmPolicy: account.dmPolicy,
       allowFrom: account.allowFrom,
+      allowSendTo: account.allowSendTo,
     }),
     resolveAllowFrom: ({ cfg, accountId }) => resolveWhatsAppConfigAllowFrom({ cfg, accountId }),
     resolveAllowSendTo: ({ cfg, accountId }) =>
@@ -420,6 +421,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         lastError: runtime?.lastError ?? null,
         dmPolicy: account.dmPolicy,
         allowFrom: account.allowFrom,
+        allowSendTo: account.allowSendTo,
       };
     },
     resolveAccountState: ({ configured }) => (configured ? "linked" : "not linked"),
