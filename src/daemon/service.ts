@@ -110,5 +110,32 @@ export function resolveGatewayService(): GatewayService {
     };
   }
 
-  throw new Error(`Gateway service install not supported on ${process.platform}`);
+  // Return a no-op stub for platforms that do not have a supported init system
+  // (e.g. OpenBSD, FreeBSD, Android, etc.).  Status queries work gracefully;
+  // install / lifecycle operations throw an informative error instead of
+  // crashing the entire CLI process.
+  const unsupportedPlatform = process.platform;
+  const unsupportedError = () =>
+    Promise.reject(
+      new Error(
+        `Automatic gateway service management is not supported on ${unsupportedPlatform}. ` +
+          `Start the gateway manually: openclaw gateway start`,
+      ),
+    );
+  return {
+    label: unsupportedPlatform,
+    loadedText: "running",
+    notLoadedText: "stopped",
+    install: unsupportedError,
+    uninstall: unsupportedError,
+    stop: unsupportedError,
+    restart: unsupportedError,
+    isLoaded: () => Promise.resolve(false),
+    readCommand: () => Promise.resolve(null),
+    readRuntime: () =>
+      Promise.resolve({
+        status: "unknown" as const,
+        detail: `Service management is not supported on ${unsupportedPlatform}.`,
+      }),
+  };
 }
