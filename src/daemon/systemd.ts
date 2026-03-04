@@ -199,7 +199,9 @@ export async function isSystemdUserServiceAvailable(): Promise<boolean> {
   if (detail.includes("not supported")) {
     return false;
   }
-  return false;
+  // Non-zero exit without a known "unavailable" indicator means systemd is
+  // present but returned a non-fatal status (e.g. no default target unit).
+  return true;
 }
 
 async function assertSystemdAvailable() {
