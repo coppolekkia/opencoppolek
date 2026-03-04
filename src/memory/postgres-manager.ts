@@ -10,19 +10,16 @@
  *   - Connection string via memory.postgres.connectionString or OPENCLAW_MEMORY_PG env
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import crypto from "node:crypto";
 import pg from "pg";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryPostgresConfig } from "../config/types.memory.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  createEmbeddingProvider,
-  type EmbeddingProvider,
-} from "./embeddings.js";
+import { createEmbeddingProvider, type EmbeddingProvider } from "./embeddings.js";
 import { normalizeExtraMemoryPaths } from "./internal.js";
 import type {
   MemoryEmbeddingProbeResult,
@@ -198,8 +195,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
     agentId: string;
   }): Promise<PostgresMemoryManager> {
     const pgConfig = params.cfg.memory?.postgres ?? {};
-    const connectionString =
-      pgConfig.connectionString || process.env.OPENCLAW_MEMORY_PG;
+    const connectionString = pgConfig.connectionString || process.env.OPENCLAW_MEMORY_PG;
 
     if (!connectionString) {
       throw new Error(
@@ -388,10 +384,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
     }
   }
 
-  private async ftsSearch(
-    query: string,
-    maxResults: number,
-  ): Promise<MemorySearchResult[]> {
+  private async ftsSearch(query: string, maxResults: number): Promise<MemorySearchResult[]> {
     const tsQuery = query
       .split(/\s+/)
       .filter(Boolean)
@@ -513,10 +506,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
 
     // Extra paths from config
     const settings = resolveMemorySearchConfig(this.cfg, this.agentId);
-    const extraPaths = normalizeExtraMemoryPaths(
-      this.workspaceDir,
-      settings?.extraPaths,
-    );
+    const extraPaths = normalizeExtraMemoryPaths(this.workspaceDir, settings?.extraPaths);
     for (const extra of extraPaths) {
       try {
         const stat = await fs.stat(extra);
@@ -559,11 +549,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
     log.info(`Memory sync complete: ${this.fileCount} files, ${this.chunkCount} chunks`);
   }
 
-  private async syncFile(
-    fullPath: string,
-    relPath: string,
-    source: MemorySource,
-  ): Promise<void> {
+  private async syncFile(fullPath: string, relPath: string, source: MemorySource): Promise<void> {
     const stat = await fs.stat(fullPath);
     const content = await fs.readFile(fullPath, "utf-8");
     const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
@@ -593,10 +579,10 @@ export class PostgresMemoryManager implements MemorySearchManager {
         );
 
         // Delete old chunks for this file
-        await client.query(
-          "DELETE FROM memory_chunks WHERE path = $1 AND agent_id = $2",
-          [relPath, this.agentId],
-        );
+        await client.query("DELETE FROM memory_chunks WHERE path = $1 AND agent_id = $2", [
+          relPath,
+          this.agentId,
+        ]);
 
         // Create new chunks
         const lines = content.split("\n");
@@ -651,10 +637,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
   private async pruneDeletedFiles(currentPaths: string[]): Promise<void> {
     const client = await this.pool.connect();
     try {
-      const result = await client.query(
-        "SELECT path FROM memory_files WHERE agent_id = $1",
-        [this.agentId],
-      );
+      const result = await client.query("SELECT path FROM memory_files WHERE agent_id = $1", [
+        this.agentId,
+      ]);
 
       const currentSet = new Set(currentPaths);
       const toDelete = result.rows
@@ -662,14 +647,14 @@ export class PostgresMemoryManager implements MemorySearchManager {
         .filter((p: string) => !currentSet.has(p));
 
       for (const filePath of toDelete) {
-        await client.query(
-          "DELETE FROM memory_chunks WHERE path = $1 AND agent_id = $2",
-          [filePath, this.agentId],
-        );
-        await client.query(
-          "DELETE FROM memory_files WHERE path = $1 AND agent_id = $2",
-          [filePath, this.agentId],
-        );
+        await client.query("DELETE FROM memory_chunks WHERE path = $1 AND agent_id = $2", [
+          filePath,
+          this.agentId,
+        ]);
+        await client.query("DELETE FROM memory_files WHERE path = $1 AND agent_id = $2", [
+          filePath,
+          this.agentId,
+        ]);
       }
     } finally {
       client.release();
