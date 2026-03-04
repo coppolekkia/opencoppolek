@@ -57,6 +57,7 @@ import {
 } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
+import { mergeFragmentEntities } from "./merge-entities.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
@@ -180,15 +181,21 @@ export const registerTelegramHandlers = ({
     text: string;
     date?: number;
     from?: Message["from"];
-  }): Message => ({
-    ...params.base,
-    ...(params.from ? { from: params.from } : {}),
-    text: params.text,
-    caption: undefined,
-    caption_entities: undefined,
-    entities: undefined,
-    ...(params.date != null ? { date: params.date } : {}),
-  });
+    caption?: Message["caption"];
+    caption_entities?: Message["caption_entities"];
+    entities?: Message["entities"];
+  }): Message => {
+    const msg: Message = {
+      ...params.base,
+      ...(params.from ? { from: params.from } : {}),
+      text: params.text,
+      ...(params.date != null ? { date: params.date } : {}),
+    };
+    msg.caption = params.caption;
+    msg.caption_entities = params.caption_entities;
+    msg.entities = params.entities;
+    return msg;
+  };
   const buildSyntheticContext = (
     ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
     message: Message,
@@ -231,8 +238,12 @@ export const registerTelegramHandlers = ({
         await processMessage(last.ctx, last.allMedia, last.storeAllowFrom, undefined, replyMedia);
         return;
       }
-      const combinedText = entries
-        .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
+      const fragments = entries.map((entry) => ({
+        text: entry.msg.text ?? entry.msg.caption ?? "",
+        entities: entry.msg.entities ?? entry.msg.caption_entities,
+      }));
+      const combinedText = fragments
+        .map((f) => f.text)
         .filter(Boolean)
         .join("\n");
       const combinedMedia = entries.flatMap((entry) => entry.allMedia);
@@ -240,10 +251,15 @@ export const registerTelegramHandlers = ({
         return;
       }
       const first = entries[0];
+
+      const nonEmptyFragments = fragments.filter((f) => f.text);
       const baseCtx = first.ctx;
       const syntheticMessage = buildSyntheticTextMessage({
         base: first.msg,
         text: combinedText,
+        caption: undefined,
+        caption_entities: undefined,
+        entities: mergeFragmentEntities(nonEmptyFragments, "\n"),
         date: last.msg.date ?? first.msg.date,
       });
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
@@ -386,7 +402,11 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const combinedText = entry.messages.map((m) => m.msg.text ?? "").join("");
+      const fragments = entry.messages.map((m) => ({
+        text: m.msg.text ?? "",
+        entities: m.msg.entities,
+      }));
+      const combinedText = fragments.map((f) => f.text).join("");
       if (!combinedText.trim()) {
         return;
       }
@@ -394,6 +414,9 @@ export const registerTelegramHandlers = ({
       const syntheticMessage = buildSyntheticTextMessage({
         base: first.msg,
         text: combinedText,
+        caption: undefined,
+        caption_entities: undefined,
+        entities: mergeFragmentEntities(fragments),
         date: last.msg.date ?? first.msg.date,
       });
 
