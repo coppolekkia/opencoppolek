@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createModelSelectionState } from "./model-selection.js";
+import {
+  createModelSelectionState,
+  resolveContextTokens,
+  resolveContextTokensWithDefault,
+} from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -16,6 +20,23 @@ const makeEntry = (overrides: Record<string, unknown> = {}) => ({
   sessionId: "session-id",
   updatedAt: Date.now(),
   ...overrides,
+});
+
+vi.mock("../../agents/context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/context.js")>();
+  return {
+    ...actual,
+    lookupContextTokens: vi.fn((model?: string) => {
+      // Known models for testing
+      const catalog: Record<string, number> = {
+        "claude-sonnet-4-5": 200_000,
+        "claude-opus-4-6": 200_000,
+        "gpt-4o": 128_000,
+      };
+      return model ? catalog[model] : undefined;
+    }),
+    resolveContextTokensForModel: actual.resolveContextTokensForModel,
+  };
 });
 
 describe("createModelSelectionState parent inheritance", () => {
@@ -68,28 +89,6 @@ describe("createModelSelectionState parent inheritance", () => {
     });
   }
 
-  async function resolveStateWithParent(params: {
-    cfg: OpenClawConfig;
-    parentKey: string;
-    sessionKey: string;
-    parentEntry: ReturnType<typeof makeEntry>;
-    sessionEntry?: ReturnType<typeof makeEntry>;
-    parentSessionKey?: string;
-  }) {
-    const sessionEntry = params.sessionEntry ?? makeEntry();
-    const sessionStore = {
-      [params.parentKey]: params.parentEntry,
-      [params.sessionKey]: sessionEntry,
-    };
-    return resolveState({
-      cfg: params.cfg,
-      sessionEntry,
-      sessionStore,
-      sessionKey: params.sessionKey,
-      parentSessionKey: params.parentSessionKey,
-    });
-  }
-
   it("inherits parent override from explicit parentSessionKey", async () => {
     const cfg = {} as OpenClawConfig;
     const parentKey = "agent:main:discord:channel:c1";
@@ -98,11 +97,17 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "openai",
       modelOverride: "gpt-4o",
     });
-    const state = await resolveStateWithParent({
+    const sessionEntry = makeEntry();
+    const sessionStore = {
+      [parentKey]: parentEntry,
+      [sessionKey]: sessionEntry,
+    };
+
+    const state = await resolveState({
       cfg,
-      parentKey,
+      sessionEntry,
+      sessionStore,
       sessionKey,
-      parentEntry,
       parentSessionKey: parentKey,
     });
 
@@ -118,11 +123,17 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "openai",
       modelOverride: "gpt-4o",
     });
-    const state = await resolveStateWithParent({
+    const sessionEntry = makeEntry();
+    const sessionStore = {
+      [parentKey]: parentEntry,
+      [sessionKey]: sessionEntry,
+    };
+
+    const state = await resolveState({
       cfg,
-      parentKey,
+      sessionEntry,
+      sessionStore,
       sessionKey,
-      parentEntry,
     });
 
     expect(state.provider).toBe("openai");
@@ -141,11 +152,15 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-5",
     });
-    const state = await resolveStateWithParent({
+    const sessionStore = {
+      [parentKey]: parentEntry,
+      [sessionKey]: sessionEntry,
+    };
+
+    const state = await resolveState({
       cfg,
-      parentKey,
-      parentEntry,
       sessionEntry,
+      sessionStore,
       sessionKey,
     });
 
@@ -169,11 +184,17 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-5",
     });
-    const state = await resolveStateWithParent({
+    const sessionEntry = makeEntry();
+    const sessionStore = {
+      [parentKey]: parentEntry,
+      [sessionKey]: sessionEntry,
+    };
+
+    const state = await resolveState({
       cfg,
-      parentKey,
+      sessionEntry,
+      sessionStore,
       sessionKey,
-      parentEntry,
     });
 
     expect(state.provider).toBe(defaultProvider);
@@ -294,5 +315,135 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
       hasModelDirective: false,
     });
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("off");
+  });
+});
+
+describe("resolveContextTokens", () => {
+  it("returns explicit agentCfg.contextTokens when set", () => {
+    const result = resolveContextTokens({
+      agentCfg: { contextTokens: 500_000 } as unknown as NonNullable<
+        NonNullable<OpenClawConfig["agents"]>["defaults"]
+      >,
+      cfg: {} as OpenClawConfig,
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+    });
+    expect(result).toBe(500_000);
+  });
+
+  it("returns 1M when context1m is configured for an Anthropic model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-5": {
+              params: { context1m: true },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveContextTokens({
+      agentCfg: cfg.agents!.defaults,
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+    });
+    expect(result).toBe(1_048_576);
+  });
+
+  it("returns catalog value for a known model when context1m is not configured", () => {
+    const result = resolveContextTokens({
+      agentCfg: undefined,
+      model: "claude-sonnet-4-5",
+    });
+    // For a catalogued model, lookupContextTokens returns the catalog value
+    expect(result).toBeDefined();
+    expect(result!).toBeLessThanOrEqual(200_000);
+  });
+
+  it("context1m takes precedence over catalog fallback", () => {
+    // This is the regression case: without the fix, session accounting
+    // would persist 200k from lookupContextTokens, and /status would
+    // read that persisted value as an override, showing 200k instead of 1M.
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-6": {
+              params: { context1m: true },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveContextTokens({
+      agentCfg: cfg.agents!.defaults,
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    expect(result).toBe(1_048_576);
+  });
+
+  it("does not return 1M for non-Anthropic models even with context1m", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4o": {
+              params: { context1m: true },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveContextTokens({
+      agentCfg: cfg.agents!.defaults,
+      cfg,
+      provider: "openai",
+      model: "gpt-4o",
+    });
+    // Should NOT be 1M — context1m only applies to Anthropic models
+    expect(result).not.toBe(1_048_576);
+  });
+});
+
+describe("resolveContextTokens – uncatalogued model edge case", () => {
+  it("returns undefined for an uncatalogued model with no explicit config", () => {
+    const cfg = {
+      agents: {
+        defaults: {},
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveContextTokens({
+      agentCfg: cfg.agents!.defaults,
+      cfg,
+      provider: "custom-provider",
+      model: "my-custom-model-v1",
+    });
+    // Must be undefined so that session-usage preserves the existing stored value
+    // rather than overwriting it with DEFAULT_CONTEXT_TOKENS (200k).
+    expect(result).toBeUndefined();
+  });
+
+  it("resolveContextTokensWithDefault returns 200k for uncatalogued models", () => {
+    const cfg = {
+      agents: {
+        defaults: {},
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveContextTokensWithDefault({
+      agentCfg: cfg.agents!.defaults,
+      cfg,
+      provider: "custom-provider",
+      model: "my-custom-model-v1",
+    });
+    expect(result).toBe(200_000);
   });
 });
