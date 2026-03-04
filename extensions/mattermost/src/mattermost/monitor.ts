@@ -1025,7 +1025,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
     const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
 
-    // Enforce DM/group policy and allowlist checks (same as normal messages)
     const dmPolicy = account.config.dmPolicy ?? "pairing";
     const storeAllowFrom = normalizeMattermostAllowList(
       await readStoreAllowFromForDmPolicy({
