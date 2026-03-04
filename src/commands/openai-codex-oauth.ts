@@ -8,6 +8,40 @@ import {
   runOpenAIOAuthTlsPreflight,
 } from "./oauth-tls-preflight.js";
 
+const OPENAI_CODEX_REQUIRED_OAUTH_SCOPES = ["model.request", "api.responses.write"] as const;
+
+function ensureOpenAICodexOAuthScopes(urlText: string): string {
+  let url: URL;
+  try {
+    url = new URL(urlText);
+  } catch {
+    return urlText;
+  }
+
+  const rawScope = url.searchParams.get("scope");
+  if (!rawScope) {
+    return urlText;
+  }
+
+  const scopes = rawScope
+    .split(/\s+/)
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+  let changed = false;
+  for (const requiredScope of OPENAI_CODEX_REQUIRED_OAUTH_SCOPES) {
+    if (!scopes.includes(requiredScope)) {
+      scopes.push(requiredScope);
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    return urlText;
+  }
+  url.searchParams.set("scope", scopes.join(" "));
+  return url.toString();
+}
+
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -41,7 +75,7 @@ export async function loginOpenAICodexOAuth(params: {
 
   const spin = prompter.progress("Starting OAuth flow…");
   try {
-    const { onAuth, onPrompt } = createVpsAwareOAuthHandlers({
+    const handlers = createVpsAwareOAuthHandlers({
       isRemote,
       prompter,
       runtime,
@@ -51,8 +85,10 @@ export async function loginOpenAICodexOAuth(params: {
     });
 
     const creds = await loginOpenAICodex({
-      onAuth,
-      onPrompt,
+      onAuth: async (event) => {
+        await handlers.onAuth({ ...event, url: ensureOpenAICodexOAuthScopes(event.url) });
+      },
+      onPrompt: handlers.onPrompt,
       onProgress: (msg) => spin.update(msg),
     });
     spin.stop("OpenAI OAuth complete");

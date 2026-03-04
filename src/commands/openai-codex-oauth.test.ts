@@ -84,6 +84,44 @@ describe("loginOpenAICodexOAuth", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("adds required API scopes to the OpenAI Codex auth URL", async () => {
+    const onAuthInner = vi.fn(async (_event: { url: string }) => {});
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({
+      onAuth: onAuthInner,
+      onPrompt: vi.fn(),
+    });
+    mocks.loginOpenAICodex.mockImplementation(async ({ onAuth }) => {
+      await onAuth({
+        url: "https://auth.openai.com/oauth/authorize?scope=openid%20profile%20email%20offline_access",
+      });
+      return null;
+    });
+
+    const { prompter } = createPrompter();
+    const runtime = createRuntime();
+    await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: false,
+      openUrl: async () => {},
+    });
+
+    expect(onAuthInner).toHaveBeenCalledOnce();
+    const authEvent = onAuthInner.mock.calls[0][0];
+    const scope = new URL(authEvent.url).searchParams.get("scope") ?? "";
+    const scopes = Array.from(new Set(scope.split(/\s+/).filter(Boolean)));
+    expect(scopes).toEqual(
+      expect.arrayContaining([
+        "openid",
+        "profile",
+        "email",
+        "offline_access",
+        "model.request",
+        "api.responses.write",
+      ]),
+    );
+  });
+
   it("reports oauth errors and rethrows", async () => {
     mocks.createVpsAwareOAuthHandlers.mockReturnValue({
       onAuth: vi.fn(),
