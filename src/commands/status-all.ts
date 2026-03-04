@@ -300,7 +300,9 @@ export async function statusAllCommand(
         ? {
             Item: "Gateway service",
             Value: !daemon.installed
-              ? `${daemon.label} not installed`
+              ? gatewayReachable
+                ? `${daemon.label} · running (externally managed)`
+                : `${daemon.label} not installed`
               : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
           }
         : { Item: "Gateway service", Value: "unknown" },

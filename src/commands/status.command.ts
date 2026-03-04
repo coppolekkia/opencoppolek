@@ -288,6 +288,13 @@ export async function statusCommand(
   ]);
   const daemonValue = (() => {
     if (daemon.installed === false) {
+      // Gateway is reachable even though no OpenClaw-managed service unit was found.
+      // The user likely started the gateway via their own service manager (e.g. a
+      // hand-written systemd system unit or a container supervisor).  Reporting
+      // "not installed" would be misleading in this case.
+      if (gatewayReachable) {
+        return `${daemon.label} · running (externally managed)`;
+      }
       return `${daemon.label} not installed`;
     }
     const installedPrefix = daemon.installed === true ? "installed · " : "";
