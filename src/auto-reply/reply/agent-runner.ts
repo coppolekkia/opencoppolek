@@ -49,6 +49,15 @@ import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-repl
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import {
+  auditPostCompactionReads,
+  extractReadPaths,
+  formatAuditWarning,
+  getSessionFileOffset,
+  isPostCompactionAuditEnabled,
+  readSessionMessages,
+  resolveRequiredReads,
+} from "./post-compaction-audit.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
@@ -58,6 +67,9 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+/** Tracks sessions that have recently compacted, storing the session file byte offset at compaction time. */
+const pendingPostCompactionAudits = new Map<string, number>();
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -653,6 +665,30 @@ export async function runReplyAgent(params: {
       }
     }
 
+    // Run post-compaction audit BEFORE handling new compaction events.
+    // This ensures the audit runs on the turn AFTER compaction (not the same turn),
+    // giving the agent a full turn to read required files before being audited.
+    const pendingAuditOffset = sessionKey ? pendingPostCompactionAudits.get(sessionKey) : undefined;
+    if (sessionKey && pendingAuditOffset !== undefined) {
+      pendingPostCompactionAudits.delete(sessionKey);
+      try {
+        const sessionFile = activeSessionEntry?.sessionFile;
+        if (sessionFile) {
+          const requiredReads = resolveRequiredReads(cfg);
+          const audit = auditPostCompactionReads(
+            extractReadPaths(readSessionMessages(sessionFile, pendingAuditOffset)),
+            process.cwd(),
+            requiredReads,
+          );
+          if (!audit.passed) {
+            enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
+          }
+        }
+      } catch {
+        // Silent failure — audit is best-effort
+      }
+    }
+
     if (autoCompactionCompleted) {
       const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -675,6 +711,16 @@ export async function runReplyAgent(params: {
           .catch(() => {
             // Silent failure — post-compaction context is best-effort
           });
+
+        // Schedule a post-compaction audit for the next turn (if enabled).
+        // Capture the current file offset so the audit only inspects messages
+        // written AFTER this compaction boundary (prevents false negatives from
+        // pre-compaction reads still in the JSONL tail window).
+        if (isPostCompactionAuditEnabled(cfg)) {
+          const sessionFile = activeSessionEntry?.sessionFile;
+          const offset = sessionFile ? getSessionFileOffset(sessionFile) : 0;
+          pendingPostCompactionAudits.set(sessionKey, offset);
+        }
       }
 
       if (verboseEnabled) {
