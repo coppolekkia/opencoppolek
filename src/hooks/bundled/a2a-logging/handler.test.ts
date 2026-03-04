@@ -37,12 +37,12 @@ vi.mock("../../../logging/subsystem.js", () => ({
 
 describe("a2a-logging handler", () => {
   describe("formatA2ALogMessage", () => {
-    it("should format message with agent IDs and timestamp", async () => {
+    it("should format message with agent IDs and UTC timestamp", async () => {
       const { formatA2ALogMessage } = await import("./handler.js");
       const timestamp = new Date("2026-03-04T14:32:00Z");
       const result = formatA2ALogMessage("finance", "dev", "Review transactions", timestamp);
 
-      // Check structure (time depends on timezone, so just verify parts are present)
+      expect(result).toContain("<code>[14:32]</code>");
       expect(result).toContain("<b>finance</b>");
       expect(result).toContain("<b>dev</b>");
       expect(result).toContain("->");

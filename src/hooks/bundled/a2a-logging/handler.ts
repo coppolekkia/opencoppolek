@@ -14,7 +14,7 @@ import type { InternalHookHandler } from "../../internal-hooks.js";
 
 const log = createSubsystemLogger("a2a-logging");
 
-let configWarningLogged = false;
+const warningSuppressed = new Set<string>();
 
 export type A2ALoggingConfig = {
   enabled?: boolean;
@@ -36,9 +36,13 @@ export function resolveToken(hookToken: string | undefined): string {
   if (hookToken) {
     return hookToken;
   }
-  const cfg = loadConfig();
-  const resolved = resolveTelegramToken(cfg);
-  return resolved.token;
+  try {
+    const cfg = loadConfig();
+    const resolved = resolveTelegramToken(cfg);
+    return resolved.token;
+  } catch {
+    return "";
+  }
 }
 
 export function formatA2ALogMessage(
@@ -53,8 +57,8 @@ export function formatA2ALogMessage(
 }
 
 function formatTimestamp(date: Date): string {
-  const h = String(date.getHours()).padStart(2, "0");
-  const m = String(date.getMinutes()).padStart(2, "0");
+  const h = String(date.getUTCHours()).padStart(2, "0");
+  const m = String(date.getUTCMinutes()).padStart(2, "0");
   return `${h}:${m}`;
 }
 
@@ -86,6 +90,7 @@ export async function postToTelegram(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
   });
 
   if (!response.ok) {
@@ -111,22 +116,22 @@ const handler: InternalHookHandler = async (event) => {
 
     const { chatId, topicId } = config;
     if (!chatId) {
-      if (!configWarningLogged) {
+      if (!warningSuppressed.has("chatId")) {
         log.warn(
           "a2a-logging enabled but chatId not configured. Set hooks.internal.entries.a2a-logging.chatId",
         );
-        configWarningLogged = true;
+        warningSuppressed.add("chatId");
       }
       return;
     }
 
     const token = resolveToken(config.token);
     if (!token) {
-      if (!configWarningLogged) {
+      if (!warningSuppressed.has("token")) {
         log.warn(
           "a2a-logging enabled but no Telegram bot token found. Set hooks.internal.entries.a2a-logging.token or configure channels.telegram.botToken",
         );
-        configWarningLogged = true;
+        warningSuppressed.add("token");
       }
       return;
     }

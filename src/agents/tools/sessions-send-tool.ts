@@ -369,7 +369,10 @@ function emitA2AHookEvent(
   displayTargetKey: string,
   message: string,
 ): void {
-  const sourceAgentId = resolveAgentIdFromSessionKey(sourceSessionKey ?? "");
+  if (!sourceSessionKey) {
+    return;
+  }
+  const sourceAgentId = resolveAgentIdFromSessionKey(sourceSessionKey);
   const targetAgentId = resolveAgentIdFromSessionKey(resolvedTargetKey);
   if (sourceAgentId && targetAgentId && sourceAgentId !== targetAgentId) {
     void triggerInternalHook(
