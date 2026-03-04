@@ -592,7 +592,7 @@ describe("monitorDiscordProvider", () => {
     expect(String(lifecycleArgs.pendingGatewayErrors?.[0])).toContain("4014");
   });
 
-  it("passes default eventQueue.listenerTimeout of 120s to Carbon Client", async () => {
+  it("passes default eventQueue.listenerTimeout of 0 (disabled) to Carbon Client", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
@@ -602,7 +602,7 @@ describe("monitorDiscordProvider", () => {
 
     const eventQueue = getConstructedEventQueue();
     expect(eventQueue).toBeDefined();
-    expect(eventQueue?.listenerTimeout).toBe(120_000);
+    expect(eventQueue?.listenerTimeout).toBe(0);
   });
 
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {
