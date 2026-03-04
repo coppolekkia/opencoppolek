@@ -49,7 +49,10 @@ function normalizeSchemaNode(
 
   const nullable = Array.isArray(schema.type) && schema.type.includes("null");
   const type =
-    schemaType(schema) ?? (schema.properties || schema.additionalProperties ? "object" : undefined);
+    schemaType(schema) ?? 
+    (schema.properties || schema.additionalProperties ? "object" : undefined) ??
+    // Treat empty object {} as "object" type for UI rendering
+    (Object.keys(schema).length === 0 ? "object" : undefined);
   normalized.type = type ?? schema.type;
   normalized.nullable = nullable || schema.nullable;
 
@@ -86,6 +89,8 @@ function normalizeSchemaNode(
       if (!isAnySchema(schema.additionalProperties)) {
         const res = normalizeSchemaNode(schema.additionalProperties, [...path, "*"]);
         normalized.additionalProperties = res.schema ?? schema.additionalProperties;
+        // Keep parent path unsupported if additionalProperties has unsupported paths
+        // This ensures users are directed to Raw mode for map branches with invalid value schemas
         if (res.unsupportedPaths.length > 0) {
           unsupported.add(pathLabel);
         }
@@ -254,10 +259,16 @@ function normalizeUnion(
     literals.length === 0 &&
     remaining.every((entry) => entry.type && primitiveTypes.has(String(entry.type)))
   ) {
+    // Only primitive unions without literals are supported
+    // Mixed primitive-plus-literal unions (e.g., number | {const: "auto"}) are not supported
+    // because the UI renders them as number inputs and cannot surface literal options
+    // Note: Keep anyOf/oneOf fields for primitive unions as UI needs them for rendering
     return {
       schema: {
         ...schema,
         nullable,
+        // Clear allOf only to avoid confusion with anyOf/oneOf
+        allOf: undefined,
       },
       unsupportedPaths: [],
     };
