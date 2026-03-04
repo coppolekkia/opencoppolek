@@ -133,6 +133,24 @@ function createStreamFnWithExtraParams(
     streamParams.cacheRetention = cacheRetention;
   }
 
+  // Collect API-level generation params that are not part of StreamOptions.
+  // These are injected directly into the raw API payload via onPayload so
+  // providers that support them (OpenAI, Azure, Ollama, GLM, etc.) can use them.
+  const payloadParams: Record<string, number> = {};
+  if (typeof extraParams.frequency_penalty === "number") {
+    payloadParams.frequency_penalty = extraParams.frequency_penalty;
+  }
+  if (typeof extraParams.presence_penalty === "number") {
+    payloadParams.presence_penalty = extraParams.presence_penalty;
+  }
+  if (typeof extraParams.top_p === "number") {
+    payloadParams.top_p = extraParams.top_p;
+  }
+  if (typeof extraParams.repetition_penalty === "number") {
+    payloadParams.repetition_penalty = extraParams.repetition_penalty;
+  }
+  const hasPayloadParams = Object.keys(payloadParams).length > 0;
+
   // Extract OpenRouter provider routing preferences from extraParams.provider.
   // Injected into model.compat.openRouterRouting so pi-ai's buildParams sets
   // params.provider in the API request body (openai-completions.js L359-362).
@@ -146,11 +164,14 @@ function createStreamFnWithExtraParams(
       ? (extraParams.provider as Record<string, unknown>)
       : undefined;
 
-  if (Object.keys(streamParams).length === 0 && !providerRouting) {
+  if (Object.keys(streamParams).length === 0 && !providerRouting && !hasPayloadParams) {
     return undefined;
   }
 
   log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
+  if (hasPayloadParams) {
+    log.debug(`payload generation params: ${JSON.stringify(payloadParams)}`);
+  }
   if (providerRouting) {
     log.debug(`OpenRouter provider routing: ${JSON.stringify(providerRouting)}`);
   }
@@ -165,9 +186,18 @@ function createStreamFnWithExtraParams(
           compat: { ...model.compat, openRouterRouting: providerRouting },
         } as unknown as typeof model)
       : model;
+    const onPayload = hasPayloadParams
+      ? (payload: unknown) => {
+          if (payload && typeof payload === "object") {
+            Object.assign(payload, payloadParams);
+          }
+          options?.onPayload?.(payload);
+        }
+      : options?.onPayload;
     return underlying(effectiveModel, context, {
       ...streamParams,
       ...options,
+      ...(onPayload ? { onPayload } : {}),
     });
   };
 

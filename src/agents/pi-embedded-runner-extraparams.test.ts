@@ -1242,4 +1242,166 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("passes frequency_penalty and presence_penalty to API payload via onPayload", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "zai/glm-5": {
+              params: {
+                temperature: 0.7,
+                frequency_penalty: 0.5,
+                presence_penalty: 0.3,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "zai", "glm-5");
+
+    const model = {
+      api: "openai-completions",
+      provider: "zai",
+      id: "glm-5",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.frequency_penalty).toBe(0.5);
+    expect(payloads[0]?.presence_penalty).toBe(0.3);
+  });
+
+  it("passes top_p and repetition_penalty to API payload via onPayload", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/llama3": {
+              params: {
+                top_p: 0.9,
+                repetition_penalty: 1.1,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "ollama", "llama3");
+
+    const model = {
+      api: "openai-completions",
+      provider: "ollama",
+      id: "llama3",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.top_p).toBe(0.9);
+    expect(payloads[0]?.repetition_penalty).toBe(1.1);
+  });
+
+  it("ignores non-numeric penalty values", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4": {
+              params: {
+                temperature: 0.8,
+                frequency_penalty: "high",
+                presence_penalty: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-4");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openai",
+      id: "gpt-4",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("frequency_penalty");
+    expect(payloads[0]).not.toHaveProperty("presence_penalty");
+  });
+
+  it("chains onPayload with caller-provided onPayload", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const callerPayloads: unknown[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { model: "glm-5" };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "zai/glm-5": {
+              params: {
+                frequency_penalty: 0.5,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "zai", "glm-5");
+
+    const model = {
+      api: "openai-completions",
+      provider: "zai",
+      id: "glm-5",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      onPayload: (payload) => callerPayloads.push(structuredClone(payload)),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.frequency_penalty).toBe(0.5);
+    // Caller's onPayload should also have been called with the modified payload
+    expect(callerPayloads).toHaveLength(1);
+    expect((callerPayloads[0] as Record<string, unknown>).frequency_penalty).toBe(0.5);
+  });
 });
