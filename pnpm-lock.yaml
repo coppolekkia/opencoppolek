@@ -449,6 +449,12 @@ importers:
 
   extensions/slack: {}
 
+  extensions/swiftapi:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/synology-chat:
     dependencies:
       zod:
