@@ -10,6 +10,7 @@ type RunStreamState = {
   contentText: string;
   contentBlocks: string[];
   sawNonTextContentBlocks: boolean;
+  postBoundaryContinuationStart: number | null;
   displayText: string;
 };
 
@@ -100,6 +101,62 @@ function shouldPreserveBoundaryDroppedText(params: {
   });
 }
 
+function shouldAppendPostBoundaryContinuation(params: {
+  boundaryDropMode: BoundaryDropMode;
+  streamedSawNonTextContentBlocks: boolean;
+  incomingSawNonTextContentBlocks: boolean;
+  streamedTextBlocks: string[];
+  nextContentBlocks: string[];
+}) {
+  if (params.boundaryDropMode !== "streamed-or-incoming") {
+    return false;
+  }
+  if (!params.streamedSawNonTextContentBlocks && !params.incomingSawNonTextContentBlocks) {
+    return false;
+  }
+  if (params.streamedTextBlocks.length === 0 || params.nextContentBlocks.length === 0) {
+    return false;
+  }
+  return params.nextContentBlocks.every((block) => !params.streamedTextBlocks.includes(block));
+}
+
+function isSnapshotCompatibleContinuation(params: {
+  previousBlocks: string[];
+  nextBlocks: string[];
+}): boolean {
+  if (params.previousBlocks.length === 0 || params.nextBlocks.length === 0) {
+    return false;
+  }
+  if (params.previousBlocks.length !== params.nextBlocks.length) {
+    return false;
+  }
+  return params.nextBlocks.every((block, index) => {
+    const previous = params.previousBlocks[index] ?? "";
+    return block === previous || block.startsWith(previous) || previous.startsWith(block);
+  });
+}
+
+function mergeContinuationWithOverlap(params: {
+  previousBlocks: string[];
+  nextBlocks: string[];
+}): string[] | null {
+  const { previousBlocks, nextBlocks } = params;
+  if (previousBlocks.length === 0 || nextBlocks.length === 0) {
+    return null;
+  }
+  const maxOverlap = Math.min(previousBlocks.length, nextBlocks.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    const previousSlice = previousBlocks.slice(previousBlocks.length - overlap);
+    const nextSlice = nextBlocks.slice(0, overlap);
+    const matches = previousSlice.every((block, index) => block === nextSlice[index]);
+    if (!matches) {
+      continue;
+    }
+    return [...previousBlocks, ...nextBlocks.slice(overlap)];
+  }
+  return null;
+}
+
 export class TuiStreamAssembler {
   private runs = new Map<string, RunStreamState>();
 
@@ -111,6 +168,7 @@ export class TuiStreamAssembler {
         contentText: "",
         contentBlocks: [],
         sawNonTextContentBlocks: false,
+        postBoundaryContinuationStart: null,
         displayText: "",
       };
       this.runs.set(runId, state);
@@ -141,10 +199,87 @@ export class TuiStreamAssembler {
         streamedTextBlocks: state.contentBlocks,
         nextContentBlocks,
       });
+      const shouldAppendContinuation = shouldAppendPostBoundaryContinuation({
+        boundaryDropMode,
+        streamedSawNonTextContentBlocks: state.sawNonTextContentBlocks,
+        incomingSawNonTextContentBlocks: sawNonTextContentBlocks,
+        streamedTextBlocks: state.contentBlocks,
+        nextContentBlocks,
+      });
+      const continuationStart = state.postBoundaryContinuationStart;
+      const priorBoundaryPrefix =
+        continuationStart != null &&
+        continuationStart >= 0 &&
+        continuationStart <= state.contentBlocks.length
+          ? state.contentBlocks.slice(0, continuationStart)
+          : [];
+      const existingContinuation =
+        continuationStart != null &&
+        continuationStart >= 0 &&
+        continuationStart <= state.contentBlocks.length
+          ? state.contentBlocks.slice(continuationStart)
+          : [];
+      const overlapMergedContinuation =
+        continuationStart != null && existingContinuation.length > 0
+          ? mergeContinuationWithOverlap({
+              previousBlocks: existingContinuation,
+              nextBlocks: nextContentBlocks,
+            })
+          : null;
+      const hasContinuationBlockOverlap =
+        continuationStart != null &&
+        existingContinuation.length > 0 &&
+        nextContentBlocks.some((block) => existingContinuation.includes(block));
 
-      if (!shouldKeepStreamedBoundaryText) {
+      if (
+        overlapMergedContinuation &&
+        continuationStart != null &&
+        boundaryDropMode === "streamed-or-incoming"
+      ) {
+        state.contentBlocks = [
+          ...state.contentBlocks.slice(0, continuationStart),
+          ...overlapMergedContinuation,
+        ];
+        state.contentText = state.contentBlocks.join("\n");
+      } else if (shouldAppendContinuation) {
+        const canReplacePriorContinuation =
+          continuationStart != null &&
+          continuationStart >= 0 &&
+          continuationStart <= state.contentBlocks.length &&
+          isSnapshotCompatibleContinuation({
+            previousBlocks: existingContinuation,
+            nextBlocks: nextContentBlocks,
+          });
+        if (canReplacePriorContinuation && continuationStart != null) {
+          state.contentBlocks = [
+            ...state.contentBlocks.slice(0, continuationStart),
+            ...nextContentBlocks,
+          ];
+        } else {
+          if (continuationStart == null) {
+            state.postBoundaryContinuationStart = state.contentBlocks.length;
+          }
+          state.contentBlocks = [...state.contentBlocks, ...nextContentBlocks];
+        }
+        state.contentText = state.contentBlocks.join("\n");
+      } else if (
+        !shouldKeepStreamedBoundaryText &&
+        boundaryDropMode === "streamed-or-incoming" &&
+        hasContinuationBlockOverlap &&
+        continuationStart != null
+      ) {
+        const nextIncludesBoundaryPrefix =
+          priorBoundaryPrefix.length > 0 &&
+          nextContentBlocks.length >= priorBoundaryPrefix.length &&
+          priorBoundaryPrefix.every((block, index) => nextContentBlocks[index] === block);
+        state.contentBlocks = nextIncludesBoundaryPrefix
+          ? nextContentBlocks
+          : [...priorBoundaryPrefix, ...nextContentBlocks];
+        state.contentText = state.contentBlocks.join("\n");
+      } else if (!shouldKeepStreamedBoundaryText) {
         state.contentText = contentText;
         state.contentBlocks = nextContentBlocks;
+        state.postBoundaryContinuationStart = null;
       }
     }
     if (sawNonTextContentBlocks) {

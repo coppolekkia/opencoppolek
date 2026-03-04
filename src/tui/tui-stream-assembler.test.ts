@@ -107,6 +107,200 @@ describe("TuiStreamAssembler", () => {
     expect(second).toBeNull();
   });
 
+  it("appends post-tool continuation text instead of erasing pre-tool text", () => {
+    const assembler = new TuiStreamAssembler();
+
+    const first = assembler.ingestDelta(
+      "run-post-tool",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    expect(first).toBe("Before tool call");
+
+    const boundary = assembler.ingestDelta(
+      "run-post-tool",
+      messageWithContent([toolUse(), text("After tool call")]),
+      false,
+    );
+    expect(boundary).toBe("Before tool call\nAfter tool call");
+  });
+
+  it("keeps appended post-tool continuation on repeated deltas", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-repeat",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-repeat",
+      messageWithContent([toolUse(), text("After tool call")]),
+      false,
+    );
+
+    const repeated = assembler.ingestDelta(
+      "run-post-tool-repeat",
+      messageWithContent([text("After tool call")]),
+      false,
+    );
+    expect(repeated).toBeNull();
+
+    const finalText = assembler.finalize(
+      "run-post-tool-repeat",
+      messageWithContent([text("Before tool call"), text("After tool call")]),
+      false,
+    );
+    expect(finalText).toBe("Before tool call\nAfter tool call");
+  });
+
+  it("replaces post-tool continuation snapshots instead of duplicating them", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-expand",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-expand",
+      messageWithContent([toolUse(), text("After tool call")]),
+      false,
+    );
+
+    const expanded = assembler.ingestDelta(
+      "run-post-tool-expand",
+      messageWithContent([toolUse(), text("After tool call (expanded)")]),
+      false,
+    );
+    expect(expanded).toBe("Before tool call\nAfter tool call (expanded)");
+  });
+
+  it("keeps pre-tool text when continuation snapshots partially overlap", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-overlap",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-overlap",
+      messageWithContent([toolUse(), text("After 1")]),
+      false,
+    );
+
+    const overlap = assembler.ingestDelta(
+      "run-post-tool-overlap",
+      messageWithContent([toolUse(), text("After 1"), text("After 2")]),
+      false,
+    );
+    expect(overlap).toBe("Before tool call\nAfter 1\nAfter 2");
+  });
+
+  it("preserves pre-tool text on mixed-overlap continuation updates", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-mixed-overlap",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-mixed-overlap",
+      messageWithContent([toolUse(), text("After 1")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-mixed-overlap",
+      messageWithContent([toolUse(), text("After 1"), text("After 2")]),
+      false,
+    );
+
+    const revised = assembler.ingestDelta(
+      "run-post-tool-mixed-overlap",
+      messageWithContent([toolUse(), text("After 1 revised"), text("After 2")]),
+      false,
+    );
+    expect(revised).toBe("Before tool call\nAfter 1 revised\nAfter 2");
+  });
+
+  it("replaces continuation with full snapshot without duplicating pre-tool prefix", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-full-snapshot",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-full-snapshot",
+      messageWithContent([toolUse(), text("After 1")]),
+      false,
+    );
+
+    const fullSnapshot = assembler.ingestDelta(
+      "run-post-tool-full-snapshot",
+      messageWithContent([text("Before tool call"), text("After 1"), text("After 2")]),
+      false,
+    );
+    expect(fullSnapshot).toBe("Before tool call\nAfter 1\nAfter 2");
+  });
+
+  it("keeps continuation anchor across appended post-tool chunks", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-anchor",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-anchor",
+      messageWithContent([toolUse(), text("After 1")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-anchor",
+      messageWithContent([toolUse(), text("After 2")]),
+      false,
+    );
+
+    const fullSnapshot = assembler.ingestDelta(
+      "run-post-tool-anchor",
+      messageWithContent([toolUse(), text("After 1"), text("After 2"), text("After 3")]),
+      false,
+    );
+    expect(fullSnapshot).toBe("Before tool call\nAfter 1\nAfter 2\nAfter 3");
+  });
+
+  it("does not retain stale continuation blocks during finalize snapshots", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-finalize-snapshot",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-finalize-snapshot",
+      messageWithContent([toolUse(), text("After 1")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-finalize-snapshot",
+      messageWithContent([toolUse(), text("After 2")]),
+      false,
+    );
+
+    const finalText = assembler.finalize(
+      "run-post-tool-finalize-snapshot",
+      messageWithContent([toolUse(), text("After 2"), text("After 3")]),
+      false,
+    );
+    expect(finalText).toBe("After 2\nAfter 3");
+  });
+
   for (const testCase of FINALIZE_BOUNDARY_CASES) {
     it(testCase.name, () => {
       const assembler = new TuiStreamAssembler();
