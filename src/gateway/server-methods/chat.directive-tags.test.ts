@@ -346,7 +346,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(payload)).toBe("hello");
   });
 
-  it("chat.send inherits originating routing metadata from session delivery context", async () => {
+  it("chat.send does not cross-route channel-scoped sessions to external channels (#34647)", async () => {
     createTranscriptFixture("openclaw-chat-send-origin-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -374,15 +374,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toEqual(
       expect.objectContaining({
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:6812765697",
-        AccountId: "default",
-        MessageThreadId: 42,
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
       }),
     );
   });
 
-  it("chat.send inherits Feishu routing metadata from session delivery context", async () => {
+  it("chat.send does not cross-route Feishu sessions to Feishu (#34647)", async () => {
     createTranscriptFixture("openclaw-chat-send-feishu-origin-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -408,14 +407,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toEqual(
       expect.objectContaining({
-        OriginatingChannel: "feishu",
-        OriginatingTo: "ou_feishu_direct_123",
-        AccountId: "default",
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
       }),
     );
   });
 
-  it("chat.send inherits routing metadata for per-account channel-peer session keys", async () => {
+  it("chat.send does not cross-route per-account channel-peer sessions (#34647)", async () => {
     createTranscriptFixture("openclaw-chat-send-per-account-channel-peer-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -441,14 +440,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toEqual(
       expect.objectContaining({
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:6812765697",
-        AccountId: "account-a",
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
       }),
     );
   });
 
-  it("chat.send inherits routing metadata for legacy channel-peer session keys", async () => {
+  it("chat.send does not cross-route legacy channel-peer sessions (#34647)", async () => {
     createTranscriptFixture("openclaw-chat-send-legacy-channel-peer-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -474,14 +473,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toEqual(
       expect.objectContaining({
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:6812765697",
-        AccountId: "default",
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
       }),
     );
   });
 
-  it("chat.send inherits routing metadata for legacy channel-peer thread session keys", async () => {
+  it("chat.send does not cross-route legacy thread sessions (#34647)", async () => {
     createTranscriptFixture("openclaw-chat-send-legacy-thread-channel-peer-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -509,10 +508,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toEqual(
       expect.objectContaining({
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:6812765697",
-        AccountId: "default",
-        MessageThreadId: "42",
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
       }),
     );
   });
