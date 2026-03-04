@@ -493,6 +493,7 @@ export {
   buildReactionIdentifier,
   createDiscordClient,
   formatReactionEmoji,
+  getDiscordErrorCode,
   normalizeDiscordPollInput,
   normalizeEmojiName,
   normalizeReactionEmoji,
