@@ -11,6 +11,7 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { registerUnhandledRejectionHandler } from "../../../infra/unhandled-rejections.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -1435,6 +1436,11 @@ export async function runEmbeddedAttempt(
           );
         }
 
+        // FIX(#24622): Mutable ref to capture streaming errors from the
+        // unhandled rejection handler so they survive into the catch block.
+        // Must be declared outside the try so it is visible in catch.
+        const streamingErrorRef: { error?: Error } = {};
+
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
           // Called each run; only mutates already-answered user turns that still carry image blocks.
@@ -1512,13 +1518,62 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+          //
+          // FIX(#24622): Register an unhandled rejection handler during the prompt
+          // call to catch streaming fetch errors (e.g. TypeError: fetch failed from
+          // billing/quota exhaustion). The pi-ai SDK's streaming implementation can
+          // leak these as unhandled rejections instead of rejecting the prompt()
+          // promise, causing the gateway to hang indefinitely. When we catch such
+          // an error, we force-abort the run so the error surfaces properly
+          // through the normal error handling path (failover, user message, etc.).
+          let unregisterPromptRejectionHandler: (() => void) | undefined;
+          try {
+            unregisterPromptRejectionHandler = registerUnhandledRejectionHandler(
+              (reason: unknown) => {
+                // Only intercept errors that look like streaming fetch failures.
+                // These escape the pi-ai SDK's error handling and leave prompt()
+                // hanging forever.
+                const isFetchError =
+                  reason instanceof TypeError && reason.message === "fetch failed";
+                const isNetworkLike =
+                  reason instanceof Error &&
+                  /ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|socket hang up/i.test(
+                    reason.message,
+                  );
+                if (!isFetchError && !isNetworkLike) {
+                  return false;
+                }
+                log.warn(
+                  `Captured unhandled streaming rejection during prompt, forcing abort: ` +
+                    `runId=${params.runId} sessionId=${params.sessionId} error=${String(reason)}`,
+                );
+                streamingErrorRef.error =
+                  reason instanceof Error ? reason : new Error(String(reason));
+                abortRun(true, reason);
+                return true;
+              },
+            );
+          } catch {
+            // Best-effort: if handler registration fails, proceed without it.
+          }
+          try {
+            if (imageResult.images.length > 0) {
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
+          } finally {
+            unregisterPromptRejectionHandler?.();
           }
         } catch (err) {
-          promptError = err;
+          // FIX(#24622): When a streaming fetch error was captured via the
+          // unhandled rejection handler, the abortable() wrapper produces a
+          // generic AbortError/TimeoutError. Replace it with the original
+          // streaming error so the outer run loop can classify it correctly
+          // (e.g. as a billing error for proper failover).
+          promptError = streamingErrorRef.error ?? err;
           promptErrorSource = "prompt";
         } finally {
           log.debug(
