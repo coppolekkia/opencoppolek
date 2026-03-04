@@ -4,6 +4,7 @@ import path from "node:path";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
+import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import { callGateway } from "../gateway/call.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -282,7 +283,7 @@ export async function spawnSubagentDirect(
         ? params.cleanup
         : "keep";
   const expectsCompletionMessage = params.expectsCompletionMessage !== false;
-  const requesterOrigin = normalizeDeliveryContext({
+  let requesterOrigin = normalizeDeliveryContext({
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
@@ -319,6 +320,22 @@ export async function spawnSubagentDirect(
     alias,
     mainKey,
   });
+
+  // If the calling context didn't carry a `to` (e.g. Discord sessions where the
+  // channel target is stored in the session store but not forwarded via inline-
+  // action opts), fall back to the requester's persisted deliveryContext.to so
+  // that subagent completion announces always have a valid destination address.
+  if (!requesterOrigin?.to) {
+    const { deliveryContext: storedCtx } = extractDeliveryInfo(requesterInternalKey);
+    if (storedCtx?.to) {
+      requesterOrigin = normalizeDeliveryContext({
+        channel: requesterOrigin?.channel ?? storedCtx.channel,
+        to: storedCtx.to,
+        accountId: requesterOrigin?.accountId ?? storedCtx.accountId,
+        threadId: requesterOrigin?.threadId,
+      });
+    }
+  }
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
   const maxSpawnDepth =
