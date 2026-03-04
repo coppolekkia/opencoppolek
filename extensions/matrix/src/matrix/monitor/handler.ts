@@ -8,6 +8,7 @@ import {
   logInboundDrop,
   logTypingFailure,
   resolveControlCommandGate,
+  transcribeFirstAudio,
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
@@ -337,7 +338,28 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
 
-      const bodyText = rawBody || media?.placeholder || "";
+      // Transcribe audio messages
+      let audioTranscript: string | undefined;
+      const isAudio = contentType?.startsWith("audio/") || content.msgtype === "m.audio";
+      if (isAudio && media?.path) {
+        try {
+          audioTranscript = await transcribeFirstAudio({
+            ctx: {
+              MediaPaths: [media.path],
+              MediaTypes: media.contentType ? [media.contentType] : undefined,
+            },
+            cfg,
+            agentDir: undefined,
+          });
+          if (audioTranscript) {
+            logVerboseMessage(`matrix: transcribed audio (${audioTranscript.length} chars)`);
+          }
+        } catch (err) {
+          logVerboseMessage(`matrix: audio transcription failed: ${String(err)}`);
+        }
+      }
+
+      const bodyText = rawBody || audioTranscript || media?.placeholder || "";
       if (!bodyText) {
         return;
       }
