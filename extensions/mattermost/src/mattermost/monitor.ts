@@ -391,6 +391,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     log: (message) => logVerboseMessage(message),
   });
 
+  const baseHostname = new URL(client.baseUrl).hostname;
+  const mediaSsrfPolicy = {
+    hostnameAllowlist: [baseHostname],
+    allowedHostnames: [baseHostname],
+  };
+
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
   ): Promise<MattermostMediaInfo[]> => {
@@ -410,6 +416,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
+          ssrfPolicy: mediaSsrfPolicy,
         });
         const saved = await core.channel.media.saveMediaBuffer(
           fetched.buffer,
