@@ -143,6 +143,22 @@ describe("webhook-queue", () => {
     expect(pending[49].deduplicationId).toBe("49");
   });
 
+  it("replayPendingWebhooks cleans up orphaned .tmp files", async () => {
+    const queueDir = path.join(stateDir, "webhook-queue");
+    await fs.promises.mkdir(queueDir, { recursive: true });
+    // Simulate an orphaned temp file from an interrupted write.
+    await fs.promises.writeFile(path.join(queueDir, "telegram-42.json.12345.tmp"), "partial");
+    await enqueueWebhook("telegram", "1", { update_id: 1 }, stateDir);
+
+    const pending = await replayPendingWebhooks(undefined, stateDir);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].deduplicationId).toBe("1");
+
+    // Orphaned tmp file should be deleted.
+    const remaining = await fs.promises.readdir(queueDir);
+    expect(remaining.some((f) => f.endsWith(".tmp"))).toBe(false);
+  });
+
   it("enqueue overwrites existing entry with same deduplicationId", async () => {
     await enqueueWebhook("telegram", "100", { update_id: 100, v: 1 }, stateDir);
     await enqueueWebhook("telegram", "100", { update_id: 100, v: 2 }, stateDir);

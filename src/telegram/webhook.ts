@@ -217,6 +217,12 @@ export async function startTelegramWebhook(opts: {
       const secretHeaderRaw = req.headers["x-telegram-bot-api-secret-token"];
       const secretHeader = Array.isArray(secretHeaderRaw) ? secretHeaderRaw[0] : secretHeaderRaw;
 
+      // Validate webhook secret before persisting anything to disk.
+      if (secretHeader !== secret) {
+        await unauthorized();
+        return;
+      }
+
       // Persist payload to disk before processing so it survives a restart.
       const updateId =
         body.value && typeof body.value === "object" && "update_id" in body.value

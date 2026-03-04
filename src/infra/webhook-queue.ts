@@ -99,6 +99,11 @@ export async function replayPendingWebhooks(
   const entries: WebhookQueueEntry[] = [];
 
   for (const file of files) {
+    // Clean up orphaned temp files from interrupted writes.
+    if (file.endsWith(".tmp")) {
+      await fs.promises.unlink(path.join(queueDir, file)).catch(() => {});
+      continue;
+    }
     if (!file.endsWith(".json")) {
       continue;
     }
