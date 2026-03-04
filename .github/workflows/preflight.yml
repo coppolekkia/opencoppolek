@@ -15,6 +15,15 @@ on:
   push:
     branches-ignore:
       - main
+  # Manual trigger: run checks on any branch from GitHub Actions UI.
+  # Use this for existing PR branches (P1/P2/P3) where we don't want
+  # to commit the preflight.yml into the branch itself (avoids upstream PR pollution).
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you running this?"
+        required: false
+        default: "manual preflight check"
 
 concurrency:
   group: preflight-${{ github.ref }}
