@@ -427,13 +427,13 @@ describe("fresh install behavior", () => {
 
   it("fresh install uses JSON mode by default", async () => {
     const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:new": makeEntry(now),
-    };
 
-    await saveSessionStore(storePath, store);
+    await updateSessionStore(storePath, (store) => {
+      store["agent:main:new"] = makeEntry(now);
+    });
 
-    // Should create sessions.json, not sessions.d/
+    // Fresh install: no sessions.json existed before, so no migration occurred.
+    // Data is written to sessions.json (legacy mode).
     const stat = await fs.stat(storePath);
     expect(stat.isFile()).toBe(true);
 
@@ -443,10 +443,7 @@ describe("fresh install behavior", () => {
 
   it("fresh install can be migrated to directory mode", async () => {
     const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:new": makeEntry(now),
-    };
-    await saveSessionStore(storePath, store);
+    await saveSessionStore(storePath, { "agent:main:new": makeEntry(now) });
 
     const migrated = await migrateSessionStoreToDirectory(storePath);
     expect(migrated).toBe(true);
@@ -457,5 +454,29 @@ describe("fresh install behavior", () => {
 
     const loaded = loadSessionStore(storePath);
     expect(loaded["agent:main:new"]).toBeDefined();
+  });
+
+  it("migrateSessionStoreToDirectory then updateSessionStore works", async () => {
+    // Seed a legacy sessions.json
+    const now = Date.now();
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ "agent:main:existing": makeEntry(now) }, null, 2),
+      "utf-8",
+    );
+
+    // Explicit migration (called by gateway at startup)
+    await migrateSessionStoreToDirectory(storePath);
+
+    // Subsequent updateSessionStore uses directory mode
+    await updateSessionStore(storePath, (store) => {
+      store["agent:main:existing"] = {
+        ...store["agent:main:existing"],
+        modelOverride: "updated",
+      } as SessionEntry;
+    });
+
+    const loaded = loadSessionStore(storePath);
+    expect(loaded["agent:main:existing"]?.modelOverride).toBe("updated");
   });
 });
