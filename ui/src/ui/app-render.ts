@@ -16,6 +16,7 @@ import {
   loadConfig,
   runUpdate,
   saveConfig,
+  patchAgentsConfig,
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
@@ -721,7 +722,7 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onConfigReload: () => loadConfig(state),
-                onConfigSave: () => saveConfig(state),
+                onConfigSave: () => patchAgentsConfig(state),
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
                 onSkillsFilterChange: (next) => (state.skillsFilter = next),
@@ -971,7 +972,7 @@ export function renderApp(state: AppViewState) {
                     removeConfigFormValue(state, basePath);
                   }
                 },
-                onSaveBindings: () => saveConfig(state),
+                onSaveBindings: () => patchAgentsConfig(state),
                 onExecApprovalsTargetChange: (kind, nodeId) => {
                   state.execApprovalsTarget = kind;
                   state.execApprovalsTargetNodeId = nodeId;
