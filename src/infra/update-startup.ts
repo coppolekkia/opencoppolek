@@ -66,6 +66,33 @@ const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
 const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
 
+function normalizeSemverForPromotionAlias(version: string): {
+  base: string;
+  hasPrerelease: boolean;
+} | null {
+  const normalized = version.trim().replace(/^v/i, "");
+  if (!normalized) {
+    return null;
+  }
+  const [core, ...rest] = normalized.split("-");
+  if (!core || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(core)) {
+    return null;
+  }
+  return {
+    base: core,
+    hasPrerelease: rest.length > 0,
+  };
+}
+
+function isStablePromotionAlias(currentVersion: string, latestVersion: string): boolean {
+  const current = normalizeSemverForPromotionAlias(currentVersion);
+  const latest = normalizeSemverForPromotionAlias(latestVersion);
+  if (!current || !latest) {
+    return false;
+  }
+  return current.base === latest.base && current.hasPrerelease && !latest.hasPrerelease;
+}
+
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
     return false;
@@ -153,9 +180,16 @@ function setUpdateAvailableCache(params: {
   params.onUpdateAvailableChange?.(params.next);
 }
 
-function resolvePersistedUpdateAvailable(state: UpdateCheckState): UpdateAvailable | null {
+function resolvePersistedUpdateAvailable(params: {
+  state: UpdateCheckState;
+  channel: "stable" | "beta";
+}): UpdateAvailable | null {
+  const state = params.state;
   const latestVersion = state.lastAvailableVersion?.trim();
   if (!latestVersion) {
+    return null;
+  }
+  if (params.channel === "stable" && isStablePromotionAlias(VERSION, latestVersion)) {
     return null;
   }
   const cmp = compareSemverStrings(VERSION, latestVersion);
@@ -325,8 +359,12 @@ export async function runGatewayUpdateCheck(params: {
   const state = await readState(statePath);
   const now = Date.now();
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
+  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   if (shouldRunUpdateHints) {
-    const persistedAvailable = resolvePersistedUpdateAvailable(state);
+    const persistedAvailable = resolvePersistedUpdateAvailable({
+      state,
+      channel,
+    });
     setUpdateAvailableCache({
       next: persistedAvailable,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
@@ -373,7 +411,6 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
@@ -381,7 +418,9 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const cmp = compareSemverStrings(VERSION, resolved.version);
+  const stablePromotionAlias =
+    channel === "stable" && isStablePromotionAlias(VERSION, resolved.version);
+  const cmp = stablePromotionAlias ? 0 : compareSemverStrings(VERSION, resolved.version);
   if (cmp != null && cmp < 0) {
     const nextAvailable: UpdateAvailable = {
       currentVersion: VERSION,
