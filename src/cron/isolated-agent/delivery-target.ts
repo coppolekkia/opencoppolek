@@ -15,7 +15,7 @@ import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
-import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -182,7 +182,14 @@ export async function resolveDeliveryTarget(
 
     if (toCandidate && mode === "implicit" && effectiveSendList.length > 0 && !hasWildcard) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
-      if (!normalizedCurrentTarget || !effectiveSendList.includes(normalizedCurrentTarget)) {
+      // Group JIDs bypass allowSendTo (governed by groupPolicy instead).
+      if (
+        normalizedCurrentTarget &&
+        !isWhatsAppGroupJid(normalizedCurrentTarget) &&
+        !effectiveSendList.includes(normalizedCurrentTarget)
+      ) {
+        toCandidate = effectiveSendList[0];
+      } else if (!normalizedCurrentTarget) {
         toCandidate = effectiveSendList[0];
       }
     }
