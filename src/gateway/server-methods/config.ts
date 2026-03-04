@@ -20,11 +20,7 @@ import {
 import { buildConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  formatDoctorNonInteractiveHint,
-  type RestartSentinelPayload,
-  writeRestartSentinel,
-} from "../../infra/restart-sentinel.js";
+import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { diffConfigPaths } from "../config-reload.js";
@@ -190,7 +186,7 @@ function buildConfigRestartSentinelPayload(params: {
     deliveryContext: params.deliveryContext,
     threadId: params.threadId,
     message: params.note ?? null,
-    doctorHint: formatDoctorNonInteractiveHint(),
+    doctorHint: null,
     stats: {
       mode: params.mode,
       root: CONFIG_PATH,

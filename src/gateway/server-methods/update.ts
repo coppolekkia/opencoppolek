@@ -63,7 +63,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       deliveryContext,
       threadId,
       message: note ?? null,
-      doctorHint: formatDoctorNonInteractiveHint(),
+      doctorHint: result.status === "error" ? formatDoctorNonInteractiveHint() : null,
       stats: {
         mode: result.mode,
         root: result.root ?? undefined,
