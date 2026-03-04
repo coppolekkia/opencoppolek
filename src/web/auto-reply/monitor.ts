@@ -151,6 +151,9 @@ export async function monitorWebChannel(
       break;
     }
 
+    groupHistories.clear();
+    groupMemberNames.clear();
+
     const connectionId = newConnectionId();
     const startedAt = Date.now();
     let heartbeat: NodeJS.Timeout | null = null;
