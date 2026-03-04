@@ -138,7 +138,14 @@ export class AcpGatewayAgent implements Agent {
         },
       },
       agentInfo: ACP_AGENT_INFO,
-      authMethods: [],
+      authMethods: [
+        {
+          id: "gateway-token",
+          name: "Gateway Token",
+          description:
+            "Authenticate using OPENCLAW_GATEWAY_TOKEN environment variable or --gateway-token CLI flag",
+        },
+      ],
     };
   }
 
