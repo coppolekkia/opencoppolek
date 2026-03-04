@@ -204,6 +204,38 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         groupPolicy: account.config.groupPolicy,
         defaultGroupPolicy,
       });
+      const hasExplicitAllowEntries = (entries?: Array<string | number>): boolean =>
+        (entries ?? []).some((entry) => String(entry).trim().length > 0);
+      const hasGroupOrTopicAllowFrom = Object.values(account.config.groups ?? {}).some((group) => {
+        if (hasExplicitAllowEntries(group?.allowFrom)) {
+          return true;
+        }
+        return Object.values(group?.topics ?? {}).some((topic) =>
+          hasExplicitAllowEntries(topic?.allowFrom),
+        );
+      });
+      const hasOpenGroupOrTopicOverride = Object.values(account.config.groups ?? {}).some(
+        (group) =>
+          group?.groupPolicy === "open" ||
+          Object.values(group?.topics ?? {}).some((topic) => topic?.groupPolicy === "open"),
+      );
+      const hasAccountSenderAllowlist =
+        typeof account.config.groupAllowFrom !== "undefined"
+          ? hasExplicitAllowEntries(account.config.groupAllowFrom)
+          : hasExplicitAllowEntries(account.config.allowFrom);
+      const hasSenderAllowlist = hasAccountSenderAllowlist || hasGroupOrTopicAllowFrom;
+      const useAccountPath = Boolean(cfg.channels?.telegram?.accounts?.[account.accountId]);
+      const basePath = useAccountPath
+        ? `channels.telegram.accounts.${account.accountId}`
+        : "channels.telegram";
+      if (groupPolicy === "allowlist" && !hasSenderAllowlist) {
+        const impact = hasOpenGroupOrTopicOverride
+          ? `only chats with explicit per-group/per-topic groupPolicy="open" overrides will work. Configure ${basePath}.groupAllowFrom (or per-group/per-topic allowFrom) with numeric sender IDs for the rest.`
+          : `all group senders will be blocked. Configure ${basePath}.groupAllowFrom (or per-group/per-topic allowFrom) with numeric sender IDs.`;
+        return [
+          `- Telegram groups: groupPolicy="allowlist" is active, but no sender allowlist is configured; ${impact}`,
+        ];
+      }
       if (groupPolicy !== "open") {
         return [];
       }
