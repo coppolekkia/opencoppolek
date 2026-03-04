@@ -469,6 +469,7 @@ describe("memory cli", () => {
     expect(search).toHaveBeenCalledWith("hello", {
       maxResults: undefined,
       minScore: undefined,
+      sessionKey: "agent:main:main",
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -485,6 +486,7 @@ describe("memory cli", () => {
     expect(search).toHaveBeenCalledWith("deployment notes", {
       maxResults: undefined,
       minScore: undefined,
+      sessionKey: "agent:main:main",
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -502,6 +504,7 @@ describe("memory cli", () => {
     expect(search).toHaveBeenCalledWith("flagged", {
       maxResults: undefined,
       minScore: undefined,
+      sessionKey: "agent:main:main",
     });
     expect(close).toHaveBeenCalled();
   });
