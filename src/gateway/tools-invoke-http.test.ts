@@ -100,6 +100,14 @@ vi.mock("../agents/openclaw-tools.js", () => {
       },
     },
     {
+      name: "nodes",
+      parameters: { type: "object", properties: { action: { type: "string" } } },
+      execute: async (_toolCallId: string, args: unknown) => ({
+        ok: true,
+        action: (args as { action?: unknown })?.action,
+      }),
+    },
+    {
       name: "tools_invoke_test",
       parameters: {
         type: "object",
@@ -478,6 +486,44 @@ describe("POST /tools/invoke", () => {
     });
 
     expect(res.status).toBe(404);
+  });
+
+  it("denies nodes tool via HTTP even when agent policy allows", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["nodes"] } }],
+      },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "nodes",
+      args: { action: "status" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("allows nodes tool via HTTP when explicitly enabled in gateway.tools.allow", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["nodes"] } }],
+      },
+      gateway: { tools: { allow: ["nodes"] } },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "nodes",
+      args: { action: "status" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.result?.action).toBe("status");
   });
 
   it("allows gateway tool via HTTP when explicitly enabled in gateway.tools.allow", async () => {

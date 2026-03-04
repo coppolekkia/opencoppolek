@@ -64,6 +64,7 @@ Gateway HTTP also applies a hard deny list by default (even if session policy al
 - `sessions_spawn`
 - `sessions_send`
 - `gateway`
+- `nodes`
 - `whatsapp_login`
 
 You can customize this deny list via `gateway.tools`:
