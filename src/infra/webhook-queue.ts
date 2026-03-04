@@ -129,8 +129,10 @@ export async function replayPendingWebhooks(
     }
   }
 
-  // Sort oldest first.
-  entries.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
+  // Sort oldest first; break timestamp ties deterministically by deduplicationId.
+  entries.sort(
+    (a, b) => a.enqueuedAt - b.enqueuedAt || a.deduplicationId.localeCompare(b.deduplicationId),
+  );
 
   // Deduplicate by deduplicationId (keep earliest).
   const seen = new Set<string>();

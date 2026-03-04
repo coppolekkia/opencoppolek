@@ -143,6 +143,23 @@ describe("webhook-queue", () => {
     expect(pending[49].deduplicationId).toBe("49");
   });
 
+  it("replayPendingWebhooks breaks timestamp ties by deduplicationId", async () => {
+    const now = Date.now();
+    const queueDir = path.join(stateDir, "webhook-queue");
+    await fs.promises.mkdir(queueDir, { recursive: true });
+    // Three entries with the same timestamp — order must be deterministic.
+    for (const id of ["300", "100", "200"]) {
+      const entry = { channelId: "telegram", deduplicationId: id, enqueuedAt: now, payload: {} };
+      await fs.promises.writeFile(
+        path.join(queueDir, `telegram-${id}.json`),
+        JSON.stringify(entry),
+      );
+    }
+
+    const pending = await replayPendingWebhooks(undefined, stateDir);
+    expect(pending.map((e) => e.deduplicationId)).toEqual(["100", "200", "300"]);
+  });
+
   it("replayPendingWebhooks cleans up orphaned .tmp files", async () => {
     const queueDir = path.join(stateDir, "webhook-queue");
     await fs.promises.mkdir(queueDir, { recursive: true });
