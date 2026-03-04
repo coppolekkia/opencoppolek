@@ -288,6 +288,7 @@ export type AgentDefaultsConfig = {
 
 export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
+export type AgentCompactionOnFailure = "reset" | "continue" | "halt";
 
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
@@ -306,6 +307,15 @@ export type AgentCompactionConfig = {
   identifierInstructions?: string;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /**
+   * What to do when compaction fails or times out.
+   * - "reset" (default): reset the session and start fresh (current behavior).
+   * - "continue": skip reset, session continues accepting messages (may degrade).
+   * - "halt": halt the session so no further messages are processed until /new.
+   */
+  onFailure?: AgentCompactionOnFailure;
+  /** Custom message delivered to the user when compaction fails. Only used when onFailure is set. */
+  onFailureMessage?: string;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
