@@ -341,8 +341,13 @@ export function resolveCommandAuthorization(params: {
   const senderId = matchedSender ?? senderCandidates[0];
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
-  const senderIsOwner = Boolean(matchedSender);
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
+  // When no owner allowlist is configured (single-user setup), treat the sender
+  // as owner so that ownerOnly tools (cron, gateway) are available.  Previously
+  // senderIsOwner was always false when ownerList was empty, which silently hid
+  // ownerOnly tools even for the sole authorized user.  See #26319.
+  const senderIsOwner =
+    ownerAllowAll || (!ownerAllowlistConfigured && Boolean(senderId)) || Boolean(matchedSender);
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
