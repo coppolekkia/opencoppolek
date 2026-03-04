@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -524,6 +525,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     };
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
+      fsCache: path.join(resolveStateDir(process.env), "cache", "jiti"),
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
       ...(Object.keys(aliasMap).length > 0
         ? {
