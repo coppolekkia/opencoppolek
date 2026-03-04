@@ -27,6 +27,7 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
+      parentConversationId: "parent-1",
     });
     expect(isAcpCommandDiscordChannel(params)).toBe(true);
   });
@@ -44,6 +45,7 @@ describe("commands-acp context", () => {
       accountId: "default",
       threadId: undefined,
       conversationId: "123456789",
+      parentConversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
     expect(isAcpCommandDiscordChannel(params)).toBe(false);
