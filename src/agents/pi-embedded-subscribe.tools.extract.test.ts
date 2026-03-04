@@ -36,15 +36,48 @@ describe("extractMessagingToolSend", () => {
     expect(result?.to).toBe("channel:C1");
   });
 
-  it("accepts target alias when to is omitted", () => {
+  it("tracks send when agent uses target instead of to (#25383)", () => {
     const result = extractMessagingToolSend("message", {
       action: "send",
       channel: "telegram",
       target: "123",
     });
 
+    expect(result).toBeDefined();
     expect(result?.tool).toBe("message");
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:123");
+  });
+
+  it("prefers to over target when both are provided", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+      to: "456",
+      target: "789",
+    });
+
+    expect(result?.to).toBe("telegram:456");
+  });
+
+  it("tracks thread-reply with target param", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "thread-reply",
+      channel: "telegram",
+      target: "123",
+    });
+
+    expect(result).toBeDefined();
+    expect(result?.tool).toBe("message");
+    expect(result?.to).toBe("telegram:123");
+  });
+
+  it("returns undefined when neither to nor target is provided", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+    });
+
+    expect(result).toBeUndefined();
   });
 });
