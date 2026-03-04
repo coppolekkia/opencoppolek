@@ -11,7 +11,7 @@ import type {
 } from "../../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
-import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { findExtraGatewayServices } from "../../daemon/inspect.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
@@ -89,7 +89,7 @@ export type DaemonStatus = {
     error?: string;
     url?: string;
   };
-  extraServices: Array<{ label: string; detail: string; scope: string }>;
+  extraServices: ExtraGatewayService[];
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
