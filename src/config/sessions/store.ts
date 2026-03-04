@@ -274,7 +274,10 @@ export function readSessionUpdatedAt(params: {
   sessionKey: string;
 }): number | undefined {
   try {
-    const store = loadSessionStore(params.storePath);
+    // CRITICAL: Skip cache to ensure fresh timestamp for session freshness decisions.
+    // Stale cache can cause incorrect thread context loading (loading history when
+    // session is actually fresh, or vice versa). Matches initSessionState pattern.
+    const store = loadSessionStore(params.storePath, { skipCache: true });
     const resolved = resolveStoreSessionEntry({ store, sessionKey: params.sessionKey });
     return resolved.existing?.updatedAt;
   } catch {
