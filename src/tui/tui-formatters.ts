@@ -1,5 +1,6 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -199,6 +200,27 @@ function formatAssistantErrorFromRecord(record: Record<string, unknown>): string
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
+function extractTopLevelText(record: Record<string, unknown>): string {
+  return typeof record.text === "string" ? sanitizeRenderableText(record.text).trim() : "";
+}
+
+function resolveAssistantTopLevelTextOverride(params: {
+  record: Record<string, unknown>;
+  extractedText: string;
+}): string {
+  if (params.record.role !== "assistant") {
+    return "";
+  }
+  const topLevelText = extractTopLevelText(params.record);
+  if (!topLevelText) {
+    return "";
+  }
+  if (!params.extractedText || isSilentReplyText(params.extractedText, SILENT_REPLY_TOKEN)) {
+    return topLevelText;
+  }
+  return "";
+}
+
 function collectSanitizedBlockStrings(params: {
   content: unknown;
   blockType: "text" | "thinking";
@@ -220,6 +242,27 @@ function collectSanitizedBlockStrings(params: {
   return parts;
 }
 
+function extractSanitizedContentText(content: unknown): string {
+  if (typeof content === "string") {
+    return sanitizeRenderableText(content).trim();
+  }
+  const parts = collectSanitizedBlockStrings({
+    content,
+    blockType: "text",
+    valueKey: "text",
+  });
+  return parts.join("\n").trim();
+}
+
+function extractSanitizedThinkingText(content: unknown): string {
+  const parts = collectSanitizedBlockStrings({
+    content,
+    blockType: "thinking",
+    valueKey: "thinking",
+  });
+  return parts.join("\n").trim();
+}
+
 /**
  * Extract ONLY thinking blocks from message content.
  * Model-agnostic: returns empty string if no thinking blocks exist.
@@ -233,12 +276,7 @@ export function extractThinkingFromMessage(message: unknown): string {
   if (typeof content === "string") {
     return "";
   }
-  const parts = collectSanitizedBlockStrings({
-    content,
-    blockType: "thinking",
-    valueKey: "thinking",
-  });
-  return parts.join("\n").trim();
+  return extractSanitizedThinkingText(content);
 }
 
 /**
@@ -251,49 +289,18 @@ export function extractContentFromMessage(message: unknown): string {
     return "";
   }
   const { record, content } = resolved;
-
-  if (typeof content === "string") {
-    return sanitizeRenderableText(content).trim();
-  }
-
-  const parts = collectSanitizedBlockStrings({
-    content,
-    blockType: "text",
-    valueKey: "text",
+  const extractedText = extractSanitizedContentText(content);
+  const topLevelTextOverride = resolveAssistantTopLevelTextOverride({
+    record,
+    extractedText,
   });
-  if (parts.length > 0) {
-    return parts.join("\n").trim();
+  if (topLevelTextOverride) {
+    return topLevelTextOverride;
+  }
+  if (extractedText) {
+    return extractedText;
   }
   return formatAssistantErrorFromRecord(record);
-}
-
-function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
-  if (typeof content === "string") {
-    return sanitizeRenderableText(content).trim();
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-
-  const textParts = collectSanitizedBlockStrings({
-    content,
-    blockType: "text",
-    valueKey: "text",
-  });
-  const thinkingParts =
-    opts?.includeThinking === true
-      ? collectSanitizedBlockStrings({
-          content,
-          blockType: "thinking",
-          valueKey: "thinking",
-        })
-      : [];
-
-  return composeThinkingAndContent({
-    thinkingText: thinkingParts.join("\n").trim(),
-    contentText: textParts.join("\n").trim(),
-    showThinking: opts?.includeThinking ?? false,
-  });
 }
 
 export function extractTextFromMessage(
@@ -304,12 +311,30 @@ export function extractTextFromMessage(
   if (!record) {
     return "";
   }
-  const text = extractTextBlocks(record.content, opts);
+  const extractedContentText = extractSanitizedContentText(record.content);
+  const topLevelTextOverride = resolveAssistantTopLevelTextOverride({
+    record,
+    extractedText: extractedContentText,
+  });
+  const text = composeThinkingAndContent({
+    thinkingText:
+      opts?.includeThinking === true ? extractSanitizedThinkingText(record.content) : "",
+    contentText: topLevelTextOverride || extractedContentText,
+    showThinking: opts?.includeThinking ?? false,
+  });
   if (text) {
     if (record.role === "user") {
       return stripLeadingInboundMetadata(text);
     }
     return text;
+  }
+
+  const fallbackText = extractTopLevelText(record);
+  if (fallbackText) {
+    if (record.role === "user") {
+      return stripLeadingInboundMetadata(fallbackText);
+    }
+    return fallbackText;
   }
 
   const errorText = formatAssistantErrorFromRecord(record);
