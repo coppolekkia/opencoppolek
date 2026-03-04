@@ -141,7 +141,8 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   fs.mkdirSync(path.dirname(settings.file), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
   if (isRollingPath(settings.file)) {
-    pruneOldRollingLogs(path.dirname(settings.file));
+    // Pass the resolved log prefix so pruning only removes this profile's logs
+    pruneOldRollingLogs(path.dirname(settings.file), resolveLogPrefix());
   }
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
   let warnedAboutSizeCap = false;
@@ -306,21 +307,68 @@ function formatLocalDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function defaultRollingPathForToday(): string {
+/**
+ * Returns the log prefix for the current profile.
+ * Default profile uses "openclaw", named profiles use "openclaw-<profile>".
+ * The profile name is sanitized to only include alphanumeric characters, hyphens, and underscores.
+ */
+export function resolveLogPrefix(env: NodeJS.ProcessEnv = process.env): string {
+  const profile = env.OPENCLAW_PROFILE?.trim().toLowerCase();
+  if (!profile || profile === "default") {
+    return LOG_PREFIX;
+  }
+  // Sanitize: only allow alphanumeric, hyphen, underscore
+  const safe = profile
+    .replace(/[^a-z0-9_-]/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+  return safe ? `${LOG_PREFIX}-${safe}` : LOG_PREFIX;
+}
+
+function defaultRollingPathForToday(env: NodeJS.ProcessEnv = process.env): string {
   const today = formatLocalDate(new Date());
-  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+  const prefix = resolveLogPrefix(env);
+  return path.join(DEFAULT_LOG_DIR, `${prefix}-${today}${LOG_SUFFIX}`);
 }
 
 function isRollingPath(file: string): boolean {
   const base = path.basename(file);
-  return (
-    base.startsWith(`${LOG_PREFIX}-`) &&
-    base.endsWith(LOG_SUFFIX) &&
-    base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
-  );
+  // Match any profile's rolling log: openclaw[-<profile>]-YYYY-MM-DD.log
+  if (!base.startsWith(`${LOG_PREFIX}-`) || !base.endsWith(LOG_SUFFIX)) {
+    return false;
+  }
+  // Try to extract the date suffix — last 10 chars before LOG_SUFFIX
+  const withoutSuffix = base.slice(0, -LOG_SUFFIX.length);
+  const datePart = withoutSuffix.slice(-10); // "YYYY-MM-DD"
+  return /^\d{4}-\d{2}-\d{2}$/.test(datePart);
 }
 
-function pruneOldRollingLogs(dir: string): void {
+/**
+ * Extract the log prefix (profile identifier) from a rolling log filename.
+ * e.g. "openclaw-2026-03-04.log"    → "openclaw"       (default profile)
+ *      "openclaw-xv-2026-03-04.log" → "openclaw-xv"    (named profile)
+ * Returns null if the filename is not a valid rolling log.
+ */
+export function extractLogFilePrefix(filename: string): string | null {
+  const base = path.basename(filename);
+  if (!base.endsWith(LOG_SUFFIX)) {
+    return null;
+  }
+  const withoutSuffix = base.slice(0, -LOG_SUFFIX.length);
+  const datePart = withoutSuffix.slice(-10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    return null;
+  }
+  // Prefix is everything before "-YYYY-MM-DD"
+  const prefix = withoutSuffix.slice(0, -11); // strip "-YYYY-MM-DD"
+  // Only recognize openclaw log files (not arbitrary dated .log files)
+  if (!prefix || !prefix.startsWith(LOG_PREFIX)) {
+    return null;
+  }
+  return prefix;
+}
+
+function pruneOldRollingLogs(dir: string, filePrefix: string): void {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     const cutoff = Date.now() - MAX_LOG_AGE_MS;
@@ -328,7 +376,10 @@ function pruneOldRollingLogs(dir: string): void {
       if (!entry.isFile()) {
         continue;
       }
-      if (!entry.name.startsWith(`${LOG_PREFIX}-`) || !entry.name.endsWith(LOG_SUFFIX)) {
+      // Only prune rolling logs that belong exactly to this profile's prefix.
+      // Use extractLogFilePrefix for exact matching — startsWith() would cause the
+      // default profile ("openclaw") to also match named-profile files like "openclaw-xv-…"
+      if (extractLogFilePrefix(entry.name) !== filePrefix) {
         continue;
       }
       const fullPath = path.join(dir, entry.name);
