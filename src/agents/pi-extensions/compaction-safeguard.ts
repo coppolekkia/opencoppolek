@@ -777,12 +777,26 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       log.warn(
-        `Compaction summarization failed; cancelling compaction to preserve history: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Compaction summarization failed; using emergency fallback to avoid stuck session: ${errorMessage}`,
       );
-      return { cancel: true };
+      // Emergency fallback: return a static summary instead of cancelling.
+      // Cancelling leaves the session at its current (oversized) context,
+      // causing a compaction-fail-retry loop on every subsequent message.
+      const emergencySummary =
+        `Emergency compaction: summarization failed (${errorMessage}). ` +
+        `Context was truncated to preserve recent messages.` +
+        toolFailureSection +
+        fileOpsSummary;
+      return {
+        compaction: {
+          summary: emergencySummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
+      };
     }
   });
 }

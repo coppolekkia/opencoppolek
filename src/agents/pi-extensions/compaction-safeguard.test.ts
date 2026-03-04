@@ -978,6 +978,62 @@ describe("compaction-safeguard double-compaction guard", () => {
   });
 });
 
+describe("compaction-safeguard emergency fallback", () => {
+  it("returns emergency compaction instead of cancelling when summarization throws", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+
+    // Build an event whose tokensBefore is large enough to trigger
+    // pruneHistoryForContextShare, which calls estimateMessagesTokens.
+    // Include a malformed message that will make estimateTokens throw.
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "real message", timestamp: Date.now() },
+          // Malformed message: Symbol content causes estimateTokens to throw
+          { role: "assistant", content: Symbol("poison"), timestamp: Date.now() },
+        ] as unknown as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-emergency",
+        tokensBefore: 999_999,
+        isSplitTurn: false,
+        fileOps: { read: ["a.ts"], edited: ["b.ts"], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("sk-test"),
+    });
+
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
+      compaction?: {
+        summary: string;
+        firstKeptEntryId: string;
+        tokensBefore: number;
+        details: { readFiles: string[]; modifiedFiles: string[] };
+      };
+    };
+
+    // Must NOT cancel — that creates the stuck-session loop.
+    expect(result.cancel).toBeUndefined();
+    expect(result.compaction).toBeDefined();
+    expect(result.compaction!.summary).toContain("Emergency compaction");
+    expect(result.compaction!.firstKeptEntryId).toBe("entry-emergency");
+    expect(result.compaction!.tokensBefore).toBe(999_999);
+    expect(result.compaction!.details.readFiles).toEqual(["a.ts"]);
+    expect(result.compaction!.details.modifiedFiles).toEqual(["b.ts"]);
+  });
+});
+
 async function expectWorkspaceSummaryEmptyForAgentsAlias(
   createAlias: (outsidePath: string, agentsPath: string) => void,
 ) {
