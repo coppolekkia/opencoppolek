@@ -402,6 +402,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.models": "Models",
   "agents.defaults.model.primary": "Primary Model",
   "agents.defaults.model.fallbacks": "Model Fallbacks",
+  "agents.defaults.model.primaryRecoveryProbeEvery": "Primary Recovery Probe Interval",
+  "agents.list.*.model.primaryRecoveryProbeEvery": "Primary Recovery Probe Interval",
   "agents.defaults.imageModel.primary": "Image Model",
   "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",
   "agents.defaults.pdfModel.primary": "PDF Model",

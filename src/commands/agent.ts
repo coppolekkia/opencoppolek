@@ -7,6 +7,7 @@ const log = createSubsystemLogger("commands/agent");
 import {
   listAgentIds,
   resolveAgentDir,
+  resolveEffectiveModelRecoveryProbeIntervalMs,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
@@ -828,6 +829,10 @@ async function agentCommandInternal(
         agentId: sessionAgentId,
         hasSessionModelOverride: Boolean(storedModelOverride),
       });
+      const primaryRecoveryProbeIntervalMs = resolveEffectiveModelRecoveryProbeIntervalMs(
+        cfg,
+        sessionAgentId,
+      );
 
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
@@ -837,6 +842,7 @@ async function agentCommandInternal(
         provider,
         model,
         agentDir,
+        primaryRecoveryProbeIntervalMs,
         fallbacksOverride: effectiveFallbacksOverride,
         run: (providerOverride, modelOverride) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;

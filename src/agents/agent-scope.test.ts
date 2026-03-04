@@ -2,16 +2,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  hasConfiguredModelFallbacks,
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
-  resolveFallbackAgentId,
+  resolveEffectiveModelRecoveryProbeIntervalMs,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
-  resolveRunModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 
@@ -213,107 +211,20 @@ describe("resolveAgentConfig", () => {
     ).toEqual([]);
   });
 
-  it("resolves fallback agent id from explicit agent id first", () => {
-    expect(
-      resolveFallbackAgentId({
-        agentId: "Support",
-        sessionKey: "agent:main:session",
-      }),
-    ).toBe("support");
-  });
-
-  it("resolves fallback agent id from session key when explicit id is missing", () => {
-    expect(
-      resolveFallbackAgentId({
-        sessionKey: "agent:worker:session",
-      }),
-    ).toBe("worker");
-  });
-
-  it("resolves run fallback overrides via shared helper", () => {
+  it("resolves primary recovery probe interval from per-agent override or defaults", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           model: {
-            fallbacks: ["openai/gpt-4.1"],
+            primaryRecoveryProbeEvery: "7m",
           },
         },
-        list: [
-          {
-            id: "support",
-            model: {
-              fallbacks: ["openai/gpt-5.2"],
-            },
-          },
-        ],
+        list: [{ id: "linus", model: { primaryRecoveryProbeEvery: "2m" } }, { id: "ada" }],
       },
     };
 
-    expect(
-      resolveRunModelFallbacksOverride({
-        cfg,
-        agentId: "support",
-        sessionKey: "agent:main:session",
-      }),
-    ).toEqual(["openai/gpt-5.2"]);
-    expect(
-      resolveRunModelFallbacksOverride({
-        cfg,
-        agentId: undefined,
-        sessionKey: "agent:support:session",
-      }),
-    ).toEqual(["openai/gpt-5.2"]);
-  });
-
-  it("computes whether any model fallbacks are configured via shared helper", () => {
-    const cfgDefaultsOnly: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: {
-            fallbacks: ["openai/gpt-4.1"],
-          },
-        },
-        list: [{ id: "main" }],
-      },
-    };
-    expect(
-      hasConfiguredModelFallbacks({
-        cfg: cfgDefaultsOnly,
-        sessionKey: "agent:main:session",
-      }),
-    ).toBe(true);
-
-    const cfgAgentOverrideOnly: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: {
-            fallbacks: [],
-          },
-        },
-        list: [
-          {
-            id: "support",
-            model: {
-              fallbacks: ["openai/gpt-5.2"],
-            },
-          },
-        ],
-      },
-    };
-    expect(
-      hasConfiguredModelFallbacks({
-        cfg: cfgAgentOverrideOnly,
-        agentId: "support",
-        sessionKey: "agent:support:session",
-      }),
-    ).toBe(true);
-    expect(
-      hasConfiguredModelFallbacks({
-        cfg: cfgAgentOverrideOnly,
-        agentId: "main",
-        sessionKey: "agent:main:session",
-      }),
-    ).toBe(false);
+    expect(resolveEffectiveModelRecoveryProbeIntervalMs(cfg, "linus")).toBe(2 * 60_000);
+    expect(resolveEffectiveModelRecoveryProbeIntervalMs(cfg, "ada")).toBe(7 * 60_000);
   });
 
   it("should return agent-specific sandbox config", () => {

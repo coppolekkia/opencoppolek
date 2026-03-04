@@ -24,7 +24,7 @@ export type AgentConfig = {
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
-    /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
+    /** Per-agent default model for spawned sub-agents (string or object model config). */
     model?: AgentModelConfig;
   };
   /** Optional per-agent sandbox overrides. */

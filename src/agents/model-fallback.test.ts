@@ -8,7 +8,11 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
-import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import {
+  _probeThrottleInternals,
+  runWithImageModelFallback,
+  runWithModelFallback,
+} from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 const makeCfg = makeModelFallbackCfg;
@@ -105,72 +109,6 @@ function createOverrideFailureRun(params: {
     }
     throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
   });
-}
-
-function makeSingleProviderStore(params: {
-  provider: string;
-  usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
-}): AuthProfileStore {
-  const profileId = `${params.provider}:default`;
-  return {
-    version: AUTH_STORE_VERSION,
-    profiles: {
-      [profileId]: {
-        type: "api_key",
-        provider: params.provider,
-        key: "test-key",
-      },
-    },
-    usageStats: {
-      [profileId]: params.usageStat,
-    },
-  };
-}
-
-function createFallbackOnlyRun() {
-  return vi.fn().mockImplementation(async (providerId, modelId) => {
-    if (providerId === "fallback") {
-      return "ok";
-    }
-    throw new Error(`unexpected provider: ${providerId}/${modelId}`);
-  });
-}
-
-async function expectSkippedUnavailableProvider(params: {
-  providerPrefix: string;
-  usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
-  expectedReason: string;
-}) {
-  const provider = `${params.providerPrefix}-${crypto.randomUUID()}`;
-  const cfg = makeProviderFallbackCfg(provider);
-  const primaryStore = makeSingleProviderStore({
-    provider,
-    usageStat: params.usageStat,
-  });
-  // Include fallback provider profile so the fallback is attempted (not skipped as no-profile).
-  const store: AuthProfileStore = {
-    ...primaryStore,
-    profiles: {
-      ...primaryStore.profiles,
-      "fallback:default": {
-        type: "api_key",
-        provider: "fallback",
-        key: "test-key",
-      },
-    },
-  };
-  const run = createFallbackOnlyRun();
-
-  const result = await runWithStoredAuth({
-    cfg,
-    store,
-    provider,
-    run,
-  });
-
-  expect(result.result).toBe("ok");
-  expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
-  expect(result.attempts[0]?.reason).toBe(params.expectedReason);
 }
 
 describe("runWithModelFallback", () => {
@@ -291,7 +229,7 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("keeps configured fallback chain when current model is a configured fallback", async () => {
+  it("re-promotes to primary when current model is a configured fallback", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -304,6 +242,9 @@ describe("runWithModelFallback", () => {
     });
 
     const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      if (provider === "openai" && model === "gpt-4.1-mini") {
+        throw Object.assign(new Error("rate-limited"), { status: 429 });
+      }
       if (provider === "anthropic" && model === "claude-haiku-3-5") {
         throw Object.assign(new Error("rate-limited"), { status: 429 });
       }
@@ -320,10 +261,12 @@ describe("runWithModelFallback", () => {
       run,
     });
 
+    // Re-promotion: primary is tried first, then full fallback chain
     expect(result.result).toBe("ok");
     expect(result.provider).toBe("openrouter");
     expect(result.model).toBe("openrouter/deepseek-chat");
     expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
       ["anthropic", "claude-haiku-3-5"],
       ["openrouter", "openrouter/deepseek-chat"],
     ]);
@@ -434,7 +377,7 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
   });
 
-  it("falls back on model not found errors", async () => {
+  it("falls back on model not found errors to configured primary", async () => {
     const cfg = makeCfg();
     const run = vi
       .fn()
@@ -448,65 +391,129 @@ describe("runWithModelFallback", () => {
       run,
     });
 
-    // Override model failed with model_not_found → tries fallbacks first (same provider).
+    // Override model failed → skip configured fallbacks, go to configured primary.
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+    expect(run.mock.calls[1]?.[0]).toBe("openai");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
   });
 
-  it("skips providers when all profiles are in cooldown", async () => {
-    await expectSkippedUnavailableProvider({
-      providerPrefix: "cooldown-test",
-      usageStat: {
-        cooldownUntil: Date.now() + 5 * 60_000,
+  it("promotes to highest-priority fallback when currently on a lower fallback", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2.0-flash"],
+          },
+        },
       },
-      expectedReason: "rate_limit",
     });
-  });
 
-  it("does not skip OpenRouter when legacy cooldown markers exist", async () => {
-    const provider = "openrouter";
-    const cfg = makeProviderFallbackCfg(provider);
-    const store = makeSingleProviderStore({
-      provider,
-      usageStat: {
-        cooldownUntil: Date.now() + 5 * 60_000,
-        disabledUntil: Date.now() + 10 * 60_000,
-        disabledReason: "billing",
-      },
-    });
-    const run = vi.fn().mockImplementation(async (providerId) => {
-      if (providerId === "openrouter") {
-        return "ok";
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === "openai") {
+        throw Object.assign(new Error("rate limited"), { status: 429 });
       }
-      throw new Error(`unexpected provider: ${providerId}`);
+      if (providerId === "anthropic") {
+        return "promoted";
+      }
+      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
     });
 
-    const result = await runWithStoredAuth({
+    const result = await runWithModelFallback({
       cfg,
-      store,
-      provider,
+      provider: "google",
+      model: "gemini-2.0-flash",
       run,
     });
 
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]?.[0]).toBe("openrouter");
-    expect(result.attempts).toEqual([]);
+    expect(result.result).toBe("promoted");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
   });
 
-  it("propagates disabled reason when all profiles are unavailable", async () => {
-    const now = Date.now();
-    await expectSkippedUnavailableProvider({
-      providerPrefix: "disabled-test",
-      usageStat: {
-        disabledUntil: now + 5 * 60_000,
-        disabledReason: "billing",
-        failureCounts: { rate_limit: 4 },
+  it("keeps current model first when fallbacksOverride is explicit", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2.0-flash"],
+          },
+        },
       },
-      expectedReason: "billing",
     });
+    const run = vi.fn().mockResolvedValue("current-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "google",
+      model: "gemini-2.0-flash",
+      fallbacksOverride: ["anthropic/claude-haiku-3-5", "google/gemini-2.0-flash"],
+      run,
+    });
+
+    expect(result.result).toBe("current-ok");
+    expect(run.mock.calls).toEqual([["google", "gemini-2.0-flash"]]);
+  });
+
+  it("probes cooldowned primary periodically, then falls back on rate-limit", async () => {
+    const provider = `cooldown-test-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          cooldownUntil: Date.now() + 5 * 60_000,
+        },
+      },
+    };
+
+    const cfg = makeProviderFallbackCfg(provider);
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === provider) {
+        throw Object.assign(new Error("rate limited"), { status: 429 });
+      }
+      if (providerId === "fallback") {
+        return "ok";
+      }
+      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+    });
+
+    // Simulate a prior probe that happened long enough ago to trigger the
+    // regular cadence probe.  Without this, the first-call guard (lastProbe
+    // === 0 → skip probe) would prevent the probe from firing.
+    const result = await withTempAuthStore(store, async (tempDir) => {
+      const throttleKey = _probeThrottleInternals.resolveProbeThrottleKey(provider, tempDir);
+      _probeThrottleInternals.lastProbeAttempt.set(
+        throttleKey,
+        Date.now() - _probeThrottleInternals.DEFAULT_REGULAR_PROBE_INTERVAL_MS - 1,
+      );
+      return runWithModelFallback({
+        cfg,
+        provider,
+        model: "m1",
+        agentDir: tempDir,
+        run,
+      });
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      [provider, "m1"],
+      ["fallback", "ok-model"],
+    ]);
+    expect(result.attempts[0]?.reason).toBe("rate_limit");
   });
 
   it("does not skip when any profile is available", async () => {
@@ -872,7 +879,7 @@ describe("runWithModelFallback", () => {
 
   // Tests for Bug A fix: Model fallback with session overrides
   describe("fallback behavior with session model overrides", () => {
-    it("allows fallbacks when session model differs from config within same provider", async () => {
+    it("skips fallbacks and retries configured primary for session model overrides", async () => {
       const cfg = makeCfg({
         agents: {
           defaults: {
@@ -887,22 +894,23 @@ describe("runWithModelFallback", () => {
       const run = vi
         .fn()
         .mockRejectedValueOnce(new Error("Rate limit exceeded")) // Session model fails
-        .mockResolvedValueOnce("fallback success"); // First fallback succeeds
+        .mockResolvedValueOnce("primary success"); // Configured primary succeeds
 
       const result = await runWithModelFallback({
         cfg,
         provider: "anthropic",
-        model: "claude-sonnet-4-20250514", // Different from config primary
+        model: "claude-sonnet-4-20250514", // Different from config primary (override)
         run,
       });
 
-      expect(result.result).toBe("fallback success");
+      // Override failed → skip fallbacks, go to configured primary
+      expect(result.result).toBe("primary success");
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-20250514");
-      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5"); // Fallback tried
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-opus-4-6");
     });
 
-    it("allows fallbacks with model version differences within same provider", async () => {
+    it("skips fallbacks for model version overrides within same provider", async () => {
       const cfg = makeCfg({
         agents: {
           defaults: {
@@ -917,18 +925,20 @@ describe("runWithModelFallback", () => {
       const run = vi
         .fn()
         .mockRejectedValueOnce(new Error("Weekly quota exceeded"))
-        .mockResolvedValueOnce("groq success");
+        .mockResolvedValueOnce("primary success");
 
       const result = await runWithModelFallback({
         cfg,
         provider: "anthropic",
-        model: "claude-opus-4-5", // Version difference from config
+        model: "claude-opus-4-5", // Version difference from config (override)
         run,
       });
 
-      expect(result.result).toBe("groq success");
+      // Override failed → skip fallbacks, go to configured primary
+      expect(result.result).toBe("primary success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-5");
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-opus-4-6");
     });
 
     it("still skips fallbacks when using different provider than config", async () => {

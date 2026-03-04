@@ -269,35 +269,24 @@ function resolveFallbackCandidates(params: {
     cfg: params.cfg,
     defaultProvider,
   });
-  const { candidates, addExplicitCandidate } = createModelCandidateCollector(allowlist);
-
-  addExplicitCandidate(normalizedPrimary);
-
-  const modelFallbacks = (() => {
+  const { candidates, addExplicitCandidate, addAllowlistedCandidate } =
+    createModelCandidateCollector(allowlist);
+  const rawConfiguredFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
       return params.fallbacksOverride;
     }
-    const configuredFallbacks = resolveAgentModelFallbackValues(
-      params.cfg?.agents?.defaults?.model,
-    );
-    // When user runs a different provider than config, only use configured fallbacks
-    // if the current model is already in that chain (e.g. session on first fallback).
-    if (normalizedPrimary.provider !== configuredPrimary.provider) {
-      const isConfiguredFallback = configuredFallbacks.some((raw) => {
-        const resolved = resolveModelRefFromString({
-          raw: String(raw ?? ""),
-          defaultProvider,
-          aliasIndex,
-        });
-        return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
-      });
-      return isConfiguredFallback ? configuredFallbacks : [];
+    const model = params.cfg?.agents?.defaults?.model as
+      | { fallbacks?: string[] }
+      | string
+      | undefined;
+    if (model && typeof model === "object") {
+      return model.fallbacks ?? [];
     }
-    // Same provider: always use full fallback chain (model version differences within provider).
-    return configuredFallbacks;
+    return [];
   })();
 
-  for (const raw of modelFallbacks) {
+  const configuredFallbacks: ModelCandidate[] = [];
+  for (const raw of rawConfiguredFallbacks) {
     const resolved = resolveModelRefFromString({
       raw: String(raw ?? ""),
       defaultProvider,
@@ -306,9 +295,49 @@ function resolveFallbackCandidates(params: {
     if (!resolved) {
       continue;
     }
+    configuredFallbacks.push(resolved.ref);
+  }
+
+  const currentIsConfiguredPrimary = sameModelCandidate(normalizedPrimary, configuredPrimary);
+  const currentIsConfiguredFallback = configuredFallbacks.some((fallback) =>
+    sameModelCandidate(fallback, normalizedPrimary),
+  );
+
+  // If we're currently on a lower-priority configured fallback, re-enter the
+  // full configured chain order (primary -> fallbacks) so we can promote back
+  // to the highest-priority available model.
+  if (
+    params.fallbacksOverride === undefined &&
+    !currentIsConfiguredPrimary &&
+    currentIsConfiguredFallback
+  ) {
+    if (primary?.provider && primary.model) {
+      addExplicitCandidate({ provider: primary.provider, model: primary.model });
+    }
+    for (const fallback of configuredFallbacks) {
+      addAllowlistedCandidate(fallback);
+    }
+    return candidates;
+  }
+
+  addExplicitCandidate(normalizedPrimary);
+
+  const modelFallbacks = (() => {
+    if (params.fallbacksOverride !== undefined) {
+      return configuredFallbacks;
+    }
+    // Skip configured fallback chain when the user runs a non-default override.
+    // In that case, retry should return directly to configured primary.
+    if (!currentIsConfiguredPrimary) {
+      return []; // Override model failed → go straight to configured default
+    }
+    return configuredFallbacks;
+  })();
+
+  for (const fallback of modelFallbacks) {
     // Fallbacks are explicit user intent; do not silently filter them by the
     // model allowlist.
-    addExplicitCandidate(resolved.ref);
+    addExplicitCandidate(fallback);
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
@@ -320,6 +349,7 @@ function resolveFallbackCandidates(params: {
 
 const lastProbeAttempt = new Map<string, number>();
 const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
+const DEFAULT_REGULAR_PROBE_INTERVAL_MS = 5 * 60_000; // 5 minutes between regular cooldown probes
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
 
@@ -335,6 +365,7 @@ function shouldProbePrimaryDuringCooldown(params: {
   throttleKey: string;
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   profileIds: string[];
+  regularProbeIntervalMs: number;
 }): boolean {
   if (!params.isPrimary || !params.hasFallbackCandidates) {
     return false;
@@ -351,13 +382,26 @@ function shouldProbePrimaryDuringCooldown(params: {
   }
 
   // Probe when cooldown already expired or within the configured margin.
-  return params.now >= soonest - PROBE_MARGIN_MS;
+  if (params.now >= soonest - PROBE_MARGIN_MS) {
+    return true;
+  }
+
+  // Also probe on a regular cadence so recovered primaries are promoted
+  // even when cooldown metadata is stale or overly conservative.
+  // Skip the regular cadence check when no prior probe has been recorded
+  // (lastProbe === 0) — on the first call we should respect active cooldowns
+  // and only probe near expiry (handled above).
+  if (lastProbe === 0) {
+    return false;
+  }
+  return params.now - lastProbe >= params.regularProbeIntervalMs;
 }
 
 /** @internal – exposed for unit tests only */
 export const _probeThrottleInternals = {
   lastProbeAttempt,
   MIN_PROBE_INTERVAL_MS,
+  DEFAULT_REGULAR_PROBE_INTERVAL_MS,
   PROBE_MARGIN_MS,
   resolveProbeThrottleKey,
 } as const;
@@ -383,6 +427,7 @@ function resolveCooldownDecision(params: {
   probeThrottleKey: string;
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   profileIds: string[];
+  regularProbeIntervalMs: number;
 }): CooldownDecision {
   const shouldProbe = shouldProbePrimaryDuringCooldown({
     isPrimary: params.isPrimary,
@@ -391,6 +436,7 @@ function resolveCooldownDecision(params: {
     throttleKey: params.probeThrottleKey,
     authStore: params.authStore,
     profileIds: params.profileIds,
+    regularProbeIntervalMs: params.regularProbeIntervalMs,
   });
 
   const inferredReason =
@@ -437,6 +483,8 @@ export async function runWithModelFallback<T>(params: {
   provider: string;
   model: string;
   agentDir?: string;
+  /** Optional override for regular primary re-probe cadence while in cooldown. Default: 5m. */
+  primaryRecoveryProbeIntervalMs?: number;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
@@ -455,6 +503,12 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
 
   const hasFallbackCandidates = candidates.length > 1;
+  const regularProbeIntervalMs =
+    typeof params.primaryRecoveryProbeIntervalMs === "number" &&
+    Number.isFinite(params.primaryRecoveryProbeIntervalMs) &&
+    params.primaryRecoveryProbeIntervalMs >= 0
+      ? params.primaryRecoveryProbeIntervalMs
+      : DEFAULT_REGULAR_PROBE_INTERVAL_MS;
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
@@ -468,6 +522,9 @@ export async function runWithModelFallback<T>(params: {
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
+        // For the primary model (i === 0), probe on a regular cadence and
+        // near cooldown expiry. This avoids staying on a fallback model long
+        // after the real rate-limit window clears.
         const isPrimary = i === 0;
         const requestedModel =
           params.provider === candidate.provider && params.model === candidate.model;
@@ -482,6 +539,7 @@ export async function runWithModelFallback<T>(params: {
           probeThrottleKey,
           authStore,
           profileIds,
+          regularProbeIntervalMs,
         });
 
         if (decision.type === "skip") {

@@ -11,6 +11,12 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /**
+       * How often to re-probe a cooldowned primary model to detect recovery and
+       * promote it back over fallbacks (duration string, default unit: minutes).
+       * Default: 5m.
+       */
+      primaryRecoveryProbeEvery?: string;
     };
 
 export type AgentSandboxConfig = {
