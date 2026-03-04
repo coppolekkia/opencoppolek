@@ -25,6 +25,48 @@ export type SlackThreadContextData = {
   isEffectivelyNewSession: boolean;
 };
 
+/**
+ * Check if a thread session is fresh enough to allow implicit mentions.
+ * Used to determine whether the bot should auto-reply to thread messages
+ * without an explicit @mention, based on the configured session timeout.
+ *
+ * Returns true if the session is fresh (within timeout), false if stale.
+ */
+export function checkThreadSessionFreshness(params: {
+  storePath: string;
+  sessionKey: string;
+  ctx: SlackMonitorContext;
+}): boolean {
+  const threadSessionPreviousTimestamp = readSessionUpdatedAt({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    skipCache: true,
+  });
+
+  // No previous timestamp = truly new session, not stale
+  if (!threadSessionPreviousTimestamp) {
+    return true;
+  }
+
+  // Check if the existing session is stale
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg: params.ctx.cfg.session,
+    channel: "slack",
+  });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg: params.ctx.cfg.session,
+    resetType: "thread",
+    resetOverride: channelReset,
+  });
+  const freshness = evaluateSessionFreshness({
+    updatedAt: threadSessionPreviousTimestamp,
+    now: Date.now(),
+    policy: resetPolicy,
+  });
+
+  return freshness.fresh;
+}
+
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;

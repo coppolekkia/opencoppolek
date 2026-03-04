@@ -49,7 +49,10 @@ import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import { resolveSlackThreadStarter } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
-import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
+import {
+  checkThreadSessionFreshness,
+  resolveSlackThreadContextData,
+} from "./prepare-thread-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -363,6 +366,11 @@ export async function prepareSlackMessage(params: {
     historyKey,
   } = routing;
 
+  // Resolve storePath early (needed for session freshness check before implicitMention)
+  const storePath = resolveStorePath(ctx.cfg.session?.store, {
+    agentId: route.agentId,
+  });
+
   const mentionRegexes = resolveCachedMentionRegexes(ctx, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const explicitlyMentioned = Boolean(
@@ -380,12 +388,24 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
-  const implicitMention = Boolean(
+  // Check if the thread session is fresh enough to allow implicit mentions.
+  // This prevents the bot from auto-replying to stale thread conversations
+  // (e.g., after the configured session timeout) without an explicit @mention.
+  const hasFreshThreadSession =
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
+    checkThreadSessionFreshness({
+      storePath,
+      sessionKey,
+      ctx,
+    });
+
+  const implicitMention = Boolean(
+    hasFreshThreadSession &&
     (message.parent_user_id === ctx.botUserId ||
-      hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
+      (message.thread_ts &&
+        hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts))),
   );
 
   let resolvedSenderName = message.username?.trim() || undefined;
@@ -597,9 +617,7 @@ export async function prepareSlackMessage(params: {
       ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
       : "";
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
-  const storePath = resolveStorePath(ctx.cfg.session?.store, {
-    agentId: route.agentId,
-  });
+  // storePath was resolved earlier (before implicitMention calculation)
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
