@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaParams,
+  resolveMatrixAutoThreadId,
 } from "./message-action-params.js";
 
 const cfg = {} as OpenClawConfig;
@@ -53,5 +54,110 @@ describe("message action sandbox media hydration", () => {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveMatrixAutoThreadId (#32744)", () => {
+  it("returns thread ID when target room matches and replyToMode is 'all'", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: {
+          currentThreadTs: "$ev1",
+          currentChannelId: "!abc123:example.org",
+          replyToMode: "all",
+        },
+      }),
+    ).toBe("$ev1");
+  });
+
+  it("handles room: prefix on channel ID", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: {
+          currentThreadTs: "$ev2",
+          currentChannelId: "room:!abc123:example.org",
+          replyToMode: "all",
+        },
+      }),
+    ).toBe("$ev2");
+  });
+
+  it("returns undefined when rooms differ", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!other:example.org",
+        toolContext: {
+          currentThreadTs: "$ev3",
+          currentChannelId: "!abc123:example.org",
+          replyToMode: "all",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when no thread context", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: undefined,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when replyToMode is 'off'", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: {
+          currentThreadTs: "$ev4",
+          currentChannelId: "!abc123:example.org",
+          replyToMode: "off",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when replyToMode is unset (defaults to off)", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: {
+          currentThreadTs: "$ev5",
+          currentChannelId: "!abc123:example.org",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns thread ID on first reply when replyToMode is 'first'", () => {
+    const hasRepliedRef = { value: false };
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: {
+          currentThreadTs: "$ev6",
+          currentChannelId: "!abc123:example.org",
+          replyToMode: "first",
+          hasRepliedRef,
+        },
+      }),
+    ).toBe("$ev6");
+  });
+
+  it("returns undefined after first reply when replyToMode is 'first'", () => {
+    const hasRepliedRef = { value: true };
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: {
+          currentThreadTs: "$ev7",
+          currentChannelId: "!abc123:example.org",
+          replyToMode: "first",
+          hasRepliedRef,
+        },
+      }),
+    ).toBeUndefined();
   });
 });
