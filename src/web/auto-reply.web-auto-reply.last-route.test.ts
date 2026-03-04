@@ -1,12 +1,13 @@
 import "./test-helpers.js";
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createEchoTracker } from "./auto-reply/monitor/echo.js";
 import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
+import { resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
 function makeCfg(storePath: string): OpenClawConfig {
   return {
@@ -50,6 +51,7 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
 function createLastRouteHarness(storePath: string) {
   const replyResolver = vi.fn().mockResolvedValue(undefined);
   const cfg = makeCfg(storePath);
+  setLoadConfigMock(cfg);
   return createHandlerForTest({ cfg, replyResolver });
 }
 
@@ -95,6 +97,10 @@ async function readStoredRoutes(storePath: string) {
 
 describe("web auto-reply last-route", () => {
   installWebAutoReplyUnitTestHooks();
+
+  afterEach(() => {
+    resetLoadConfigMock();
+  });
 
   it("updates last-route for direct chats without senderE164", async () => {
     const now = Date.now();
