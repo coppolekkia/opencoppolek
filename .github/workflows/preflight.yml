@@ -1,0 +1,51 @@
+# preflight.yml
+# Fork-only CI: runs on every branch push (except main) BEFORE opening an upstream PR.
+# Purpose: get fast feedback on types, lint, format, and build — without touching upstream.
+#
+# This workflow lives in teconomix/openclaw (fork) only.
+# Do NOT submit this file in PRs to openclaw/openclaw.
+#
+# Triggered on: push to any branch except main
+# Jobs: check (types + lint + oxfmt) + build
+# Runtime: ubuntu-latest (standard GitHub runner, free for public forks)
+
+name: Preflight (fork)
+
+on:
+  push:
+    branches-ignore:
+      - main
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: "check + build"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.23.0"
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check types, lint, and format
+        run: pnpm check
+
+      - name: Build dist
+        run: pnpm build
