@@ -8,6 +8,7 @@ import {
   editMessageDiscord,
   fetchChannelPermissionsDiscord,
   fetchMessageDiscord,
+  fetchThreadInfoDiscord,
   fetchReactionsDiscord,
   listPinsDiscord,
   listThreadsDiscord,
@@ -388,6 +389,16 @@ export async function handleDiscordMessagingAction(
       const thread = accountId
         ? await createThreadDiscord(channelId, payload, { accountId })
         : await createThreadDiscord(channelId, payload);
+      return jsonResult({ ok: true, thread });
+    }
+    case "threadInfo": {
+      if (!isActionEnabled("threads")) {
+        throw new Error("Discord threads are disabled.");
+      }
+      const threadId = readStringParam(params, "threadId", { required: true });
+      const thread = accountId
+        ? await fetchThreadInfoDiscord(threadId, { accountId })
+        : await fetchThreadInfoDiscord(threadId);
       return jsonResult({ ok: true, thread });
     }
     case "threadList": {
