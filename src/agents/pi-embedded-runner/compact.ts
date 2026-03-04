@@ -664,9 +664,24 @@ export async function compactEmbeddedPiSessionDirect(
         }
 
         const compactStartedAt = Date.now();
+
+        // Record full session token count before compaction for accurate comparison
+        // This fixes the scope mismatch where tokensAfter (full session) was being
+        // compared with result.tokensBefore (summarizable subset only)
+        let tokensBeforeFull: number | undefined;
+        try {
+          tokensBeforeFull = 0;
+          for (const message of session.messages) {
+            tokensBeforeFull += estimateTokens(message);
+          }
+        } catch {
+          tokensBeforeFull = undefined;
+        }
+
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
         );
+
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {
@@ -674,8 +689,10 @@ export async function compactEmbeddedPiSessionDirect(
           for (const message of session.messages) {
             tokensAfter += estimateTokens(message);
           }
-          // Sanity check: tokensAfter should be less than tokensBefore
-          if (tokensAfter > result.tokensBefore) {
+          // Sanity check: tokensAfter should be less than the full session token count before compaction
+          // We use tokensBeforeFull instead of result.tokensBefore to ensure we're comparing
+          // values from the same scope (full session vs full session)
+          if (tokensBeforeFull !== undefined && tokensAfter > tokensBeforeFull) {
             tokensAfter = undefined; // Don't trust the estimate
           }
         } catch {
@@ -762,3 +779,5 @@ export async function compactEmbeddedPiSession(
     enqueueGlobal(async () => compactEmbeddedPiSessionDirect(params)),
   );
 }
+
+// CI trigger: Updated to fix token count scope mismatch
