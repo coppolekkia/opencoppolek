@@ -12,6 +12,7 @@ import {
   scheduleGatewaySigusr1Restart,
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
+  triggerOpenClawRestart,
 } from "./restart.js";
 import { createTelegramRetryRunner } from "./retry-policy.js";
 import { listTailnetAddresses } from "./tailnet.js";
@@ -173,6 +174,16 @@ describe("infra runtime", () => {
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
+    });
+  });
+
+  describe("triggerOpenClawRestart cooldown", () => {
+    it("coalesces rapid triggerOpenClawRestart calls within cooldown window", () => {
+      const first = triggerOpenClawRestart();
+      const second = triggerOpenClawRestart();
+
+      expect(first.detail).toBe("test mode");
+      expect(second.detail).toBe("restart already in progress (coalesced)");
     });
   });
 
