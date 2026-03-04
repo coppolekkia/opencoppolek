@@ -64,6 +64,7 @@ import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-app
 import { attachEarlyGatewayErrorGuard } from "./gateway-error-guard.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import {
+  DiscordMemberAddListener,
   DiscordMessageListener,
   DiscordPresenceListener,
   DiscordReactionListener,
@@ -767,6 +768,20 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         new DiscordPresenceListener({ logger, accountId: account.accountId }),
       );
       runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
+    }
+
+    if (discordCfg.intents?.guildMembers) {
+      registerDiscordListener(
+        client.listeners,
+        new DiscordMemberAddListener({
+          cfg,
+          accountId: account.accountId,
+          botUserId,
+          guildEntries,
+          logger,
+        }),
+      );
+      runtime.log?.("discord: GuildMembers intent enabled — member-add listener registered");
     }
 
     const botIdentity =
