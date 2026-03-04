@@ -12,6 +12,14 @@ import {
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
+// Hoist mock so summarizeInStages can be stubbed per-test without affecting
+// the other exports (computeAdaptiveChunkRatio, etc.) used by __testing.
+vi.mock("../compaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../compaction.js")>();
+  return { ...actual, summarizeInStages: vi.fn().mockImplementation(actual.summarizeInStages) };
+});
+import { summarizeInStages } from "../compaction.js";
+
 const {
   collectToolFailures,
   formatToolFailuresSection,
@@ -737,6 +745,109 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
+  });
+});
+
+describe("compaction-safeguard cancel reasons", () => {
+  it("sets lastCancelReason when there are no messages to compact", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: "sk-test" });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("No conversation history to compact");
+  });
+
+  it("sets lastCancelReason when no model is configured", async () => {
+    const sessionManager = stubSessionManager();
+    // No model in runtime, no ctx.model either → model missing path
+
+    const mockEvent = createCompactionEvent({ messageText: "hello", tokensBefore: 1500 });
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: null });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("No model configured for compaction summarization");
+  });
+
+  it("sets lastCancelReason when no API key is available", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = createCompactionEvent({ messageText: "hello", tokensBefore: 1500 });
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: null });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("No API key available for compaction model");
+  });
+
+  it("preserves existing runtime fields when setting lastCancelReason", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, maxHistoryShare: 0.6 });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: "sk-test" });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("No conversation history to compact");
+    // Other fields must be untouched
+    expect(runtime?.maxHistoryShare).toBe(0.6);
+    expect(runtime?.model).toEqual(model);
+  });
+
+  it("sets lastCancelReason when summarization throws", async () => {
+    vi.mocked(summarizeInStages).mockRejectedValueOnce(new Error("Rate limit exceeded"));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    // recentTurnsPreserve: 0 keeps all messages in the summarizable bucket so
+    // summarizeInStages is actually invoked (otherwise the single message would
+    // be moved to preservedMessages and summarization would be skipped).
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    // Include settings.reserveTokens so execution reaches summarizeInStages.
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "hello", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        settings: { reserveTokens: 1024 },
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: "sk-test" });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("Summarization failed: Rate limit exceeded");
   });
 });
 
