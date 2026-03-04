@@ -1015,6 +1015,24 @@ export abstract class MemoryManagerSyncOps {
     progress?: MemorySyncProgressState;
   }): Promise<void> {
     const dbPath = resolveUserPath(this.settings.store.path);
+
+    // Clean up any stale temp files left by previously aborted reindex runs.
+    // If the process is killed between temp-db creation and swapIndexFiles,
+    // the orphaned `.tmp-<uuid>` files accumulate indefinitely. Do this
+    // best-effort before creating a new temp file so disk usage stays bounded.
+    const dbDir = path.dirname(dbPath);
+    const dbBase = path.basename(dbPath);
+    const staleTmpPrefix = `${dbBase}.tmp-`;
+    try {
+      const dirEntries = await fs.readdir(dbDir);
+      const staleBasePaths = dirEntries
+        .filter((f) => f.startsWith(staleTmpPrefix) && !f.endsWith("-wal") && !f.endsWith("-shm"))
+        .map((f) => path.join(dbDir, f));
+      await Promise.all(staleBasePaths.map((p) => this.removeIndexFiles(p)));
+    } catch {
+      // best-effort: directory may not exist yet or entries may be concurrently removed
+    }
+
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
     const tempDb = this.openDatabaseAtPath(tempDbPath);
 

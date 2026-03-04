@@ -83,4 +83,43 @@ describe("memory manager atomic reindex", () => {
     const afterStatus = manager.status();
     expect(afterStatus.chunks).toBeGreaterThan(0);
   });
+
+  it("cleans up stale temp files from previous aborted reindex runs", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath },
+            cache: { enabled: false },
+            chunking: { tokens: 4000, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    // Plant two stale temp files simulating previously aborted reindex runs.
+    const stale1 = `${indexPath}.tmp-aaaaaaaa-0000-0000-0000-000000000001`;
+    const stale2 = `${indexPath}.tmp-aaaaaaaa-0000-0000-0000-000000000002`;
+    const stale2Wal = `${stale2}-wal`;
+    await fs.writeFile(stale1, "stale1");
+    await fs.writeFile(stale2, "stale2");
+    await fs.writeFile(stale2Wal, "stale2-wal");
+
+    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
+    await manager.sync({ force: true });
+
+    // All stale files should have been removed.
+    for (const p of [stale1, stale2, stale2Wal]) {
+      await expect(fs.access(p)).rejects.toThrow();
+    }
+
+    // The real index should still be healthy.
+    const status = manager.status();
+    expect(status.chunks).toBeGreaterThan(0);
+  });
 });
