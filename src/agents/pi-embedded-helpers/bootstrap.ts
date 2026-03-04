@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import type { WorkspaceBootstrapFile } from "../workspace.js";
+import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
 
 type ContentBlockWithSignature = {
@@ -218,6 +218,14 @@ export function buildBootstrapContextFiles(
       continue;
     }
     if (file.missing) {
+      // BOOTSTRAP.md is a one-shot onboarding file that is intentionally deleted
+      // after the first session. Its absence is the normal steady state for
+      // established workspaces. Injecting "[MISSING]" causes bound agents to
+      // interpret their workspace as uninitialised and output confused messages
+      // like "Fresh workspace, no memory yet. BOOTSTRAP.md is active."
+      if (file.name === DEFAULT_BOOTSTRAP_FILENAME) {
+        continue;
+      }
       const missingText = `[MISSING] Expected at: ${pathValue}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       if (!cappedMissingText) {
