@@ -389,6 +389,7 @@ describe("routeReply", () => {
     });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
+        sessionKey: "agent:main:main",
         mirror: expect.objectContaining({
           sessionKey: "agent:main:main",
           text: "hi",
@@ -411,6 +412,7 @@ describe("routeReply", () => {
     });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
+        sessionKey: "agent:main:main",
         mirror: undefined,
       }),
     );
