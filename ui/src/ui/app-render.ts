@@ -588,7 +588,7 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onSelectAgent: (agentId) => {
-                  if (state.agentsSelectedId === agentId) {
+                  if (state.agentsSelectedId === agentId || resolvedAgentId === agentId) {
                     return;
                   }
                   state.agentsSelectedId = agentId;
