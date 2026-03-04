@@ -39,6 +39,30 @@ const DEFAULT_MIN_SIMILARITY = 0.3;
 const DEFAULT_MAX_CONNECTIONS = 5;
 const DEFAULT_DIMENSIONS = 1536; // OpenAI text-embedding-3-small default
 
+// ── Row types for query results ─────────────────────────────────────────────
+
+type VectorSearchRow = {
+  path: string;
+  start_line: number;
+  end_line: number;
+  text: string;
+  source: string;
+  similarity: string;
+};
+
+type FtsSearchRow = {
+  path: string;
+  start_line: number;
+  end_line: number;
+  text: string;
+  source: string;
+  rank: string;
+};
+
+type FileRow = { path: string };
+type HashRow = { hash: string };
+type CountRow = { c: string };
+
 // ── Manager Cache ───────────────────────────────────────────────────────────
 
 const PG_MANAGER_CACHE = new Map<string, PostgresMemoryManager>();
@@ -122,7 +146,9 @@ function chunkText(
     const start = i;
     const end = Math.min(i + CHUNK_SIZE_LINES, lines.length);
     const text = lines.slice(start, end).join("\n");
-    if (!text.trim()) continue;
+    if (!text.trim()) {
+      continue;
+    }
 
     const hash = crypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
     const id = `${agentId}:${filePath}:${start + 1}-${end}:${hash}`;
@@ -138,13 +164,17 @@ function chunkText(
       hash,
     });
 
-    if (end >= lines.length) break;
+    if (end >= lines.length) {
+      break;
+    }
   }
   return chunks;
 }
 
 function snippetFromText(text: string): string {
-  if (text.length <= SNIPPET_MAX_CHARS) return text;
+  if (text.length <= SNIPPET_MAX_CHARS) {
+    return text;
+  }
   return text.slice(0, SNIPPET_MAX_CHARS) + "…";
 }
 
@@ -223,7 +253,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
     } catch (err) {
       await pool.end().catch(() => {});
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`Failed to connect to PostgreSQL memory backend: ${message}`);
+      throw new Error(`Failed to connect to PostgreSQL memory backend: ${message}`, {
+        cause: err,
+      });
     }
 
     const dimensions = pgConfig.embeddingDimensions ?? DEFAULT_DIMENSIONS;
@@ -275,7 +307,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
   }
 
   private async ensureSchema(): Promise<void> {
-    if (this.schemaReady) return;
+    if (this.schemaReady) {
+      return;
+    }
     const client = await this.pool.connect();
     try {
       await client.query(SCHEMA_SQL);
@@ -286,7 +320,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
   }
 
   private async ensureVectorIndex(): Promise<void> {
-    if (this.indexCreated) return;
+    if (this.indexCreated) {
+      return;
+    }
     const client = await this.pool.connect();
     try {
       const indexType = this.pgConfig.indexType ?? "hnsw";
@@ -348,15 +384,19 @@ export class PostgresMemoryManager implements MemorySearchManager {
     maxResults: number,
     minScore: number,
   ): Promise<MemorySearchResult[]> {
-    if (!this.provider) return [];
+    if (!this.provider) {
+      return [];
+    }
 
     const embedding = await this.provider.embedQuery(query);
-    if (!embedding?.length) return [];
+    if (!embedding?.length) {
+      return [];
+    }
 
     const vecStr = `[${embedding.join(",")}]`;
     const client = await this.pool.connect();
     try {
-      const result = await client.query(
+      const result = await client.query<VectorSearchRow>(
         `SELECT path, start_line, end_line, text, source,
                 1 - (embedding::vector(${this.dimensions}) <=> $1::vector(${this.dimensions})) as similarity
          FROM memory_chunks
@@ -368,9 +408,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
       );
 
       return result.rows
-        .filter((row: any) => row.similarity >= minScore)
+        .filter((row) => parseFloat(row.similarity) >= minScore)
         .slice(0, maxResults)
-        .map((row: any) => ({
+        .map((row) => ({
           path: row.path,
           startLine: row.start_line,
           endLine: row.end_line,
@@ -392,11 +432,13 @@ export class PostgresMemoryManager implements MemorySearchManager {
       .filter(Boolean)
       .join(" & ");
 
-    if (!tsQuery) return [];
+    if (!tsQuery) {
+      return [];
+    }
 
     const client = await this.pool.connect();
     try {
-      const result = await client.query(
+      const result = await client.query<FtsSearchRow>(
         `SELECT path, start_line, end_line, text, source,
                 ts_rank(to_tsvector('english', text), to_tsquery('english', $1)) as rank
          FROM memory_chunks
@@ -407,7 +449,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
         [tsQuery, this.agentId, maxResults],
       );
 
-      return result.rows.map((row: any) => ({
+      return result.rows.map((row) => ({
         path: row.path,
         startLine: row.start_line,
         endLine: row.end_line,
@@ -557,7 +599,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
     const client = await this.pool.connect();
     try {
       // Check if file changed
-      const existing = await client.query(
+      const existing = await client.query<HashRow>(
         "SELECT hash FROM memory_files WHERE path = $1 AND agent_id = $2",
         [relPath, this.agentId],
       );
@@ -637,14 +679,13 @@ export class PostgresMemoryManager implements MemorySearchManager {
   private async pruneDeletedFiles(currentPaths: string[]): Promise<void> {
     const client = await this.pool.connect();
     try {
-      const result = await client.query("SELECT path FROM memory_files WHERE agent_id = $1", [
-        this.agentId,
-      ]);
+      const result = await client.query<FileRow>(
+        "SELECT path FROM memory_files WHERE agent_id = $1",
+        [this.agentId],
+      );
 
       const currentSet = new Set(currentPaths);
-      const toDelete = result.rows
-        .map((r: any) => r.path)
-        .filter((p: string) => !currentSet.has(p));
+      const toDelete = result.rows.map((r) => r.path).filter((p) => !currentSet.has(p));
 
       for (const filePath of toDelete) {
         await client.query("DELETE FROM memory_chunks WHERE path = $1 AND agent_id = $2", [
@@ -664,11 +705,11 @@ export class PostgresMemoryManager implements MemorySearchManager {
   private async updateCounts(): Promise<void> {
     const client = await this.pool.connect();
     try {
-      const files = await client.query(
+      const files = await client.query<CountRow>(
         "SELECT COUNT(*) as c FROM memory_files WHERE agent_id = $1",
         [this.agentId],
       );
-      const chunks = await client.query(
+      const chunks = await client.query<CountRow>(
         "SELECT COUNT(*) as c FROM memory_chunks WHERE agent_id = $1",
         [this.agentId],
       );
