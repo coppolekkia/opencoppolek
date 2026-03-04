@@ -13,7 +13,8 @@ import { extensionForMime } from "../../media/mime.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
-import { loadWebMedia } from "../../web/media.js";
+import { resolveUserPath } from "../../utils.js";
+import { loadWebMedia, validateLocalMediaPathAllowed } from "../../web/media.js";
 
 export const readBooleanParam = readBooleanParamShared;
 
@@ -276,12 +277,20 @@ export async function normalizeSandboxMediaParams(params: {
       continue;
     }
     assertMediaNotDataUrl(raw);
-    if (!sandboxRoot) {
+    if (sandboxRoot) {
+      const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
+      if (normalized !== raw) {
+        params.args[key] = normalized;
+      }
       continue;
     }
-    const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
-    if (normalized !== raw) {
-      params.args[key] = normalized;
+    // Defense-in-depth: validate local paths against allowlisted roots before
+    // hydration tries to read files.
+    if (/^(?:\/|\\|[A-Za-z]:[\\/])/.test(raw) || raw.startsWith("~")) {
+      const expandedPath = raw.startsWith("~") ? resolveUserPath(raw) : raw;
+      const localRoots =
+        params.mediaPolicy.mode === "host" ? params.mediaPolicy.localRoots : undefined;
+      await validateLocalMediaPathAllowed(expandedPath, localRoots);
     }
   }
 }
