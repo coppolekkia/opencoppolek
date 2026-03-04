@@ -226,6 +226,56 @@ export async function speak(
   }
 }
 
+/**
+ * Speak sentences from an async iterable, playing each one as it arrives.
+ * TTS for the first sentence starts as soon as the LLM produces it, while
+ * the LLM continues generating subsequent sentences.
+ *
+ * @param fullText - The complete response text for transcript recording.
+ *   Pass null if the full text is not yet available (transcript will be
+ *   reconstructed from the spoken sentences).
+ */
+export async function speakStream(
+  ctx: SpeakContext,
+  callId: CallId,
+  sentences: AsyncIterable<string>,
+  fullText: string | null,
+): Promise<{ success: boolean; error?: string }> {
+  const connected = requireConnectedCall(ctx, callId);
+  if (!connected.ok) {
+    return { success: false, error: connected.error };
+  }
+  const { call, providerCallId, provider } = connected;
+
+  try {
+    transitionState(call, "speaking");
+    persistCallRecord(ctx.storePath, call);
+
+    const voice = provider.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
+    const spokenSentences: string[] = [];
+
+    for await (const sentence of sentences) {
+      spokenSentences.push(sentence);
+      await provider.playTts({
+        callId,
+        providerCallId,
+        text: sentence,
+        voice,
+      });
+    }
+
+    // Record transcript with full authoritative text, or reconstructed from sentences
+    const transcriptText = fullText ?? spokenSentences.join(" ");
+    if (transcriptText) {
+      addTranscriptEntry(call, "bot", transcriptText);
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function speakInitialMessage(
   ctx: ConversationContext,
   providerCallId: string,
