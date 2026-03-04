@@ -6,6 +6,7 @@ import {
   readStringParam,
 } from "../../agents/tools/common.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type {
   ChannelId,
@@ -14,6 +15,7 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
@@ -107,7 +109,7 @@ export type MessageActionRunResult =
       channel: ChannelId;
       action: "send";
       to: string;
-      handledBy: "plugin" | "core";
+      handledBy: "plugin" | "core" | "hook-cancelled";
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;
@@ -516,6 +518,64 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
+
+  // Run message_sending hook so plugins can intercept explicit message tool
+  // sends the same way they intercept implicit delivery-pipeline replies.
+  // Without this, only deliverOutboundPayloads() emits the hook, so plugins
+  // using registerHook("message_sending", …) miss all message(action=send)
+  // calls that go through the plugin dispatch path.  (#32621)
+  //
+  // IMPORTANT: We only fire the hook here when the channel's plugin will
+  // handle the send action.  Core-path sends (no plugin handler) already
+  // invoke the hook inside deliverOutboundPayloads → applyMessageSendingHook,
+  // so firing here would cause a double invocation.
+  if (!dryRun) {
+    const plugin = getChannelPlugin(channel);
+    const pluginWillHandle =
+      !!plugin?.actions?.handleAction &&
+      (!plugin.actions.supportsAction || plugin.actions.supportsAction({ action: "send" }));
+
+    if (pluginWillHandle) {
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("message_sending")) {
+        try {
+          const hookResult = await hookRunner.runMessageSending(
+            {
+              to,
+              content: message,
+              metadata: {
+                channel,
+                accountId: accountId ?? undefined,
+                mediaUrls: mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined,
+              },
+            },
+            {
+              channelId: channel,
+              accountId: accountId ?? undefined,
+            },
+          );
+          if (hookResult?.cancel) {
+            return {
+              kind: "send",
+              channel,
+              action,
+              to,
+              handledBy: "hook-cancelled",
+              payload: { cancelled: true, reason: "message_sending hook" },
+              dryRun,
+            };
+          }
+          if (hookResult?.content != null) {
+            message = hookResult.content;
+            params.message = message;
+          }
+        } catch {
+          // Don't block message sends on hook failure.
+        }
+      }
+    }
+  }
+
   throwIfAborted(abortSignal);
   const send = await executeSendAction({
     ctx: {
