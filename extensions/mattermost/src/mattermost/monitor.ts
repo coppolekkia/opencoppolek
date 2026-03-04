@@ -410,6 +410,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
+          // When the user explicitly configured a baseUrl, trust it — even if it
+          // resolves to a private/internal IP (e.g. http://mattermost.local:8065).
+          // Without this, the SSRF guard silently blocks the download.  See #11083.
+          ssrfPolicy: { allowPrivateNetwork: true },
         });
         const saved = await core.channel.media.saveMediaBuffer(
           fetched.buffer,
