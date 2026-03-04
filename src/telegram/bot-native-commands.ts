@@ -1,5 +1,6 @@
 import type { Bot, Context } from "grammy";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
+import { resolveCommandsAllowFromList } from "../auto-reply/command-auth.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import {
   buildCommandTextFromArgs,
@@ -13,6 +14,7 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
+import { getChannelDock } from "../channels/dock.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -269,6 +271,39 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
+  // Check commands.allowFrom first — when configured, it is the sole authority
+  // for command authorization (consistent with resolveCommandAuthorization in
+  // the text command handler). See issue #28216.
+  const commandsAllowFromList = resolveCommandsAllowFromList({
+    dock: getChannelDock("telegram"),
+    cfg,
+    accountId,
+    providerId: "telegram",
+  });
+  if (commandsAllowFromList !== null) {
+    const commandsAllowAll = commandsAllowFromList.some((entry) => entry.trim() === "*");
+    const normalizedUsername = senderUsername.toLowerCase();
+    const senderInList = commandsAllowFromList.some(
+      (entry) => entry === senderId || entry === normalizedUsername,
+    );
+    const commandAuthorized = commandsAllowAll || senderInList;
+    if (requireAuth && !commandAuthorized) {
+      return await rejectNotAuthorized();
+    }
+    return {
+      chatId,
+      isGroup,
+      isForum,
+      resolvedThreadId,
+      senderId,
+      senderUsername,
+      groupConfig,
+      topicConfig,
+      commandAuthorized,
+    };
+  }
+
+  // Fall back to channel-level allowFrom when commands.allowFrom is not configured.
   const dmAllow = normalizeDmAllowFromWithStore({
     allowFrom: dmAllowFrom,
     storeAllowFrom: isGroup ? [] : storeAllowFrom,
