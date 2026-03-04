@@ -68,6 +68,27 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
   return call?.[0]?.initialValue;
 }
 
+async function runInitialValueForEntry(params: {
+  channel: "dev" | "beta";
+  entry: ChannelPluginCatalogEntry;
+}) {
+  const runtime = makeRuntime();
+  const select = vi.fn((async <T extends string>() => "skip" as T) as WizardPrompter["select"]);
+  const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
+  const cfg: OpenClawConfig = { update: { channel: params.channel } };
+  mockRepoLocalPathExists();
+
+  await ensureOnboardingPluginInstalled({
+    cfg,
+    entry: params.entry,
+    prompter,
+    runtime,
+  });
+
+  const call = select.mock.calls[0];
+  return call?.[0]?.initialValue;
+}
+
 function expectPluginLoadedFromLocalPath(
   result: Awaited<ReturnType<typeof ensureOnboardingPluginInstalled>>,
 ) {
@@ -134,6 +155,59 @@ describe("ensureOnboardingPluginInstalled", () => {
 
   it("defaults to npm on beta channel even when local path exists", async () => {
     expect(await runInitialValueForChannel("beta")).toBe("npm");
+  });
+
+  it("respects entry defaultChoice=npm even on dev channel", async () => {
+    const entryWithNpmDefault: ChannelPluginCatalogEntry = {
+      ...baseEntry,
+      install: {
+        ...baseEntry.install,
+        defaultChoice: "npm",
+        explicitDefaultChoice: true,
+      },
+    };
+
+    expect(
+      await runInitialValueForEntry({
+        channel: "dev",
+        entry: entryWithNpmDefault,
+      }),
+    ).toBe("npm");
+  });
+
+  it("keeps beta/stable npm default for implicit local catalog defaults", async () => {
+    const entryWithImplicitLocalDefault: ChannelPluginCatalogEntry = {
+      ...baseEntry,
+      install: {
+        ...baseEntry.install,
+        defaultChoice: "local",
+      },
+    };
+
+    expect(
+      await runInitialValueForEntry({
+        channel: "beta",
+        entry: entryWithImplicitLocalDefault,
+      }),
+    ).toBe("npm");
+  });
+
+  it("respects explicit local manifest defaults on beta/stable channels", async () => {
+    const entryWithExplicitLocalDefault: ChannelPluginCatalogEntry = {
+      ...baseEntry,
+      install: {
+        ...baseEntry.install,
+        defaultChoice: "local",
+        explicitDefaultChoice: true,
+      },
+    };
+
+    expect(
+      await runInitialValueForEntry({
+        channel: "beta",
+        entry: entryWithExplicitLocalDefault,
+      }),
+    ).toBe("local");
   });
 
   it("falls back to local path after npm install failure", async () => {
