@@ -333,6 +333,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        waitingPhrases: z.array(z.string().min(1).max(50)).min(1).max(50).optional(),
       })
       .strict()
       .optional(),
