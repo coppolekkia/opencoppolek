@@ -143,12 +143,16 @@ describe("doctor state integrity oauth dir checks", () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    const orphanPath = path.join(sessionsDir, "orphan-session.jsonl");
+    fs.writeFileSync(orphanPath, '{"type":"session"}\n');
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(orphanPath, eightDaysAgo, eightDaysAgo);
     const confirmSkipInNonInteractive = vi.fn(async (params: { message: string }) =>
       params.message.includes("orphan transcript file"),
     );
     await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
     expect(stateIntegrityText()).toContain("orphan transcript file");
+    expect(stateIntegrityText()).toContain("conversation history");
     expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.stringContaining("orphan transcript file"),
@@ -156,6 +160,28 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     const files = fs.readdirSync(sessionsDir);
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+  });
+
+  it("skips recently-modified orphan transcripts from archival", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(
+      path.join(sessionsDir, "recent-orphan.jsonl"),
+      '{"type":"session"}\n{"role":"user","content":"hello"}\n',
+    );
+    const confirmSkipInNonInteractive = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
+    const text = stateIntegrityText();
+    expect(text).toContain("recently-modified transcript file");
+    expect(text).toContain("modified within last 7 days");
+    expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Archive"),
+      }),
+    );
+    const files = fs.readdirSync(sessionsDir);
+    expect(files).toContain("recent-orphan.jsonl");
   });
 
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {

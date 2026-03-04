@@ -765,16 +765,46 @@ export async function noteStateIntegrity(
       }
     }
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
-    const orphanTranscriptPaths = sessionDirEntries
+    const now = Date.now();
+    const ORPHAN_MIN_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+    const allOrphanPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
       .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
-    if (orphanTranscriptPaths.length > 0) {
+    const orphanTranscriptPaths = allOrphanPaths.filter((filePath) => {
+      try {
+        const stat = fs.statSync(filePath);
+        return now - stat.mtimeMs >= ORPHAN_MIN_AGE_MS;
+      } catch {
+        return true;
+      }
+    });
+    const recentOrphanCount = allOrphanPaths.length - orphanTranscriptPaths.length;
+    if (recentOrphanCount > 0) {
       warnings.push(
-        `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}. They are not referenced by sessions.json and can consume disk over time.`,
+        `- Skipped ${recentOrphanCount} recently-modified transcript file(s) in ${displaySessionsDir} (modified within last 7 days). These may belong to expired or rotated sessions and still contain conversation history.`,
+      );
+    }
+    if (orphanTranscriptPaths.length > 0) {
+      let totalLines = 0;
+      let totalBytes = 0;
+      for (const orphanPath of orphanTranscriptPaths) {
+        totalLines += countJsonlLines(orphanPath);
+        try {
+          totalBytes += fs.statSync(orphanPath).size;
+        } catch {
+          // ignore stat errors
+        }
+      }
+      const sizeLabel =
+        totalBytes >= 1024 * 1024
+          ? `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`
+          : `${(totalBytes / 1024).toFixed(1)} KB`;
+      warnings.push(
+        `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir} (${totalLines} lines, ${sizeLabel}). They are not referenced by sessions.json and may contain old conversation history.`,
       );
       const archiveOrphans = await prompter.confirmSkipInNonInteractive({
-        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}?`,
+        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}? (This will rename them; conversation history in these files will no longer be accessible.)`,
         initialValue: false,
       });
       if (archiveOrphans) {
