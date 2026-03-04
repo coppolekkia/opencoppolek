@@ -948,6 +948,12 @@ export function attachGatewayWsMessageHandler(params: {
                   }
                 }
               }
+            } else {
+              logUpgradeAudit("scope-upgrade", pairedRoles, undefined);
+              const ok = await requirePairing("scope-upgrade");
+              if (!ok) {
+                return;
+              }
             }
 
             // Metadata pinning is approval-bound. Reconnects can update access metadata,
