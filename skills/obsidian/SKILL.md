@@ -7,6 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "💎",
+        "os": ["darwin", "linux", "win32"],
         "requires": { "bins": ["obsidian-cli"] },
         "install":
           [
@@ -16,6 +17,15 @@ metadata:
               "formula": "yakitrak/yakitrak/obsidian-cli",
               "bins": ["obsidian-cli"],
               "label": "Install obsidian-cli (brew)",
+              "os": ["darwin", "linux"],
+            },
+            {
+              "id": "go",
+              "kind": "go",
+              "module": "github.com/Yakitrak/obsidian-cli@latest",
+              "bins": ["obsidian-cli"],
+              "label": "Install obsidian-cli (go)",
+              "os": ["win32"],
             },
           ],
       },
@@ -29,26 +39,28 @@ Obsidian vault = a normal folder on disk.
 Vault structure (typical)
 
 - Notes: `*.md` (plain text Markdown; edit with any editor)
-- Config: `.obsidian/` (workspace + plugin settings; usually don’t touch from scripts)
+- Config: `.obsidian/` (workspace + plugin settings; usually don't touch from scripts)
 - Canvases: `*.canvas` (JSON)
 - Attachments: whatever folder you chose in Obsidian settings (images/PDFs/etc.)
 
 ## Find the active vault(s)
 
-Obsidian desktop tracks vaults here (source of truth):
+Obsidian desktop tracks vaults in a platform-specific config file (source of truth):
 
-- `~/Library/Application Support/obsidian/obsidian.json`
+- macOS: `~/Library/Application Support/obsidian/obsidian.json`
+- Linux: `~/.config/obsidian/obsidian.json`
+- Windows: `%APPDATA%\Obsidian\obsidian.json`
 
 `obsidian-cli` resolves vaults from that file; vault name is typically the **folder name** (path suffix).
 
-Fast “what vault is active / where are the notes?”
+Fast "what vault is active / where are the notes?"
 
-- If you’ve already set a default: `obsidian-cli print-default --path-only`
-- Otherwise, read `~/Library/Application Support/obsidian/obsidian.json` and use the vault entry with `"open": true`.
+- If you've already set a default: `obsidian-cli print-default --path-only`
+- Otherwise, read the config file for your OS (above) and use the vault entry with `"open": true`.
 
 Notes
 
-- Multiple vaults common (iCloud vs `~/Documents`, work/personal, etc.). Don’t guess; read config.
+- Multiple vaults common (iCloud vs `~/Documents`, work/personal, etc.). Don't guess; read config.
 - Avoid writing hardcoded vault paths into scripts; prefer reading the config or using `print-default`.
 
 ## obsidian-cli quick start
@@ -67,7 +79,7 @@ Create
 
 - `obsidian-cli create "Folder/New note" --content "..." --open`
 - Requires Obsidian URI handler (`obsidian://…`) working (Obsidian installed).
-- Avoid creating notes under “hidden” dot-folders (e.g. `.something/...`) via URI; Obsidian may refuse.
+- Avoid creating notes under "hidden" dot-folders (e.g. `.something/...`) via URI; Obsidian may refuse.
 
 Move/rename (safe refactor)
 
