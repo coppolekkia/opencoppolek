@@ -1,7 +1,8 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
-import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
+import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
@@ -96,5 +97,185 @@ describe("pi tool definition adapter", () => {
     });
     expect(result.content[0]).toMatchObject({ type: "text" });
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
+  });
+
+  it("compacts nested tool parameter schema metadata without mutating the source schema", () => {
+    const parameters = Type.Object(
+      {
+        action: Type.Union([Type.Literal("send"), Type.Literal("edit")], {
+          title: "Action title",
+          description: "Action description",
+        }),
+        payload: Type.Object(
+          {
+            message: Type.String({ title: "Message title", description: "Message description" }),
+          },
+          { description: "Payload description" },
+        ),
+        title: Type.String({ title: "Field title", description: "Field description meta" }),
+        description: Type.String({
+          title: "Description field title",
+          description: "Description field meta",
+        }),
+      },
+      { title: "Top title", description: "Top level description" },
+    );
+    const originalParameters = JSON.parse(JSON.stringify(parameters));
+    const tool = {
+      name: "compact_me",
+      label: "compact_me",
+      description: "test compact tool",
+      parameters,
+      execute: (async () => ({ details: { ok: true } })) as unknown as AgentTool["execute"],
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool]);
+    expect(def).toBeDefined();
+    expect(def?.parameters).toMatchObject({
+      type: "object",
+      description: "Top level description",
+      properties: {
+        action: {
+          anyOf: [
+            { const: "send", type: "string" },
+            { const: "edit", type: "string" },
+          ],
+        },
+        payload: {
+          type: "object",
+          properties: {
+            message: {
+              type: "string",
+            },
+          },
+        },
+        title: {
+          type: "string",
+        },
+        description: {
+          type: "string",
+        },
+      },
+    });
+    const compactedSchemaJson = JSON.stringify(def?.parameters);
+    expect(compactedSchemaJson).not.toContain("Action title");
+    expect(compactedSchemaJson).not.toContain("Action description");
+    expect(compactedSchemaJson).not.toContain("Message title");
+    expect(compactedSchemaJson).not.toContain("Message description");
+    expect(compactedSchemaJson).not.toContain("Field title");
+    expect(compactedSchemaJson).not.toContain("Field description meta");
+    const compactedParameters = def?.parameters as Record<string, unknown>;
+    expect(compactedParameters).not.toHaveProperty("title");
+    expect(compactedParameters).toHaveProperty("properties.title.type", "string");
+    expect(compactedParameters).toHaveProperty("properties.description.type", "string");
+    expect(compactedParameters).not.toHaveProperty("properties.title.title");
+    expect(compactedParameters).not.toHaveProperty("properties.description.title");
+    expect(JSON.parse(JSON.stringify(parameters))).toEqual(originalParameters);
+  });
+
+  it("compacts nested client tool schemas before exposing definitions", () => {
+    const clientTools: ClientToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "client_compact_me",
+          description: "client tool",
+          parameters: {
+            type: "object",
+            title: "Client top title",
+            description: "Client top description",
+            properties: {
+              query: {
+                type: "string",
+                title: "Query title",
+                description: "Query description",
+              },
+              title: {
+                type: "string",
+                title: "Client field title",
+                description: "Client field title description",
+              },
+              description: {
+                type: "string",
+                title: "Client description field title",
+                description: "Client description field description",
+              },
+              payload: {
+                type: "object",
+                title: "Payload title",
+                description: "Payload description",
+                default: {
+                  title: "Keep default title",
+                  description: "Keep default description",
+                },
+                examples: [
+                  {
+                    title: "Keep example title",
+                    description: "Keep example description",
+                  },
+                ],
+              },
+              tupleArg: {
+                type: "array",
+                items: [
+                  {
+                    type: "string",
+                    description: "Tuple first entry",
+                  },
+                  {
+                    type: "number",
+                    description: "Tuple second entry",
+                  },
+                ],
+              },
+            },
+            required: ["query"],
+          },
+        },
+      },
+    ];
+
+    const [tool] = toClientToolDefinitions(clientTools);
+    expect(tool).toBeDefined();
+    expect(tool?.parameters).toEqual({
+      type: "object",
+      description: "Client top description",
+      properties: {
+        query: {
+          type: "string",
+        },
+        title: {
+          type: "string",
+        },
+        description: {
+          type: "string",
+        },
+        payload: {
+          type: "object",
+          default: {
+            title: "Keep default title",
+            description: "Keep default description",
+          },
+          examples: [
+            {
+              title: "Keep example title",
+              description: "Keep example description",
+            },
+          ],
+        },
+        tupleArg: {
+          type: "array",
+          items: [
+            {
+              type: "string",
+            },
+            {
+              type: "number",
+            },
+          ],
+        },
+      },
+      required: ["query"],
+    });
   });
 });

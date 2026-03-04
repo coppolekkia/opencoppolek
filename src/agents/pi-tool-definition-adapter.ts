@@ -36,6 +36,88 @@ type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => u
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
 
+function compactToolParametersSchema(
+  schema: ToolDefinition["parameters"],
+): ToolDefinition["parameters"] {
+  const schemaKeyMapKeywords = new Set([
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+  ]);
+  const schemaNodeKeywords = new Set([
+    "items",
+    "additionalItems",
+    "contains",
+    "not",
+    "if",
+    "then",
+    "else",
+    "propertyNames",
+    "additionalProperties",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+  ]);
+  const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+  const seen = new WeakMap<object, unknown>();
+  const compactSchema = (value: unknown, depth: number): unknown => {
+    if (Array.isArray(value)) {
+      return value.map((entry) => compactSchema(entry, depth + 1));
+    }
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    const cached = seen.get(value);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const output: Record<string, unknown> = {};
+    seen.set(value, output);
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "title") {
+        continue;
+      }
+      if (key === "description" && depth > 0) {
+        continue;
+      }
+      if (schemaKeyMapKeywords.has(key)) {
+        output[key] = compactSchemaKeyMap(entry, depth + 1);
+        continue;
+      }
+      if (schemaArrayKeywords.has(key)) {
+        output[key] = Array.isArray(entry)
+          ? entry.map((child) => compactSchema(child, depth + 1))
+          : entry;
+        continue;
+      }
+      if (schemaNodeKeywords.has(key)) {
+        output[key] = compactSchema(entry, depth + 1);
+        continue;
+      }
+      // Preserve non-schema payload values as-is (e.g. default/examples objects).
+      output[key] = entry;
+    }
+    return output;
+  };
+  const compactSchemaKeyMap = (value: unknown, depth: number): unknown => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return value;
+    }
+    const cached = seen.get(value);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const output: Record<string, unknown> = {};
+    seen.set(value, output);
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      output[key] = compactSchema(entry, depth + 1);
+    }
+    return output;
+  };
+  return compactSchema(schema, 0) as ToolDefinition["parameters"];
+}
+
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
 }
@@ -143,7 +225,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       name,
       label: tool.label ?? name,
       description: tool.description ?? "",
-      parameters: tool.parameters,
+      parameters: compactToolParametersSchema(tool.parameters),
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
@@ -206,7 +288,7 @@ export function toClientToolDefinitions(
       name: func.name,
       label: func.name,
       description: func.description ?? "",
-      parameters: func.parameters as ToolDefinition["parameters"],
+      parameters: compactToolParametersSchema(func.parameters as ToolDefinition["parameters"]),
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         const outcome = await runBeforeToolCallHook({
