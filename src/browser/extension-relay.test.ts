@@ -615,6 +615,46 @@ describe("chrome extension relay server", () => {
     ext.close();
   });
 
+  it("accepts raw gateway bearer token for relay auth compatibility", async () => {
+    const sharedUrl = await ensureSharedRelayServer();
+    const sharedPort = new URL(sharedUrl).port;
+
+    const versionRes = await fetch(`${sharedUrl}/json/version`, {
+      headers: { Authorization: `Bearer ${TEST_GATEWAY_TOKEN}` },
+    });
+    expect(versionRes.status).toBe(200);
+
+    const cdp = new WebSocket(`ws://127.0.0.1:${sharedPort}/cdp`, {
+      headers: { Authorization: `Bearer ${TEST_GATEWAY_TOKEN}` },
+    });
+    await waitForOpen(cdp);
+    cdp.close();
+  });
+
+  it("accepts valid query token even when bearer header is unrelated", async () => {
+    const sharedUrl = await ensureSharedRelayServer();
+    const sharedPort = new URL(sharedUrl).port;
+    const token = relayAuthHeaders(sharedUrl)["x-openclaw-relay-token"];
+    expect(token).toBeTruthy();
+
+    const versionRes = await fetch(
+      `${sharedUrl}/json/version?token=${encodeURIComponent(String(token))}`,
+      {
+        headers: { Authorization: "Bearer unrelated-token" },
+      },
+    );
+    expect(versionRes.status).toBe(200);
+
+    const ext = new WebSocket(
+      `ws://127.0.0.1:${sharedPort}/extension?token=${encodeURIComponent(String(token))}`,
+      {
+        headers: { Authorization: "Bearer unrelated-token" },
+      },
+    );
+    await waitForOpen(ext);
+    ext.close();
+  });
+
   it(
     "tracks attached page targets and exposes them via CDP + /json/list",
     async () => {
