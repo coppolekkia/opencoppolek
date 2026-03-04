@@ -345,7 +345,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
               );
         }
       }
-    } else {
+    } else if (guarded.fd >= 0) {
       fs.closeSync(guarded.fd);
     }
 
