@@ -7,6 +7,7 @@ const sendMessageIMessageMock = vi.hoisted(() =>
 const chunkTextWithModeMock = vi.hoisted(() => vi.fn((text: string) => [text]));
 const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
 const convertMarkdownTablesMock = vi.hoisted(() => vi.fn((text: string) => text));
+const stripMarkdownMock = vi.hoisted(() => vi.fn((text: string) => text));
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "code"));
 
 vi.mock("../send.js", () => ({
@@ -25,6 +26,10 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/markdown-tables.js", () => ({
   resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
+}));
+
+vi.mock("../../line/markdown-to-line.js", () => ({
+  stripMarkdown: (text: string) => stripMarkdownMock(text),
 }));
 
 vi.mock("../../markdown/tables.js", () => ({
@@ -148,5 +153,26 @@ describe("deliverReplies", () => {
       text: "second",
       messageId: "imsg-1",
     });
+  });
+
+  it("applies stripMarkdown to outbound text", async () => {
+    stripMarkdownMock.mockImplementation((text: string) => text.replace(/\*\*(.+?)\*\*/g, "$1"));
+
+    await deliverReplies({
+      replies: [{ text: "This is **bold** text" }],
+      target: "+14155551234",
+      client,
+      accountId: "default",
+      runtime,
+      maxBytes: 4096,
+      textLimit: 4000,
+    });
+
+    expect(stripMarkdownMock).toHaveBeenCalled();
+    expect(sendMessageIMessageMock).toHaveBeenCalledWith(
+      "+14155551234",
+      "This is bold text",
+      expect.anything(),
+    );
   });
 });

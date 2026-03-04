@@ -364,6 +364,12 @@ export function stripMarkdown(text: string): string {
   // Remove horizontal rules: ---, ***, ___
   result = result.replace(/^[-*_]{3,}$/gm, "");
 
+  // Remove fenced code blocks: ```lang\ncode\n``` → just the code
+  result = result.replace(/```[^\n]*\n([\s\S]*?)```/g, "$1");
+
+  // Remove markdown links: [text](url) → text
+  result = result.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+
   // Remove inline code: `code`
   result = result.replace(/`([^`]+)`/g, "$1");
 

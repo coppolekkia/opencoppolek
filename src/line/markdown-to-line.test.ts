@@ -142,6 +142,18 @@ describe("stripMarkdown", () => {
       ["removes hr ---", "Above\n---\nBelow", "Above\n\nBelow"],
       ["removes hr ***", "Above\n***\nBelow", "Above\n\nBelow"],
       ["strips inline code markers", "Use `const` keyword", "Use const keyword"],
+      [
+        "strips markdown links",
+        "Check [this guide](https://example.com) out",
+        "Check this guide out",
+      ],
+      ["strips multiple links", "[A](http://a.com) and [B](http://b.com)", "A and B"],
+      [
+        "strips fenced code blocks",
+        "Before\n```js\nconst x = 1;\n```\nAfter",
+        "Before\nconst x = 1;\n\nAfter",
+      ],
+      ["strips fenced blocks no lang", "Text\n```\nhello\n```\nEnd", "Text\nhello\n\nEnd"],
     ] as const;
     for (const [name, input, expected] of cases) {
       expect(stripMarkdown(input), name).toBe(expected);
