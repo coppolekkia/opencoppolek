@@ -1,6 +1,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
+import { appendUserMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -317,6 +318,37 @@ export async function dispatchReplyFromConfig(params: {
       logVerbose(
         `Send blocked by policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"}`,
       );
+
+      // Persist inbound message to session transcript even when reply is denied,
+      // so "spy mode" / read-only logging configurations still record messages.
+      const persistSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+      if (persistSessionKey) {
+        const agentId = resolveSessionAgentId({ sessionKey: persistSessionKey, config: cfg });
+        const inboundText =
+          typeof ctx.RawBody === "string"
+            ? ctx.RawBody
+            : typeof ctx.Body === "string"
+              ? ctx.Body
+              : "";
+        if (inboundText.trim()) {
+          const result = await appendUserMessageToSessionTranscript({
+            agentId,
+            sessionKey: persistSessionKey,
+            text: inboundText,
+          }).catch((err) => {
+            logVerbose(
+              `dispatch-from-config: failed persisting inbound message on send_policy_deny: ${String(err)}`,
+            );
+            return { ok: false as const, reason: String(err) };
+          });
+          if (result && !result.ok) {
+            logVerbose(
+              `dispatch-from-config: could not persist inbound message on send_policy_deny: ${result.reason}`,
+            );
+          }
+        }
+      }
+
       const counts = dispatcher.getQueuedCounts();
       recordProcessed("completed", { reason: "send_policy_deny" });
       markIdle("message_completed");

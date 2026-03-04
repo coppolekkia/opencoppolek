@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
@@ -77,6 +78,73 @@ async function ensureSessionHeader(params: {
     encoding: "utf-8",
     mode: 0o600,
   });
+}
+
+export async function appendUserMessageToSessionTranscript(params: {
+  agentId?: string;
+  sessionKey: string;
+  text: string;
+  storePath?: string;
+}): Promise<{ ok: true; sessionFile: string } | { ok: false; reason: string }> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return { ok: false, reason: "missing sessionKey" };
+  }
+
+  const text = params.text.trim();
+  if (!text) {
+    return { ok: false, reason: "empty text" };
+  }
+
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey] as SessionEntry | undefined;
+  if (!entry?.sessionId) {
+    return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
+  }
+
+  let sessionFile: string;
+  try {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    sessionFile = resolvedSessionFile.sessionFile;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+
+  // SessionManager._persist() skips writing until an assistant message exists,
+  // so for ingest-only persistence (sendPolicy deny) we write directly to disk.
+  // SessionManager.open() has no global instance cache — each call re-reads
+  // from disk — so subsequent opens will see entries appended here.
+  const sm = SessionManager.open(sessionFile);
+  const leafId = sm.getLeafId();
+  const messageEntry = {
+    type: "message" as const,
+    id: randomUUID().slice(0, 8),
+    parentId: leafId,
+    timestamp: new Date().toISOString(),
+    message: {
+      role: "user" as const,
+      content: [{ type: "text" as const, text }],
+      timestamp: Date.now(),
+    },
+  };
+  await fs.promises.appendFile(sessionFile, `${JSON.stringify(messageEntry)}\n`, "utf-8");
+
+  emitSessionTranscriptUpdate(sessionFile);
+  return { ok: true, sessionFile };
 }
 
 export async function appendAssistantMessageToSessionTranscript(params: {
