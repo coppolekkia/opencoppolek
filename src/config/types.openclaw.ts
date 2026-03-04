@@ -1,3 +1,4 @@
+import type { BackupOptions } from "./backup-rotation.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -35,6 +36,7 @@ export type OpenClawConfig = {
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
   };
+  backup?: BackupOptions;
   auth?: AuthConfig;
   acp?: AcpConfig;
   env?: {
