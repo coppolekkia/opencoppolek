@@ -79,6 +79,11 @@ type SupersededTelegramPreview = {
   parseMode?: "HTML";
 };
 
+type PreviewSendResult = {
+  sent: boolean;
+  appliedToActiveGeneration: boolean;
+};
+
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: number;
@@ -104,12 +109,7 @@ export function createTelegramDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const requestedPreviewTransport = params.previewTransport ?? "auto";
-  const prefersDraftTransport =
-    requestedPreviewTransport === "draft"
-      ? true
-      : requestedPreviewTransport === "message"
-        ? false
-        : params.thread?.scope === "dm";
+  const prefersDraftTransport = requestedPreviewTransport === "draft";
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyParams =
     params.replyToMessageId != null
@@ -175,7 +175,7 @@ export function createTelegramDraftStream(params: {
     renderedText,
     renderedParseMode,
     sendGeneration,
-  }: PreviewSendParams): Promise<boolean> => {
+  }: PreviewSendParams): Promise<PreviewSendResult> => {
     if (typeof streamMessageId === "number") {
       if (renderedParseMode) {
         await params.api.editMessageText(chatId, streamMessageId, renderedText, {
@@ -184,7 +184,10 @@ export function createTelegramDraftStream(params: {
       } else {
         await params.api.editMessageText(chatId, streamMessageId, renderedText);
       }
-      return true;
+      return {
+        sent: true,
+        appliedToActiveGeneration: sendGeneration === generation,
+      };
     }
     const sent = await sendRenderedMessageWithThreadFallback({
       renderedText,
@@ -196,7 +199,7 @@ export function createTelegramDraftStream(params: {
     if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
       streamState.stopped = true;
       params.warn?.("telegram stream preview stopped (missing message id from sendMessage)");
-      return false;
+      return { sent: false, appliedToActiveGeneration: false };
     }
     const normalizedMessageId = Math.trunc(sentMessageId);
     if (sendGeneration !== generation) {
@@ -205,15 +208,16 @@ export function createTelegramDraftStream(params: {
         textSnapshot: renderedText,
         parseMode: renderedParseMode,
       });
-      return true;
+      return { sent: true, appliedToActiveGeneration: false };
     }
     streamMessageId = normalizedMessageId;
-    return true;
+    return { sent: true, appliedToActiveGeneration: true };
   };
   const sendDraftTransportPreview = async ({
     renderedText,
     renderedParseMode,
-  }: PreviewSendParams): Promise<boolean> => {
+    sendGeneration,
+  }: PreviewSendParams): Promise<PreviewSendResult> => {
     const draftId = streamDraftId ?? allocateTelegramDraftId();
     streamDraftId = draftId;
     const draftParams = {
@@ -228,7 +232,10 @@ export function createTelegramDraftStream(params: {
       renderedText,
       Object.keys(draftParams).length > 0 ? draftParams : undefined,
     );
-    return true;
+    return {
+      sent: true,
+      appliedToActiveGeneration: sendGeneration === generation,
+    };
   };
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
@@ -269,11 +276,12 @@ export function createTelegramDraftStream(params: {
 
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
+
     try {
-      let sent = false;
+      let sendResult: PreviewSendResult = { sent: false, appliedToActiveGeneration: false };
       if (previewTransport === "draft") {
         try {
-          sent = await sendDraftTransportPreview({
+          sendResult = await sendDraftTransportPreview({
             renderedText,
             renderedParseMode,
             sendGeneration,
@@ -287,24 +295,24 @@ export function createTelegramDraftStream(params: {
           params.warn?.(
             "telegram stream preview: sendMessageDraft rejected by API; falling back to sendMessage/editMessageText",
           );
-          sent = await sendMessageTransportPreview({
+          sendResult = await sendMessageTransportPreview({
             renderedText,
             renderedParseMode,
             sendGeneration,
           });
         }
       } else {
-        sent = await sendMessageTransportPreview({
+        sendResult = await sendMessageTransportPreview({
           renderedText,
           renderedParseMode,
           sendGeneration,
         });
       }
-      if (sent) {
+      if (sendResult.sent && sendResult.appliedToActiveGeneration) {
         previewRevision += 1;
         lastDeliveredText = trimmed;
       }
-      return sent;
+      return sendResult.sent;
     } catch (err) {
       streamState.stopped = true;
       params.warn?.(
