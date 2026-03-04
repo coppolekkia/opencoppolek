@@ -2,6 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -136,6 +137,39 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   }
 }
 
+function isGatewayTokenMismatch(host: GatewayHost, reason: string, error?: { message?: string }) {
+  const normalizedReason = reason.toLowerCase();
+  const normalizedMessage = (error?.message ?? "").toLowerCase();
+  return (
+    host.lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
+    normalizedMessage.includes("gateway token mismatch") ||
+    normalizedReason.includes("gateway token mismatch")
+  );
+}
+
+function maybeRecoverFromStaleToken(
+  host: GatewayHost,
+  client: GatewayBrowserClient,
+  closeInfo: { reason: string; error?: { message?: string } },
+): boolean {
+  if (host.client !== client) {
+    return false;
+  }
+  if (!host.settings.token.trim()) {
+    return false;
+  }
+  if (!isGatewayTokenMismatch(host, closeInfo.reason, closeInfo.error)) {
+    return false;
+  }
+
+  applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+    ...host.settings,
+    token: "",
+  });
+  connectGateway(host);
+  return true;
+}
+
 export function connectGateway(host: GatewayHost) {
   host.lastError = null;
   host.lastErrorCode = null;
@@ -184,6 +218,14 @@ export function connectGateway(host: GatewayHost) {
         resolveGatewayErrorDetailCode(error) ??
         (typeof error?.code === "string" ? error.code : null);
       if (code !== 1012) {
+        if (
+          maybeRecoverFromStaleToken(host, client, {
+            reason,
+            error,
+          })
+        ) {
+          return;
+        }
         if (error?.message) {
           host.lastError = error.message;
           return;

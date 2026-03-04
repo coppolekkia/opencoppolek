@@ -226,4 +226,52 @@ describe("connectGateway", () => {
     expect(host.lastError).toContain("gateway token mismatch");
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
   });
+
+  it("clears stale control-ui token and reconnects on token mismatch", () => {
+    const host = createHost();
+    host.settings.token = "stale-token";
+
+    connectGateway(host);
+    const firstClient = gatewayClientInstances[0];
+    expect(firstClient).toBeDefined();
+
+    firstClient.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message:
+          "unauthorized: gateway token mismatch (open the dashboard URL and paste the token in Control UI settings)",
+        details: { code: "AUTH_TOKEN_MISMATCH" },
+      },
+    });
+
+    expect(host.settings.token).toBe("");
+    expect(gatewayClientInstances).toHaveLength(2);
+    expect(firstClient.stop).toHaveBeenCalledTimes(1);
+    expect(gatewayClientInstances[1]?.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not attempt stale-token recovery when no token is configured", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message:
+          "unauthorized: gateway token mismatch (open the dashboard URL and paste the token in Control UI settings)",
+        details: { code: "AUTH_TOKEN_MISMATCH" },
+      },
+    });
+
+    expect(gatewayClientInstances).toHaveLength(1);
+    expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
+    expect(host.lastError).toContain("gateway token mismatch");
+  });
 });
