@@ -561,7 +561,14 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     if (payload) {
       return payload;
     }
-    throw error;
+    const displayUrl = finalUrl || params.url;
+    const reason =
+      (error instanceof Error &&
+        (((error as NodeJS.ErrnoException).cause as Error | undefined)?.message ||
+          (error as NodeJS.ErrnoException).code ||
+          error.message)) ||
+      "unknown error";
+    throw new Error(`Web fetch failed for ${displayUrl}: ${reason}`, { cause: error });
   }
 
   try {
