@@ -784,9 +784,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Emergency fallback: return a static summary instead of cancelling.
       // Cancelling leaves the session at its current (oversized) context,
       // causing a compaction-fail-retry loop on every subsequent message.
+      const priorContext = preparation.previousSummary
+        ? `\n\nPrior summary (carried forward):\n${preparation.previousSummary}`
+        : "";
       const emergencySummary =
         `Emergency compaction: summarization failed (${errorMessage}). ` +
-        `Context was truncated to preserve recent messages.` +
+        `History was cut at the SDK-computed boundary; content before that point is not summarized.` +
+        priorContext +
         toolFailureSection +
         fileOpsSummary;
       return {

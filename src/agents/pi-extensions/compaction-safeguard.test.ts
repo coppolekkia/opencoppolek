@@ -984,25 +984,36 @@ describe("compaction-safeguard emergency fallback", () => {
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
 
+    // Mock summarizeInStages to throw deterministically so the test
+    // exercises the catch path regardless of token estimation internals.
+    const spy = vi
+      .spyOn(compactionModule, "summarizeInStages")
+      .mockRejectedValue(new Error("injected summarization failure"));
+
     const compactionHandler = createCompactionHandler();
 
-    // Build an event whose tokensBefore is large enough to trigger
-    // pruneHistoryForContextShare, which calls estimateMessagesTokens.
-    // Include a malformed message that will make estimateTokens throw.
+    // Provide enough messages (>3 turns) so splitPreservedRecentTurns
+    // still leaves some for summarization (default preserves 3 recent turns).
     const mockEvent = {
       preparation: {
         messagesToSummarize: [
-          { role: "user", content: "real message", timestamp: Date.now() },
-          // Malformed message: Symbol content causes estimateTokens to throw
-          { role: "assistant", content: Symbol("poison"), timestamp: Date.now() },
-        ] as unknown as AgentMessage[],
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
         turnPrefixMessages: [] as AgentMessage[],
         firstKeptEntryId: "entry-emergency",
         tokensBefore: 999_999,
         isSplitTurn: false,
         fileOps: { read: ["a.ts"], edited: ["b.ts"], written: [] },
         settings: { reserveTokens: 16_384 },
-        previousSummary: undefined,
+        previousSummary: "Prior conversation context about the project.",
       },
       customInstructions: "",
       signal: new AbortController().signal,
@@ -1013,24 +1024,31 @@ describe("compaction-safeguard emergency fallback", () => {
       getApiKeyMock: vi.fn().mockResolvedValue("sk-test"),
     });
 
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-      compaction?: {
-        summary: string;
-        firstKeptEntryId: string;
-        tokensBefore: number;
-        details: { readFiles: string[]; modifiedFiles: string[] };
+    try {
+      const result = (await compactionHandler(mockEvent, mockContext)) as {
+        cancel?: boolean;
+        compaction?: {
+          summary: string;
+          firstKeptEntryId: string;
+          tokensBefore: number;
+          details: { readFiles: string[]; modifiedFiles: string[] };
+        };
       };
-    };
 
-    // Must NOT cancel — that creates the stuck-session loop.
-    expect(result.cancel).toBeUndefined();
-    expect(result.compaction).toBeDefined();
-    expect(result.compaction!.summary).toContain("Emergency compaction");
-    expect(result.compaction!.firstKeptEntryId).toBe("entry-emergency");
-    expect(result.compaction!.tokensBefore).toBe(999_999);
-    expect(result.compaction!.details.readFiles).toEqual(["a.ts"]);
-    expect(result.compaction!.details.modifiedFiles).toEqual(["b.ts"]);
+      // Must NOT cancel — that creates the stuck-session loop.
+      expect(result.cancel).toBeUndefined();
+      expect(result.compaction).toBeDefined();
+      expect(result.compaction!.summary).toContain("Emergency compaction");
+      expect(result.compaction!.summary).toContain("injected summarization failure");
+      // Prior summary must be preserved in emergency fallback
+      expect(result.compaction!.summary).toContain("Prior conversation context about the project.");
+      expect(result.compaction!.firstKeptEntryId).toBe("entry-emergency");
+      expect(result.compaction!.tokensBefore).toBe(999_999);
+      expect(result.compaction!.details.readFiles).toEqual(["a.ts"]);
+      expect(result.compaction!.details.modifiedFiles).toEqual(["b.ts"]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
