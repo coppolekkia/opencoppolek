@@ -868,6 +868,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/Sessions: preserve `modelProvider` on `sessions.reset` and avoid incorrect provider prefixes for legacy session models. (#25874) Thanks @lbo728.
 - Agents/Compaction: harden summarization prompts to preserve opaque identifiers verbatim (UUIDs, IDs, tokens, host/IP/port, URLs), reducing post-compaction identifier drift and hallucinated identifier reconstruction.
 - Security/Sandbox: canonicalize bind-mount source paths via existing-ancestor realpath so symlink-parent + non-existent-leaf paths cannot bypass allowed-source-roots or blocked-path checks. Thanks @tdjackey.
+- Sandbox/Path resolution: add fallback to map container-internal paths (`/workspace/...`) to host when mount lookup misses, preventing false "Path escapes sandbox root" in edge cases. (#9560)
 
 ## 2026.2.23
 
