@@ -389,4 +389,41 @@ describe("message tool sandbox passthrough", () => {
 
     expect(call?.requesterSenderId).toBe("1234567890");
   });
+
+  it("suppresses target from tool result payload", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "imessage",
+      to: "+14155551234",
+      handledBy: "core",
+      payload: {
+        channel: "imessage",
+        to: "+14155551234",
+        via: "direct",
+        mediaUrl: null,
+      },
+      dryRun: false,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({ config: {} as never });
+    const result = await tool.execute("1", {
+      action: "send",
+      target: "+14155551234",
+      message: "hello",
+    });
+
+    // The tool result content should not contain the target phone number
+    const text =
+      Array.isArray(result.content) &&
+      result.content.find(
+        (b: unknown) => b && typeof b === "object" && (b as { type?: string }).type === "text",
+      );
+    const json = text ? JSON.parse((text as { text: string }).text) : undefined;
+    expect(json).toBeDefined();
+    expect(json.to).toBeUndefined();
+    expect(json.target).toBeUndefined();
+    expect(json.channel).toBe("imessage");
+  });
 });

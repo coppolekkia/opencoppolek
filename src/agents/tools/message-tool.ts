@@ -27,6 +27,33 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveGatewayOptions } from "./gateway.js";
 
+/** Keys to strip from tool result payloads to prevent target/PII leakage. */
+const TARGET_PAYLOAD_KEYS = new Set(["to", "target"]);
+
+function suppressTargetFromPayload(payload: unknown): unknown {
+  if (payload == null || typeof payload !== "object") {
+    return payload;
+  }
+  if (Array.isArray(payload)) {
+    return payload.map(suppressTargetFromPayload);
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (TARGET_PAYLOAD_KEYS.has(key)) {
+      continue;
+    }
+    // Recurse into nested objects (e.g. broadcast results)
+    if (value != null && typeof value === "object" && !Array.isArray(value)) {
+      out[key] = suppressTargetFromPayload(value);
+    } else if (Array.isArray(value)) {
+      out[key] = value.map(suppressTargetFromPayload);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
@@ -749,7 +776,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       if (toolResult) {
         return toolResult;
       }
-      return jsonResult(result.payload);
+      // Suppress target/recipient from tool results to avoid leaking
+      // phone numbers, channel IDs, or other PII back into the model context.
+      const sanitizedPayload = suppressTargetFromPayload(result.payload);
+      return jsonResult(sanitizedPayload);
     },
   };
 }
