@@ -174,6 +174,8 @@ export async function resolveDeliveryTarget(
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
     const effectiveSendList = normalizedAllowSendTo ?? allowFromOverride;
+    // allowFromOverride never contains wildcards (filtered out at line 159),
+    // so hasWildcard only fires when allowSendToOverride is defined.
     const hasWildcard = (allowSendToOverride ?? allowFromOverride)?.some(
       (entry) => String(entry).trim() === "*",
     );
