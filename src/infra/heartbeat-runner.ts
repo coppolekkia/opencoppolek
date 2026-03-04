@@ -999,6 +999,7 @@ export function startHeartbeatRunner(opts: {
     stopped: false,
   };
   let initialized = false;
+  const requestsInFlightRetryMs = 60_000;
 
   const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
     if (typeof prevState?.lastRunMs === "number") {
@@ -1013,6 +1014,11 @@ export function startHeartbeatRunner(opts: {
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunMs = now;
     agent.nextDueMs = now + agent.intervalMs;
+  };
+
+  const deferAgentScheduleAfterBusySkip = (agent: HeartbeatAgentState, now: number) => {
+    // A busy main lane should trigger a short retry, not a full interval skip.
+    agent.nextDueMs = now + requestsInFlightRetryMs;
   };
 
   const scheduleNext = () => {
@@ -1135,6 +1141,11 @@ export function startHeartbeatRunner(opts: {
           sessionKey: requestedSessionKey,
           deps: { runtime: state.runtime },
         });
+        if (res.status === "skipped" && res.reason === "requests-in-flight") {
+          deferAgentScheduleAfterBusySkip(targetAgent, now);
+          scheduleNext();
+          return res;
+        }
         if (res.status !== "skipped" || res.reason !== "disabled") {
           advanceAgentSchedule(targetAgent, now);
         }
@@ -1174,7 +1185,7 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        advanceAgentSchedule(agent, now);
+        deferAgentScheduleAfterBusySkip(agent, now);
         scheduleNext();
         return res;
       }
