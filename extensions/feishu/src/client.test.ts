@@ -84,10 +84,13 @@ describe("createFeishuWSClient proxy handling", () => {
 
     createFeishuWSClient(baseAccount);
 
+    const expectedProxyUrl =
+      process.platform === "win32" ? "http://upper-https:8002" : "http://lower-https:8001";
+
     expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://lower-https:8001");
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith(expectedProxyUrl);
     const options = firstWsClientOptions();
-    expect(options.agent).toEqual({ proxyUrl: "http://lower-https:8001" });
+    expect(options.agent).toEqual({ proxyUrl: expectedProxyUrl });
   });
 
   it("passes HTTP_PROXY to ws client when https vars are unset", () => {
