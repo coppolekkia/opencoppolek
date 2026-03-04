@@ -27,6 +27,69 @@ export type TlonHistoryEntry = {
   id?: string;
 };
 
+type TlonPostEssay = {
+  author?: string;
+  content?: unknown;
+  sent?: number;
+};
+
+type TlonPostSeal = {
+  id?: string;
+};
+
+type TlonPost = {
+  essay?: TlonPostEssay;
+  seal?: TlonPostSeal;
+  "r-post"?: {
+    set?: {
+      essay?: TlonPostEssay;
+      seal?: TlonPostSeal;
+    };
+  };
+};
+
+type TlonPostMap = Record<string, TlonPost>;
+
+type TlonChannelHistoryResponse =
+  | TlonPost[]
+  | {
+      posts?: TlonPostMap;
+    }
+  | TlonPostMap;
+
+type TlonReplyMemo = {
+  author?: string;
+  content?: unknown;
+  sent?: number;
+};
+
+type TlonReplySeal = {
+  id?: string;
+};
+
+type TlonReply = {
+  memo?: TlonReplyMemo;
+  seal?: TlonReplySeal;
+  "r-reply"?: {
+    set?: {
+      memo?: TlonReplyMemo;
+      seal?: TlonReplySeal;
+    };
+  };
+  id?: string;
+};
+
+type TlonReplyMap = Record<string, TlonReply>;
+
+type TlonThreadHistoryResponse =
+  | TlonReply[]
+  | {
+      replies?: TlonReply[] | TlonReplyMap;
+    }
+  | TlonReplyMap;
+
+type TlonPostLike = TlonPost | TlonReply;
+
 const messageCache = new Map<string, TlonHistoryEntry[]>();
 const MAX_CACHED_MESSAGES = 100;
 
@@ -44,6 +107,104 @@ export function cacheMessage(channelNest: string, message: TlonHistoryEntry) {
   }
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isTlonPostLike(value: unknown): value is TlonPostLike {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  const maybeEssay = (value as TlonPost).essay;
+  const maybeMemo = (value as TlonReply).memo;
+
+  if (!maybeEssay && !maybeMemo && !("r-post" in value) && !("r-reply" in value)) {
+    return false;
+  }
+
+  return true;
+}
+
+function normalizeChannelHistoryResponse(data: unknown, runtime?: RuntimeEnv): TlonPost[] {
+  if (!data) {
+    return [];
+  }
+
+  const narrowed = data as TlonChannelHistoryResponse;
+
+  if (Array.isArray(narrowed)) {
+    return narrowed.filter(isTlonPostLike) as TlonPost[];
+  }
+
+  if (isObject(narrowed) && narrowed.posts && isObject(narrowed.posts)) {
+    return Object.values(narrowed.posts).filter(isTlonPostLike) as TlonPost[];
+  }
+
+  if (isObject(narrowed)) {
+    return Object.values(narrowed).filter(isTlonPostLike) as TlonPost[];
+  }
+
+  runtime?.log?.("[tlon] Unexpected channel history response shape, ignoring");
+  return [];
+}
+
+function extractHistoryEntryFromPost(post: TlonPost): TlonHistoryEntry {
+  const essay = post.essay ?? post["r-post"]?.set?.essay ?? {};
+  const seal = post.seal ?? post["r-post"]?.set?.seal ?? {};
+
+  const contentBlocks = Array.isArray(essay.content) ? essay.content : [];
+
+  return {
+    author: essay.author ?? "unknown",
+    content: extractMessageText(contentBlocks),
+    timestamp: essay.sent ?? Date.now(),
+    id: seal.id,
+  };
+}
+
+function normalizeThreadHistoryResponse(data: unknown, runtime?: RuntimeEnv): TlonReply[] {
+  if (!data) {
+    return [];
+  }
+
+  const narrowed = data as TlonThreadHistoryResponse;
+
+  if (Array.isArray(narrowed)) {
+    return narrowed.filter(isTlonPostLike) as TlonReply[];
+  }
+
+  if (isObject(narrowed) && narrowed.replies) {
+    const replies = Array.isArray(narrowed.replies)
+      ? narrowed.replies
+      : isObject(narrowed.replies)
+        ? Object.values(narrowed.replies)
+        : [];
+    return replies.filter(isTlonPostLike) as TlonReply[];
+  }
+
+  if (isObject(narrowed)) {
+    return Object.values(narrowed).filter(isTlonPostLike) as TlonReply[];
+  }
+
+  runtime?.log?.("[tlon] Unexpected thread history response shape, ignoring");
+  return [];
+}
+
+function extractHistoryEntryFromReply(reply: TlonReply): TlonHistoryEntry {
+  const memo = reply.memo ?? reply["r-reply"]?.set?.memo ?? {};
+  const seal = reply.seal ?? reply["r-reply"]?.set?.seal ?? {};
+
+  const contentBlocks = Array.isArray(memo.content) ? memo.content : [];
+
+  return {
+    author: memo.author ?? "unknown",
+    content: extractMessageText(contentBlocks),
+    timestamp: memo.sent ?? Date.now(),
+    id: seal.id ?? reply.id,
+  };
+}
+
 export async function fetchChannelHistory(
   api: { scry: (path: string) => Promise<unknown> },
   channelNest: string,
@@ -54,38 +215,18 @@ export async function fetchChannelHistory(
     const scryPath = `/channels/v4/${channelNest}/posts/newest/${count}/outline.json`;
     runtime?.log?.(`[tlon] Fetching history: ${scryPath}`);
 
-    const data: any = await api.scry(scryPath);
-    if (!data) {
-      return [];
-    }
+    const data = await api.scry(scryPath);
+    const posts = normalizeChannelHistoryResponse(data, runtime);
 
-    let posts: any[] = [];
-    if (Array.isArray(data)) {
-      posts = data;
-    } else if (data.posts && typeof data.posts === "object") {
-      posts = Object.values(data.posts);
-    } else if (typeof data === "object") {
-      posts = Object.values(data);
-    }
+    const messages = posts.map(extractHistoryEntryFromPost).filter((msg) => msg.content);
 
-    const messages = posts
-      .map((item) => {
-        const essay = item.essay || item["r-post"]?.set?.essay;
-        const seal = item.seal || item["r-post"]?.set?.seal;
-
-        return {
-          author: essay?.author || "unknown",
-          content: extractMessageText(essay?.content || []),
-          timestamp: essay?.sent || Date.now(),
-          id: seal?.id,
-        } as TlonHistoryEntry;
-      })
-      .filter((msg) => msg.content);
-
-    runtime?.log?.(`[tlon] Extracted ${messages.length} messages from history`);
+    runtime?.log?.(
+      `[tlon] Extracted ${messages.length} messages from history (from ${posts.length} posts)`,
+    );
     return messages;
-  } catch (error: any) {
-    runtime?.log?.(`[tlon] Error fetching channel history: ${error?.message ?? String(error)}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    runtime?.log?.(`[tlon] Error fetching channel history: ${message}`);
     return [];
   }
 }
@@ -129,62 +270,47 @@ export async function fetchThreadHistory(
     const scryPath = `/channels/v4/${channelNest}/posts/post/id/${formattedParentId}/replies/newest/${count}.json`;
     runtime?.log?.(`[tlon] Fetching thread history: ${scryPath}`);
 
-    const data: any = await api.scry(scryPath);
-    if (!data) {
-      runtime?.log?.(`[tlon] No thread history data returned`);
-      return [];
-    }
+    const data = await api.scry(scryPath);
+    const replies = normalizeThreadHistoryResponse(data, runtime);
 
-    let replies: any[] = [];
-    if (Array.isArray(data)) {
-      replies = data;
-    } else if (data.replies && Array.isArray(data.replies)) {
-      replies = data.replies;
-    } else if (typeof data === "object") {
-      replies = Object.values(data);
-    }
+    const messages = replies.map(extractHistoryEntryFromReply).filter((msg) => msg.content);
 
-    const messages = replies
-      .map((item) => {
-        // Thread replies use 'memo' structure
-        const memo = item.memo || item["r-reply"]?.set?.memo || item;
-        const seal = item.seal || item["r-reply"]?.set?.seal;
-
-        return {
-          author: memo?.author || "unknown",
-          content: extractMessageText(memo?.content || []),
-          timestamp: memo?.sent || Date.now(),
-          id: seal?.id || item.id,
-        } as TlonHistoryEntry;
-      })
-      .filter((msg) => msg.content);
-
-    runtime?.log?.(`[tlon] Extracted ${messages.length} thread replies from history`);
+    runtime?.log?.(
+      `[tlon] Extracted ${messages.length} thread replies from history (from ${replies.length} replies)`,
+    );
     return messages;
-  } catch (error: any) {
-    runtime?.log?.(`[tlon] Error fetching thread history: ${error?.message ?? String(error)}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    runtime?.log?.(`[tlon] Error fetching thread history: ${message}`);
     // Fall back to trying alternate path structure
     try {
       const altPath = `/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`;
       runtime?.log?.(`[tlon] Trying alternate path: ${altPath}`);
-      const data: any = await api.scry(altPath);
+      const data = await api.scry(altPath);
 
-      if (data?.seal?.meta?.replyCount > 0 && data?.replies) {
-        const replies = Array.isArray(data.replies) ? data.replies : Object.values(data.replies);
-        const messages = replies
-          .map((reply: any) => ({
-            author: reply.memo?.author || "unknown",
-            content: extractMessageText(reply.memo?.content || []),
-            timestamp: reply.memo?.sent || Date.now(),
-            id: reply.seal?.id,
-          }))
-          .filter((msg: TlonHistoryEntry) => msg.content);
-
-        runtime?.log?.(`[tlon] Extracted ${messages.length} replies from post data`);
-        return messages;
+      if (!isObject(data)) {
+        return [];
       }
-    } catch (altError: any) {
-      runtime?.log?.(`[tlon] Alternate path also failed: ${altError?.message ?? String(altError)}`);
+
+      const sealMeta = (data as { seal?: { meta?: { replyCount?: number } } }).seal?.meta;
+      const hasReplies =
+        typeof sealMeta?.replyCount === "number" && sealMeta.replyCount > 0 && "replies" in data;
+
+      if (!hasReplies) {
+        return [];
+      }
+
+      const rawReplies = (data as { replies?: unknown }).replies;
+      const altReplies = normalizeThreadHistoryResponse(rawReplies, runtime);
+      const messages = altReplies.map(extractHistoryEntryFromReply).filter((msg) => msg.content);
+
+      runtime?.log?.(
+        `[tlon] Extracted ${messages.length} replies from post data (from ${altReplies.length} replies)`,
+      );
+      return messages;
+    } catch (altError) {
+      const altMessage = altError instanceof Error ? altError.message : String(altError);
+      runtime?.log?.(`[tlon] Alternate path also failed: ${altMessage}`);
     }
     return [];
   }
