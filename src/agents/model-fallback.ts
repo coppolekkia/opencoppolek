@@ -169,6 +169,27 @@ function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
 }
 
+function resolveModelFamilyKey(model: string): string {
+  const raw = String(model ?? "")
+    .trim()
+    .toLowerCase();
+  if (!raw) {
+    return "";
+  }
+  const parts = raw.split("-");
+  const familyParts: string[] = [];
+  for (const part of parts) {
+    if (/\d/.test(part)) {
+      break;
+    }
+    familyParts.push(part);
+  }
+  if (familyParts.length > 0) {
+    return familyParts.join("-");
+  }
+  return parts[0] ?? raw;
+}
+
 function throwFallbackFailureSummary(params: {
   attempts: FallbackAttempt[];
   candidates: ModelCandidate[];
@@ -273,29 +294,62 @@ function resolveFallbackCandidates(params: {
 
   addExplicitCandidate(normalizedPrimary);
 
-  const modelFallbacks = (() => {
-    if (params.fallbacksOverride !== undefined) {
-      return params.fallbacksOverride;
-    }
-    const configuredFallbacks = resolveAgentModelFallbackValues(
-      params.cfg?.agents?.defaults?.model,
-    );
-    // When user runs a different provider than config, only use configured fallbacks
-    // if the current model is already in that chain (e.g. session on first fallback).
-    if (normalizedPrimary.provider !== configuredPrimary.provider) {
-      const isConfiguredFallback = configuredFallbacks.some((raw) => {
-        const resolved = resolveModelRefFromString({
-          raw: String(raw ?? ""),
-          defaultProvider,
-          aliasIndex,
-        });
-        return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
+  const configuredFallbacks =
+    params.fallbacksOverride === undefined
+      ? resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model)
+      : undefined;
+
+  const isConfiguredFallback =
+    params.fallbacksOverride === undefined &&
+    (configuredFallbacks ?? []).some((raw) => {
+      const resolved = resolveModelRefFromString({
+        raw: String(raw ?? ""),
+        defaultProvider,
+        aliasIndex,
       });
-      return isConfiguredFallback ? configuredFallbacks : [];
-    }
-    // Same provider: always use full fallback chain (model version differences within provider).
-    return configuredFallbacks;
-  })();
+      return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
+    });
+
+  const hasSameProviderConfiguredFallback =
+    params.fallbacksOverride === undefined &&
+    (configuredFallbacks ?? []).some((raw) => {
+      const resolved = resolveModelRefFromString({
+        raw: String(raw ?? ""),
+        defaultProvider,
+        aliasIndex,
+      });
+      return resolved ? resolved.ref.provider === configuredPrimary.provider : false;
+    });
+
+  const isLikelyPrimaryFamilyVariant =
+    normalizedPrimary.provider === configuredPrimary.provider &&
+    resolveModelFamilyKey(normalizedPrimary.model) ===
+      resolveModelFamilyKey(configuredPrimary.model);
+
+  const shouldTryConfiguredPrimaryNext =
+    params.fallbacksOverride === undefined &&
+    primary?.provider &&
+    primary.model &&
+    !isConfiguredFallback &&
+    (normalizedPrimary.provider !== configuredPrimary.provider ||
+      (!hasSameProviderConfiguredFallback && !isLikelyPrimaryFamilyVariant));
+
+  // Session/ad-hoc overrides outside the configured chain should probe
+  // configured primary before global fallbacks.
+  if (shouldTryConfiguredPrimaryNext) {
+    addExplicitCandidate({ provider: primary.provider, model: primary.model });
+  }
+
+  const shouldUseConfiguredFallbacks =
+    params.fallbacksOverride === undefined &&
+    (normalizedPrimary.provider === configuredPrimary.provider || isConfiguredFallback);
+
+  const modelFallbacks =
+    params.fallbacksOverride !== undefined
+      ? params.fallbacksOverride
+      : shouldUseConfiguredFallbacks
+        ? (configuredFallbacks ?? [])
+        : [];
 
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({

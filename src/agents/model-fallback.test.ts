@@ -291,6 +291,48 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("continues to configured cross-provider fallbacks after override and primary failures", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-haiku-3-5",
+            fallbacks: ["openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      if (provider === "anthropic" && model === "claude-sonnet-4-6") {
+        throw Object.assign(new Error("provider cooldown"), { status: 429 });
+      }
+      if (provider === "anthropic" && model === "claude-haiku-3-5") {
+        throw Object.assign(new Error("provider cooldown"), { status: 429 });
+      }
+      if (provider === "openai" && model === "gpt-4.1-mini") {
+        return "ok";
+      }
+      throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4.1-mini");
+    expect(run.mock.calls).toEqual([
+      ["anthropic", "claude-sonnet-4-6"],
+      ["anthropic", "claude-haiku-3-5"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
+  });
+
   it("keeps configured fallback chain when current model is a configured fallback", async () => {
     const cfg = makeCfg({
       agents: {
