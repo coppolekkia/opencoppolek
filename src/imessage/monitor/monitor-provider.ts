@@ -389,6 +389,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           maxBytes: mediaMaxBytes,
           textLimit,
           sentMessageCache,
+          sessionKey: decision.route.sessionKey,
         });
       },
       onError: (err, info) => {
