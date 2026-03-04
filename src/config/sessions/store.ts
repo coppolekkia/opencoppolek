@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
@@ -22,6 +23,7 @@ import {
   clearSessionStoreCaches,
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
+  invalidateSessionStoreCache,
   readSessionStoreCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
@@ -44,6 +46,215 @@ import {
 } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
+
+// ============================================================================
+// Directory-per-session store
+// ============================================================================
+
+/** Sibling directory name for the per-session store layout. */
+const DIR_STORE_NAME = "sessions.d";
+
+/**
+ * Derive the directory store path from a legacy storePath (e.g. `sessions.json`).
+ * The directory store lives as a sibling `sessions.d/` directory.
+ */
+export function resolveSessionStoreDir(storePath: string): string {
+  return path.join(path.dirname(storePath), DIR_STORE_NAME);
+}
+
+/**
+ * Sanitize a session key for safe use as a filesystem name.
+ * Colons are replaced with `%3A` (URL-encoding style) to avoid ambiguity.
+ */
+export function sanitizeSessionKey(key: string): string {
+  return key.replace(/%/g, "%25").replace(/:/g, "%3A");
+}
+
+/** Reverse the sanitization to recover the original session key. */
+export function desanitizeSessionKey(fileName: string): string {
+  return fileName.replace(/%3A/g, ":").replace(/%25/g, "%");
+}
+
+/** Check whether a directory-based session store exists. */
+function isDirectoryStore(storePath: string): boolean {
+  try {
+    return fs.statSync(resolveSessionStoreDir(storePath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Read a single session entry from the directory store. */
+function loadSessionEntryFromDir(storeDir: string, fileName: string): SessionEntry | null {
+  const filePath = path.join(storeDir, fileName);
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    if (!raw || raw.length === 0) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as SessionEntry;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Load all session entries from the directory store. */
+function loadSessionStoreFromDir(storeDir: string): Record<string, SessionEntry> {
+  const store: Record<string, SessionEntry> = {};
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(storeDir);
+  } catch {
+    return store;
+  }
+  for (const fileName of entries) {
+    if (!fileName.endsWith(".json") || fileName.startsWith(".")) {
+      continue;
+    }
+    const sessionKey = desanitizeSessionKey(fileName.slice(0, -5));
+    const entry = loadSessionEntryFromDir(storeDir, fileName);
+    if (entry) {
+      store[sessionKey] = entry;
+    }
+  }
+  return store;
+}
+
+/** Write a single session entry to the directory store atomically. */
+async function writeSessionEntryToDir(
+  storeDir: string,
+  sessionKey: string,
+  entry: SessionEntry,
+): Promise<void> {
+  const fileName = `${sanitizeSessionKey(sessionKey)}.json`;
+  const filePath = path.join(storeDir, fileName);
+  const json = JSON.stringify(entry, null, 2);
+  const tmp = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  await fs.promises.mkdir(storeDir, { recursive: true });
+  try {
+    await fs.promises.writeFile(tmp, json, { mode: 0o600, encoding: "utf-8" });
+    await fs.promises.rename(tmp, filePath);
+    if (process.platform !== "win32") {
+      await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
+    }
+  } catch (err) {
+    if (getErrorCode(err) === "ENOENT") {
+      // Parent dir may have been removed (e.g. in tests). Best-effort retry.
+      try {
+        await fs.promises.mkdir(storeDir, { recursive: true });
+        await fs.promises.writeFile(filePath, json, { mode: 0o600, encoding: "utf-8" });
+      } catch {
+        // Ignore
+      }
+      return;
+    }
+    throw err;
+  } finally {
+    await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
+  }
+}
+
+/** Delete a single session entry from the directory store. */
+async function deleteSessionEntryFromDir(storeDir: string, sessionKey: string): Promise<void> {
+  const fileName = `${sanitizeSessionKey(sessionKey)}.json`;
+  try {
+    await fs.promises.unlink(path.join(storeDir, fileName));
+  } catch {
+    // Entry may already be deleted
+  }
+}
+
+/**
+ * Compute which session keys changed or were removed between snapshots.
+ */
+function computeStoreDiff(
+  previous: Record<string, SessionEntry>,
+  current: Record<string, SessionEntry>,
+): { changed: string[]; removed: string[] } {
+  const changed: string[] = [];
+  const removed: string[] = [];
+  for (const key of Object.keys(current)) {
+    const prev = previous[key];
+    const curr = current[key];
+    if (!prev || JSON.stringify(prev) !== JSON.stringify(curr)) {
+      changed.push(key);
+    }
+  }
+  for (const key of Object.keys(previous)) {
+    if (!(key in current)) {
+      removed.push(key);
+    }
+  }
+  return { changed, removed };
+}
+
+/**
+ * Migrate a legacy JSON session store to directory-per-session layout.
+ * Safe to call multiple times — no-ops if already migrated or no JSON exists.
+ */
+export async function migrateSessionStoreToDirectory(storePath: string): Promise<boolean> {
+  return await withSessionStoreLock(storePath, async () => {
+    if (isDirectoryStore(storePath)) {
+      return false;
+    }
+    let legacyExists = false;
+    try {
+      legacyExists = fs.statSync(storePath).isFile();
+    } catch {
+      // No legacy file — nothing to migrate
+    }
+    if (!legacyExists) {
+      return false;
+    }
+
+    let store: Record<string, SessionEntry> = {};
+    try {
+      const raw = fs.readFileSync(storePath, "utf-8");
+      if (raw.length === 0) {
+        return false;
+      }
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        store = parsed as Record<string, SessionEntry>;
+      }
+    } catch {
+      return false;
+    }
+
+    const keys = Object.keys(store);
+    if (keys.length === 0) {
+      return false;
+    }
+
+    const storeDir = resolveSessionStoreDir(storePath);
+    log.info("migrating session store from JSON to directory layout", {
+      entries: keys.length,
+      storeDir,
+    });
+
+    await fs.promises.mkdir(storeDir, { recursive: true });
+    for (const [key, entry] of Object.entries(store)) {
+      if (!entry) {
+        continue;
+      }
+      await writeSessionEntryToDir(storeDir, key, entry);
+    }
+
+    // Backup and remove the old JSON file
+    const backupPath = `${storePath}.bak.${Date.now()}`;
+    try {
+      await fs.promises.rename(storePath, backupPath);
+      log.info("backed up legacy sessions.json", { backupPath: path.basename(backupPath) });
+    } catch {
+      // If rename fails, directory store takes precedence anyway.
+    }
+    return true;
+  });
+}
 
 // ============================================================================
 // Session Store Cache with TTL Support
@@ -196,61 +407,82 @@ export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
-  // Check cache first if enabled
+  const useDirectory = isDirectoryStore(storePath);
+
+  // Check cache first if enabled (TTL-based only for directory mode)
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
-    const currentFileStat = getFileStatSnapshot(storePath);
-    const cached = readSessionStoreCache({
-      storePath,
-      ttlMs: getSessionStoreTtl(),
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
-    });
-    if (cached) {
-      return cached;
+    if (useDirectory) {
+      const cached = readSessionStoreCache({
+        storePath,
+        ttlMs: getSessionStoreTtl(),
+        // Directory mode: skip mtime/size checks — rely on TTL only.
+        // Individual file mtimes don't propagate to directory mtime reliably.
+        mtimeMs: undefined,
+        sizeBytes: undefined,
+      });
+      if (cached) {
+        return cached;
+      }
+    } else {
+      const currentFileStat = getFileStatSnapshot(storePath);
+      const cached = readSessionStoreCache({
+        storePath,
+        ttlMs: getSessionStoreTtl(),
+        mtimeMs: currentFileStat?.mtimeMs,
+        sizeBytes: currentFileStat?.sizeBytes,
+      });
+      if (cached) {
+        return cached;
+      }
     }
   }
 
-  // Cache miss or disabled - load from disk.
-  // Retry up to 3 times when the file is empty or unparseable.  On Windows the
-  // temp-file + rename write is not fully atomic: a concurrent reader can briefly
-  // observe a 0-byte file (between truncate and write) or a stale/locked state.
-  // A short synchronous backoff (50 ms via `Atomics.wait`) is enough for the
-  // writer to finish.
-  let store: Record<string, SessionEntry> = {};
-  let fileStat = getFileStatSnapshot(storePath);
-  let mtimeMs = fileStat?.mtimeMs;
+  let store: Record<string, SessionEntry>;
+  let fileStat: ReturnType<typeof getFileStatSnapshot> = undefined;
   let serializedFromDisk: string | undefined;
-  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
-  const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
-  for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
-    try {
-      const raw = fs.readFileSync(storePath, "utf-8");
-      if (raw.length === 0 && attempt < maxReadAttempts - 1) {
-        // File is empty — likely caught mid-write; retry after a brief pause.
-        Atomics.wait(retryBuf!, 0, 0, 50);
-        continue;
-      }
-      const parsed = JSON.parse(raw);
-      if (isSessionStoreRecord(parsed)) {
-        store = parsed;
-        serializedFromDisk = raw;
-      }
-      fileStat = getFileStatSnapshot(storePath) ?? fileStat;
-      mtimeMs = fileStat?.mtimeMs;
-      break;
-    } catch {
-      // File missing, locked, or transiently corrupt — retry on Windows.
-      if (attempt < maxReadAttempts - 1) {
-        Atomics.wait(retryBuf!, 0, 0, 50);
-        continue;
-      }
-      // Final attempt failed; proceed with an empty store.
-    }
-  }
-  if (serializedFromDisk !== undefined) {
-    setSerializedSessionStore(storePath, serializedFromDisk);
-  } else {
+
+  if (useDirectory) {
+    const storeDir = resolveSessionStoreDir(storePath);
+    store = loadSessionStoreFromDir(storeDir);
+    // No serialized cache for directory mode — individual files don't map to a single JSON blob.
     setSerializedSessionStore(storePath, undefined);
+  } else {
+    // Legacy JSON file mode.
+    // Retry up to 3 times when the file is empty or unparseable.  On Windows the
+    // temp-file + rename write is not fully atomic: a concurrent reader can briefly
+    // observe a 0-byte file (between truncate and write) or a stale/locked state.
+    // A short synchronous backoff (50 ms via `Atomics.wait`) is enough for the
+    // writer to finish.
+    store = {};
+    fileStat = getFileStatSnapshot(storePath);
+    const maxReadAttempts = process.platform === "win32" ? 3 : 1;
+    const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
+    for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
+      try {
+        const raw = fs.readFileSync(storePath, "utf-8");
+        if (raw.length === 0 && attempt < maxReadAttempts - 1) {
+          Atomics.wait(retryBuf!, 0, 0, 50);
+          continue;
+        }
+        const parsed = JSON.parse(raw);
+        if (isSessionStoreRecord(parsed)) {
+          store = parsed;
+          serializedFromDisk = raw;
+        }
+        fileStat = getFileStatSnapshot(storePath) ?? fileStat;
+        break;
+      } catch {
+        if (attempt < maxReadAttempts - 1) {
+          Atomics.wait(retryBuf!, 0, 0, 50);
+          continue;
+        }
+      }
+    }
+    if (serializedFromDisk !== undefined) {
+      setSerializedSessionStore(storePath, serializedFromDisk);
+    } else {
+      setSerializedSessionStore(storePath, undefined);
+    }
   }
 
   applySessionStoreMigrations(store);
@@ -260,8 +492,8 @@ export function loadSessionStore(
     writeSessionStoreCache({
       storePath,
       store,
-      mtimeMs,
-      sizeBytes: fileStat?.sizeBytes,
+      mtimeMs: useDirectory ? undefined : fileStat?.mtimeMs,
+      sizeBytes: useDirectory ? undefined : fileStat?.sizeBytes,
       serialized: serializedFromDisk,
     });
   }
@@ -273,6 +505,13 @@ export function readSessionUpdatedAt(params: {
   storePath: string;
   sessionKey: string;
 }): number | undefined {
+  // For directory stores, read only the target entry — avoids loading the entire store.
+  if (isDirectoryStore(params.storePath)) {
+    const storeDir = resolveSessionStoreDir(params.storePath);
+    const sanitized = sanitizeSessionKey(normalizeStoreSessionKey(params.sessionKey));
+    const entry = loadSessionEntryFromDir(storeDir, `${sanitized}.json`);
+    return entry?.updatedAt;
+  }
   try {
     const store = loadSessionStore(params.storePath);
     const resolved = resolveStoreSessionEntry({ store, sessionKey: params.sessionKey });
@@ -341,6 +580,8 @@ async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
   opts?: SaveSessionStoreOptions,
+  /** Snapshot of the store before mutations — enables diff-based directory writes. */
+  previousSnapshot?: Record<string, SessionEntry>,
 ): Promise<void> {
   normalizeSessionStore(store);
 
@@ -437,8 +678,10 @@ async function saveSessionStoreUnlocked(
         }
       }
 
-      // Rotate the on-disk file if it exceeds the size threshold.
-      await rotateSessionFile(storePath, maintenance.rotateBytes);
+      // Rotate the on-disk file if it exceeds the size threshold (legacy JSON only).
+      if (!isDirectoryStore(storePath)) {
+        await rotateSessionFile(storePath, maintenance.rotateBytes);
+      }
 
       const diskBudget = await enforceSessionDiskBudget({
         store,
@@ -459,6 +702,15 @@ async function saveSessionStoreUnlocked(
     }
   }
 
+  // Directory mode: write changed entries only (diff-based when previousSnapshot provided).
+  if (isDirectoryStore(storePath)) {
+    invalidateSessionStoreCache(storePath);
+    setSerializedSessionStore(storePath, undefined);
+    await writeSessionStoreDir(storePath, store, previousSnapshot);
+    return;
+  }
+
+  // Legacy JSON file mode.
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
   if (getSerializedSessionStore(storePath) === json) {
@@ -481,8 +733,6 @@ async function saveSessionStoreUnlocked(
           await new Promise((r) => setTimeout(r, 50 * (i + 1)));
           continue;
         }
-        // Final attempt failed — skip this save. The write lock ensures
-        // the next save will retry with fresh data. Log for diagnostics.
         log.warn(`atomic write failed after 5 attempts: ${storePath}`);
       }
     }
@@ -495,8 +745,6 @@ async function saveSessionStoreUnlocked(
     const code = getErrorCode(err);
 
     if (code === "ENOENT") {
-      // In tests the temp session-store directory may be deleted while writes are in-flight.
-      // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
         await writeSessionStoreAtomic({ storePath, store, serialized: json });
       } catch (err2) {
@@ -510,6 +758,58 @@ async function saveSessionStoreUnlocked(
     }
 
     throw err;
+  }
+}
+
+/**
+ * Write changed session entries to the directory store.
+ * If `previousSnapshot` is provided, only changed/removed entries are written (diff-based).
+ * Otherwise, all entries are written and stale files are cleaned up.
+ */
+async function writeSessionStoreDir(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+  previousSnapshot?: Record<string, SessionEntry>,
+): Promise<void> {
+  const storeDir = resolveSessionStoreDir(storePath);
+  await fs.promises.mkdir(storeDir, { recursive: true });
+
+  if (previousSnapshot) {
+    const { changed, removed } = computeStoreDiff(previousSnapshot, store);
+    for (const key of changed) {
+      await writeSessionEntryToDir(storeDir, key, store[key]);
+    }
+    for (const key of removed) {
+      await deleteSessionEntryFromDir(storeDir, key);
+    }
+  } else {
+    // Full write: write all entries, remove stale files.
+    const existingFiles = new Set<string>();
+    try {
+      for (const f of await fs.promises.readdir(storeDir)) {
+        if (f.endsWith(".json") && !f.startsWith(".")) {
+          existingFiles.add(f);
+        }
+      }
+    } catch {
+      // Directory may not exist yet
+    }
+
+    const currentFiles = new Set<string>();
+    for (const [key, entry] of Object.entries(store)) {
+      if (!entry) {
+        continue;
+      }
+      await writeSessionEntryToDir(storeDir, key, entry);
+      currentFiles.add(`${sanitizeSessionKey(key)}.json`);
+    }
+
+    for (const file of existingFiles) {
+      if (!currentFiles.has(file)) {
+        const key = desanitizeSessionKey(file.slice(0, -5));
+        await deleteSessionEntryFromDir(storeDir, key);
+      }
+    }
   }
 }
 
@@ -528,8 +828,19 @@ export async function updateSessionStore<T>(
   mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
   opts?: SaveSessionStoreOptions,
 ): Promise<T> {
+  // Directory mode: no global lock — each session file is written atomically (temp + rename).
+  // Different sessions write to separate files, so they never block each other.
+  // Full maintenance (warn, prune, cap, disk budget, archival) runs via saveSessionStoreUnlocked.
+  if (isDirectoryStore(storePath)) {
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const previousSnapshot = structuredClone(store);
+    const result = await mutator(store);
+    await saveSessionStoreUnlocked(storePath, store, opts, previousSnapshot);
+    return result;
+  }
+
+  // Legacy JSON mode: global lock around the entire read-modify-write cycle.
   return await withSessionStoreLock(storePath, async () => {
-    // Always re-read inside the lock to avoid clobbering concurrent writers.
     const store = loadSessionStore(storePath, { skipCache: true });
     const result = await mutator(store);
     await saveSessionStoreUnlocked(storePath, store, opts);
@@ -711,6 +1022,27 @@ export async function updateSessionStoreEntry(params: {
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
+  // Directory mode: no global lock needed — per-session file writes are atomic (temp + rename).
+  // Legacy mode: global lock to serialize the monolithic JSON read-modify-write cycle.
+  if (isDirectoryStore(storePath)) {
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const resolved = resolveStoreSessionEntry({ store, sessionKey });
+    const existing = resolved.existing;
+    if (!existing) {
+      return null;
+    }
+    const patch = await update(existing);
+    if (!patch) {
+      return existing;
+    }
+    const next = mergeSessionEntry(existing, patch);
+    return await persistResolvedSessionEntry({
+      storePath,
+      store,
+      resolved,
+      next,
+    });
+  }
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     const resolved = resolveStoreSessionEntry({ store, sessionKey });
@@ -791,7 +1123,10 @@ export async function updateLastRoute(params: {
   groupResolution?: import("./types.js").GroupKeyResolution | null;
 }) {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
-  return await withSessionStoreLock(storePath, async () => {
+  // Directory mode: no global lock — per-session file writes are atomic (temp + rename).
+  // Legacy mode: global lock to serialize the monolithic JSON read-modify-write cycle.
+  const lockKey = isDirectoryStore(storePath) ? undefined : storePath;
+  const body = async () => {
     const store = loadSessionStore(storePath);
     const resolved = resolveStoreSessionEntry({ store, sessionKey });
     const existing = resolved.existing;
@@ -858,5 +1193,9 @@ export async function updateLastRoute(params: {
       resolved,
       next,
     });
-  });
+  };
+  if (lockKey) {
+    return await withSessionStoreLock(lockKey, body);
+  }
+  return await body();
 }
