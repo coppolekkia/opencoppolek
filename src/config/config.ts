@@ -7,7 +7,9 @@ export {
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
+  restoreConfigFromBackupFile,
   resolveConfigSnapshotHash,
+  snapshotConfigBackupFile,
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";

@@ -17,15 +17,30 @@ const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const readConfigFileSnapshot = vi.fn<() => Promise<Record<string, unknown>>>(async () => ({
+  exists: false,
+}));
+const restoreConfigFromBackupFile = vi.fn(async () => ({
+  ok: false,
+  path: "/tmp/openclaw-test-missing-config.json",
+  backupPath: "/tmp/openclaw-test-missing-config.json.bak",
+}));
+const snapshotConfigBackupFile = vi.fn(async () => ({
+  ok: true,
+  path: "/tmp/openclaw-test-missing-config.json",
+  backupPath: "/tmp/openclaw-test-missing-config.json.bak",
+}));
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   loadConfig: () => ({}),
-  readConfigFileSnapshot: async () => ({ exists: false }),
+  readConfigFileSnapshot: () => readConfigFileSnapshot(),
+  restoreConfigFromBackupFile: () => restoreConfigFromBackupFile(),
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: () => 18789,
+  snapshotConfigBackupFile: () => snapshotConfigBackupFile(),
 }));
 
 vi.mock("../../gateway/auth.js", () => ({
@@ -113,6 +128,20 @@ describe("gateway run option collisions", () => {
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    readConfigFileSnapshot.mockReset();
+    readConfigFileSnapshot.mockResolvedValue({ exists: false });
+    restoreConfigFromBackupFile.mockClear();
+    restoreConfigFromBackupFile.mockResolvedValue({
+      ok: false,
+      path: "/tmp/openclaw-test-missing-config.json",
+      backupPath: "/tmp/openclaw-test-missing-config.json.bak",
+    });
+    snapshotConfigBackupFile.mockClear();
+    snapshotConfigBackupFile.mockResolvedValue({
+      ok: true,
+      path: "/tmp/openclaw-test-missing-config.json",
+      backupPath: "/tmp/openclaw-test-missing-config.json.bak",
+    });
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -189,5 +218,122 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors).toContain(
       'Invalid --auth (use "none", "token", "password", or "trusted-proxy")',
     );
+  });
+
+  it("blocks gateway run and prints validation issues when config is invalid", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw-test-missing-config.json",
+      issues: [{ path: "agents.defaults.suppressToolErrorWarnings", message: "Unrecognized key" }],
+    });
+
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
+
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors).toContain(
+      "Gateway start blocked: invalid config at /tmp/openclaw-test-missing-config.json.",
+    );
+    expect(runtimeErrors).toContain(
+      "- agents.defaults.suppressToolErrorWarnings: Unrecognized key",
+    );
+    expect(runtimeErrors.some((line) => line.includes("openclaw config validate"))).toBe(true);
+  });
+
+  it("restores config from .bak and continues startup when backup is valid", async () => {
+    readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        exists: true,
+        valid: false,
+        path: "/tmp/openclaw-test-missing-config.json",
+        issues: [{ path: "", message: "JSON5 parse failed: unterminated string" }],
+      })
+      .mockResolvedValueOnce({
+        exists: true,
+        valid: true,
+        path: "/tmp/openclaw-test-missing-config.json",
+      });
+    restoreConfigFromBackupFile.mockResolvedValue({
+      ok: true,
+      path: "/tmp/openclaw-test-missing-config.json",
+      backupPath: "/tmp/openclaw-test-missing-config.json.bak",
+    });
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(startGatewayServer).toHaveBeenCalled();
+    expect(runtimeErrors).toContain(
+      "Recovered invalid config from backup: /tmp/openclaw-test-missing-config.json.bak -> /tmp/openclaw-test-missing-config.json.",
+    );
+  });
+
+  it("does not restore from .bak for plugin validation failures", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw-test-missing-config.json",
+      issues: [{ path: "plugins.allow[0]", message: "plugin not found: foo-plugin" }],
+    });
+
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
+
+    expect(restoreConfigFromBackupFile).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors).toContain(
+      "Gateway start blocked: invalid config at /tmp/openclaw-test-missing-config.json.",
+    );
+  });
+
+  it("does not restore from .bak for env substitution failures", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw-test-missing-config.json",
+      issues: [
+        { path: "", message: "Env var substitution failed: Missing required env var: API_KEY" },
+      ],
+    });
+
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
+
+    expect(restoreConfigFromBackupFile).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors).toContain(
+      "Gateway start blocked: invalid config at /tmp/openclaw-test-missing-config.json.",
+    );
+  });
+
+  it("applies --token before config snapshot validation", async () => {
+    const previousGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    readConfigFileSnapshot.mockImplementation(async () => {
+      if (process.env.OPENCLAW_GATEWAY_TOKEN === "tok_prevalidate") {
+        return {
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw-test-missing-config.json",
+        };
+      }
+      return {
+        exists: true,
+        valid: false,
+        path: "/tmp/openclaw-test-missing-config.json",
+        issues: [{ path: "", message: "Env var substitution failed: Missing required env var" }],
+      };
+    });
+
+    try {
+      await runGatewayCli(["gateway", "run", "--token", "tok_prevalidate", "--allow-unconfigured"]);
+      expect(startGatewayServer).toHaveBeenCalled();
+      expect(runtimeErrors).not.toContain(
+        "Gateway start blocked: invalid config at /tmp/openclaw-test-missing-config.json.",
+      );
+    } finally {
+      if (previousGatewayToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayToken;
+      }
+    }
   });
 });

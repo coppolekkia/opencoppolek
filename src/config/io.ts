@@ -28,17 +28,9 @@ import {
   applyTalkApiKey,
 } from "./defaults.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
-import {
-  MissingEnvVarError,
-  containsEnvVarReference,
-  resolveConfigEnvVars,
-} from "./env-substitution.js";
+import { containsEnvVarReference, resolveConfigEnvVars } from "./env-substitution.js";
 import { applyConfigEnvVars } from "./env-vars.js";
-import {
-  ConfigIncludeError,
-  readConfigIncludeFileWithGuards,
-  resolveConfigIncludes,
-} from "./includes.js";
+import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
@@ -878,10 +870,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       try {
         resolved = resolveConfigIncludesForRead(parsedRes.parsed, configPath, deps);
       } catch (err) {
-        const message =
-          err instanceof ConfigIncludeError
-            ? err.message
-            : `Include resolution failed: ${String(err)}`;
+        const details = err instanceof Error ? err.message : String(err);
+        const message = `Include resolution failed: ${details}`;
         return {
           snapshot: {
             path: configPath,
@@ -903,10 +893,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       try {
         readResolution = resolveConfigForRead(resolved, deps.env);
       } catch (err) {
-        const message =
-          err instanceof MissingEnvVarError
-            ? err.message
-            : `Env var substitution failed: ${String(err)}`;
+        const details = err instanceof Error ? err.message : String(err);
+        const message = `Env var substitution failed: ${details}`;
         return {
           snapshot: {
             path: configPath,
@@ -1396,4 +1384,147 @@ export async function writeConfigFile(
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
+}
+
+export async function snapshotConfigBackupFile(): Promise<{
+  ok: boolean;
+  path: string;
+  backupPath: string;
+  error?: string;
+}> {
+  const io = createConfigIO();
+  const snapshot = await io.readConfigFileSnapshot();
+  const backupPath = `${io.configPath}.bak`;
+  if (!snapshot.exists) {
+    return {
+      ok: false,
+      path: io.configPath,
+      backupPath,
+      error: "config file missing",
+    };
+  }
+  if (!snapshot.valid) {
+    return {
+      ok: false,
+      path: io.configPath,
+      backupPath,
+      error: "config invalid",
+    };
+  }
+  const rotatedPrimaryBackupPath = `${backupPath}.1`;
+  try {
+    await rotateConfigBackups(io.configPath, fs.promises);
+    await fs.promises.copyFile(io.configPath, backupPath);
+    await fs.promises.chmod(backupPath, 0o600).catch(() => {
+      // best-effort
+    });
+    return {
+      ok: true,
+      path: io.configPath,
+      backupPath,
+    };
+  } catch (err) {
+    // If refresh fails after rotation, best-effort restore the previous immediate
+    // backup from .bak.1 so startup rollback still has a .bak candidate.
+    const backupExists = await fs.promises
+      .access(backupPath)
+      .then(() => true)
+      .catch(() => false);
+    if (!backupExists) {
+      const rotatedExists = await fs.promises
+        .access(rotatedPrimaryBackupPath)
+        .then(() => true)
+        .catch(() => false);
+      if (rotatedExists) {
+        try {
+          await fs.promises.rename(rotatedPrimaryBackupPath, backupPath);
+        } catch {
+          await fs.promises.copyFile(rotatedPrimaryBackupPath, backupPath).catch(() => {
+            // best-effort
+          });
+          await fs.promises.unlink(rotatedPrimaryBackupPath).catch(() => {
+            // best-effort
+          });
+        }
+      }
+    }
+    return {
+      ok: false,
+      path: io.configPath,
+      backupPath,
+      error: String(err),
+    };
+  }
+}
+
+export async function restoreConfigFromBackupFile(): Promise<{
+  ok: boolean;
+  path: string;
+  backupPath: string;
+  error?: string;
+  issues?: Array<{ path: string; message: string }>;
+}> {
+  const io = createConfigIO();
+  const backupPath = `${io.configPath}.bak`;
+  if (!fs.existsSync(backupPath)) {
+    return {
+      ok: false,
+      path: io.configPath,
+      backupPath,
+      error: "backup file missing",
+    };
+  }
+  const backupIo = createConfigIO({ configPath: backupPath });
+  const backupSnapshot = await backupIo.readConfigFileSnapshot();
+  if (!backupSnapshot.valid) {
+    return {
+      ok: false,
+      path: io.configPath,
+      backupPath,
+      error: "backup file invalid",
+      issues: backupSnapshot.issues.map((issue) => ({
+        path: issue.path,
+        message: issue.message,
+      })),
+    };
+  }
+
+  const tmpPath = `${io.configPath}.${process.pid}.${crypto.randomUUID()}.restore.tmp`;
+  try {
+    const raw = await fs.promises.readFile(backupPath, "utf-8");
+    await fs.promises.writeFile(tmpPath, raw, { encoding: "utf-8", mode: 0o600 });
+    try {
+      await fs.promises.rename(tmpPath, io.configPath);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      // Windows doesn't reliably support atomic replace via rename when dest exists.
+      if (code !== "EPERM" && code !== "EEXIST") {
+        throw err;
+      }
+      await fs.promises.copyFile(tmpPath, io.configPath);
+      await fs.promises.chmod(io.configPath, 0o600).catch(() => {
+        // best-effort
+      });
+      await fs.promises.unlink(tmpPath).catch(() => {
+        // best-effort
+      });
+    }
+    clearConfigCache();
+    clearRuntimeConfigSnapshot();
+    return {
+      ok: true,
+      path: io.configPath,
+      backupPath,
+    };
+  } catch (err) {
+    await fs.promises.unlink(tmpPath).catch(() => {
+      // best-effort
+    });
+    return {
+      ok: false,
+      path: io.configPath,
+      backupPath,
+      error: String(err),
+    };
+  }
 }

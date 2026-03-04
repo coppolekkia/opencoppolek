@@ -6,9 +6,12 @@ import {
   CONFIG_PATH,
   loadConfig,
   readConfigFileSnapshot,
+  restoreConfigFromBackupFile,
   resolveStateDir,
   resolveGatewayPort,
+  snapshotConfigBackupFile,
 } from "../../config/config.js";
+import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -113,6 +116,24 @@ function formatModeErrorList<T extends string>(modes: readonly T[]): string {
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
 }
 
+function isCorruptionStyleConfigIssue(message: string): boolean {
+  // Only syntax/parse failures are treated as corruption-style failures where
+  // restoring from .bak is safe and expected.
+  return message.startsWith("JSON5 parse failed:");
+}
+
+function shouldAttemptInvalidConfigRollback(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "issues"> | null,
+): boolean {
+  if (!snapshot?.exists || snapshot.valid) {
+    return false;
+  }
+  if (snapshot.issues.length === 0) {
+    return true;
+  }
+  return snapshot.issues.every((issue) => isCorruptionStyleConfigIssue(issue.message));
+}
+
 function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
   const resolved: GatewayRunOpts = { ...opts };
 
@@ -166,6 +187,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   if (opts.rawStream) {
     process.env.OPENCLAW_RAW_STREAM = "1";
   }
+  const tokenRaw = toOptionString(opts.token);
+  if (tokenRaw) {
+    // Apply CLI token override before config snapshot reads so ${OPENCLAW_GATEWAY_TOKEN}
+    // interpolation succeeds during startup validation.
+    process.env.OPENCLAW_GATEWAY_TOKEN = tokenRaw;
+  }
   const rawStreamPath = toOptionString(opts.rawStreamPath);
   if (rawStreamPath) {
     process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
@@ -173,6 +200,44 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
+  }
+
+  let snapshot = await readConfigFileSnapshot().catch(() => null);
+  const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
+  if (shouldAttemptInvalidConfigRollback(snapshot)) {
+    const restored = await restoreConfigFromBackupFile().catch(() => ({
+      ok: false,
+      path: snapshot?.path ?? CONFIG_PATH,
+      backupPath: `${snapshot?.path ?? CONFIG_PATH}.bak`,
+      error: "restore attempt failed",
+    }));
+    if (restored.ok) {
+      defaultRuntime.error(
+        `Recovered invalid config from backup: ${restored.backupPath} -> ${restored.path}.`,
+      );
+      snapshot = await readConfigFileSnapshot().catch(() => snapshot);
+    }
+  }
+  if (snapshot?.exists && !snapshot.valid) {
+    defaultRuntime.error(`Gateway start blocked: invalid config at ${snapshot.path}.`);
+    for (const issue of snapshot.issues) {
+      defaultRuntime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
+    }
+    defaultRuntime.error(
+      `Run \`${formatCliCommand("openclaw config validate")}\` or \`${formatCliCommand("openclaw doctor --fix")}\` to repair.`,
+    );
+    defaultRuntime.error(`Config write audit: ${configAuditPath}`);
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (snapshot?.exists && snapshot.valid) {
+    const backupResult = await snapshotConfigBackupFile().catch(() => ({
+      ok: false,
+      error: "backup snapshot failed",
+    }));
+    if (!backupResult.ok) {
+      gatewayLog.warn(`config backup refresh skipped: ${String(backupResult.error ?? "unknown")}`);
+    }
   }
 
   const cfg = loadConfig();
@@ -245,12 +310,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       return;
     }
   }
-  if (opts.token) {
-    const token = toOptionString(opts.token);
-    if (token) {
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-    }
-  }
   const authModeRaw = toOptionString(opts.auth);
   const authMode = parseEnumOption(authModeRaw, GATEWAY_AUTH_MODES);
   if (authModeRaw && !authMode) {
@@ -268,11 +327,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
   const passwordRaw = toOptionString(opts.password);
-  const tokenRaw = toOptionString(opts.token);
 
-  const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
-  const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const mode = cfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
