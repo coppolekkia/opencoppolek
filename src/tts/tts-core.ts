@@ -393,7 +393,7 @@ export function parseTtsDirectives(
             break;
           case "language_boost":
           case "languageboost":
-            if (!policy.allowVoiceSettings) {
+            if (!policy.allowNormalization) {
               break;
             }
             overrides.minimax = { ...overrides.minimax, languageBoost: rawValue };
