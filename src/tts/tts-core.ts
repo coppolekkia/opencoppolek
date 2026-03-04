@@ -1,5 +1,5 @@
 import { rmSync } from "node:fs";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
@@ -718,17 +718,25 @@ export async function openaiTTSStream(params: {
   const stream = Readable.fromWeb(
     response.body as unknown as import("node:stream/web").ReadableStream,
   );
-  // Use "readable" instead of "data" to avoid putting the stream into flowing
-  // mode. A "data" listener would consume chunks before the caller attaches
-  // its own consumer (for-await), causing silent data loss.
-  stream.on("readable", () => {
-    clearTimeout(stallTimer);
-    stallTimer = setTimeout(() => controller.abort(), STALL_DEADLINE_MS);
-  });
-  stream.on("end", cleanup);
-  stream.on("error", cleanup);
 
-  return { stream, cleanup };
+  // Wrap in a passthrough Transform so the stall watchdog resets on
+  // *consumption*, not on arrival. In the Twilio path OpenAI may buffer all
+  // PCM quickly, after which no further "readable" events fire while the
+  // caller drains at ~real-time (20 ms/frame). Tracking consumption prevents
+  // premature abort while audio is still being played back.
+  const watchdogTransform = new Transform({
+    transform(chunk, _encoding, callback) {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => controller.abort(), STALL_DEADLINE_MS);
+      callback(null, chunk);
+    },
+  });
+  stream.pipe(watchdogTransform);
+  stream.on("error", (err) => watchdogTransform.destroy(err));
+  watchdogTransform.on("end", cleanup);
+  watchdogTransform.on("error", cleanup);
+
+  return { stream: watchdogTransform, cleanup };
 }
 
 export function inferEdgeExtension(outputFormat: string): string {
