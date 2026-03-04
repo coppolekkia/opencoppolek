@@ -6,8 +6,10 @@ import {
 } from "./launchd-plist.js";
 import {
   installLaunchAgent,
+  isLaunchAgentLoaded,
   isLaunchAgentListed,
   parseLaunchctlPrint,
+  readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
@@ -17,6 +19,8 @@ const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
   printOutput: "",
+  printStderr: "",
+  printCode: 0,
   bootstrapError: "",
   dirs: new Set<string>(),
   files: new Map<string, string>(),
@@ -42,7 +46,7 @@ vi.mock("./exec-file.js", () => ({
       return { stdout: state.listOutput, stderr: "", code: 0 };
     }
     if (call[0] === "print") {
-      return { stdout: state.printOutput, stderr: "", code: 0 };
+      return { stdout: state.printOutput, stderr: state.printStderr, code: state.printCode };
     }
     if (call[0] === "bootstrap" && state.bootstrapError) {
       return { stdout: "", stderr: state.bootstrapError, code: 1 };
@@ -81,6 +85,8 @@ beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
   state.printOutput = "";
+  state.printStderr = "";
+  state.printCode = 0;
   state.bootstrapError = "";
   state.dirs.clear();
   state.files.clear();
@@ -119,6 +125,28 @@ describe("launchctl list detection", () => {
       env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
     });
     expect(listed).toBe(false);
+  });
+
+  it("falls back to launchctl list when print reports missing service", async () => {
+    state.printCode = 1;
+    state.printStderr = 'Could not find service "ai.openclaw.gateway" in domain for user gui: 501';
+    state.listOutput = "123 0 ai.openclaw.gateway\n";
+    const loaded = await isLaunchAgentLoaded({
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+    });
+    expect(loaded).toBe(true);
+  });
+
+  it("treats list-present label as stopped runtime when print is temporarily missing", async () => {
+    state.printCode = 1;
+    state.printStderr = 'Could not find service "ai.openclaw.gateway" in domain for user gui: 501';
+    state.listOutput = "123 0 ai.openclaw.gateway\n";
+    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "default" };
+    state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
+
+    const runtime = await readLaunchAgentRuntime(env);
+    expect(runtime.status).toBe("stopped");
+    expect(runtime.missingUnit).toBe(false);
   });
 });
 
