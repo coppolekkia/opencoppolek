@@ -663,6 +663,7 @@ export async function openaiTTSStream(params: {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
 
   let cleaned = false;
   const cleanup = () => {
@@ -671,6 +672,9 @@ export async function openaiTTSStream(params: {
     }
     cleaned = true;
     clearTimeout(timeout);
+    if (stallTimer !== undefined) {
+      clearTimeout(stallTimer);
+    }
     controller.abort();
   };
 
@@ -702,14 +706,20 @@ export async function openaiTTSStream(params: {
     throw new Error("OpenAI TTS API returned no body");
   }
 
-  // Clear the connection timeout now that the response body is available.
-  // The timeout should only cover the initial fetch, not playback duration
-  // (which involves per-frame pacing delays that can exceed timeoutMs).
+  // Clear the connection timeout now that headers have arrived.
+  // Install a read-deadline watchdog: if no data arrives within 30s, abort
+  // to prevent a stalled stream from hanging the TTS pipeline indefinitely.
   clearTimeout(timeout);
+  const STALL_DEADLINE_MS = 30_000;
+  stallTimer = setTimeout(() => controller.abort(), STALL_DEADLINE_MS);
 
   const stream = Readable.fromWeb(
     response.body as unknown as import("node:stream/web").ReadableStream,
   );
+  stream.on("data", () => {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => controller.abort(), STALL_DEADLINE_MS);
+  });
   stream.on("end", cleanup);
   stream.on("error", cleanup);
 
