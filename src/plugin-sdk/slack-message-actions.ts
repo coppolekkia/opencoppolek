@@ -18,9 +18,10 @@ export async function handleSlackMessageAction(params: {
   ctx: ChannelMessageActionContext;
   invoke: SlackActionInvoke;
   normalizeChannelId?: (channelId: string) => string;
+  /** @deprecated threadId is now always forwarded; this flag has no effect. */
   includeReadThreadId?: boolean;
 }): Promise<AgentToolResult<unknown>> {
-  const { providerId, ctx, invoke, normalizeChannelId, includeReadThreadId = false } = params;
+  const { providerId, ctx, invoke, normalizeChannelId } = params;
   const { action, cfg, params: actionParams } = ctx;
   const accountId = ctx.accountId ?? undefined;
   const resolveChannelId = () => {
@@ -99,18 +100,18 @@ export async function handleSlackMessageAction(params: {
 
   if (action === "read") {
     const limit = readNumberParam(actionParams, "limit", { integer: true });
-    const readAction: Record<string, unknown> = {
-      action: "readMessages",
-      channelId: resolveChannelId(),
-      limit,
-      before: readStringParam(actionParams, "before"),
-      after: readStringParam(actionParams, "after"),
-      accountId,
-    };
-    if (includeReadThreadId) {
-      readAction.threadId = readStringParam(actionParams, "threadId");
-    }
-    return await invoke(readAction, cfg);
+    return await invoke(
+      {
+        action: "readMessages",
+        channelId: resolveChannelId(),
+        limit,
+        before: readStringParam(actionParams, "before"),
+        after: readStringParam(actionParams, "after"),
+        accountId,
+        threadId: readStringParam(actionParams, "threadId"),
+      },
+      cfg,
+    );
   }
 
   if (action === "edit") {
