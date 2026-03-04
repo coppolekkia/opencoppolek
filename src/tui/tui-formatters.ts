@@ -16,6 +16,15 @@ const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 
+// Patterns for credential-like tokens that should be preserved exactly (not chunked with spaces)
+// Base64: alphanumeric + '+' '/' '=' (e.g., API keys, SSH keys, tokens) - requires mixed case
+const BASE64_RE = /^(?=.*[a-z])(?=.*[A-Z])[a-zA-Z0-9+/]+=*$/;
+// Hex: only hexadecimal characters - require 40+ chars AND mixed case or digits
+// This avoids false positives on test strings like "aaaaaaaa..." (all same case, no digits)
+const HEX_RE = /^(?=.*[0-9]|[A-F].*[a-f]|[a-f].*[A-F])[a-fA-F0-9]{40,}$/;
+// Alphanumeric with common key suffixes/patterns
+const CREDENTIAL_SUFFIX_RE = /(key|secret|token|password|hash|id|priv|pub|ssh|rsa|ed25519)$/i;
+
 function hasControlChars(text: string): boolean {
   for (const char of text) {
     const code = char.charCodeAt(0);
@@ -56,6 +65,7 @@ function chunkToken(token: string, maxChars: number): string[] {
 }
 
 function isCopySensitiveToken(token: string): boolean {
+  // URLs and file paths
   if (URL_PREFIX_RE.test(token)) {
     return true;
   }
@@ -73,7 +83,19 @@ function isCopySensitiveToken(token: string): boolean {
   if (token.includes("/") || token.includes("\\")) {
     return true;
   }
-  return token.includes("_") && FILE_LIKE_RE.test(token);
+  // File-like names (alphanumeric with dots, dashes, underscores)
+  if (token.includes("_") && FILE_LIKE_RE.test(token)) {
+    return true;
+  }
+  // Credential-like tokens: Base64, hex, or tokens with credential suffixes
+  // These should be preserved exactly to avoid breaking copy-paste for keys/passwords/hashes
+  if (
+    token.length >= 16 &&
+    (BASE64_RE.test(token) || HEX_RE.test(token) || CREDENTIAL_SUFFIX_RE.test(token))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function normalizeLongTokenForDisplay(token: string): string {
