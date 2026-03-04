@@ -1,5 +1,6 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { buildOutboundDedupeKey } from "../../infra/outbound/outbound-dedupe.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -113,6 +114,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   let completeCalled = false;
   // Track whether we've sent a block reply (for human delay - skip delay on first block).
   let sentFirstBlock = false;
+  // Layer 3: per-dispatch-lifecycle dedup set.
+  // Catches duplicates within a single dispatch cycle (e.g. multi-tool sequence
+  // emitting the same text block multiple times).
+  const deliveredPayloadKeys = new Set<string>();
   // Serialize outbound replies to preserve tool/block/final order.
   const queuedCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
@@ -137,6 +142,24 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     if (!normalized) {
       return false;
     }
+
+    // Layer 3: per-dispatch-lifecycle dedup — atomically claim a slot for
+    // this payload at enqueue time so that back-to-back synchronous
+    // emissions of the same content within one dispatch cycle are blocked.
+    // On delivery failure the key is removed so the payload can be retried.
+    const dedupeKey = buildOutboundDedupeKey({
+      channel: "dispatch",
+      to: "dispatch",
+      payload: normalized,
+    });
+    if (dedupeKey) {
+      if (deliveredPayloadKeys.has(dedupeKey)) {
+        return false;
+      }
+      // Claim immediately to block concurrent/synchronous duplicates.
+      deliveredPayloadKeys.add(dedupeKey);
+    }
+
     queuedCounts[kind] += 1;
     pending += 1;
 
@@ -160,6 +183,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(normalized, { kind });
       })
       .catch((err) => {
+        // Rollback the dedup claim on failure so the payload can be retried.
+        if (dedupeKey) {
+          deliveredPayloadKeys.delete(dedupeKey);
+        }
         options.onError?.(err, { kind });
       })
       .finally(() => {

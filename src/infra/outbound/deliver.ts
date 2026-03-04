@@ -38,9 +38,15 @@ import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
+import {
+  buildOutboundDedupeKey,
+  claimOutboundDelivery,
+  rollbackOutboundClaim,
+} from "./outbound-dedupe.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
+import { deduplicateText } from "./self-dedup.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -302,6 +308,13 @@ function normalizePayloadsForChannelDelivery(
       // Telegram sendPayload uses textMode:"html". Preserve raw HTML in this path.
       if (!(channel === "telegram" && payload.channelData)) {
         sanitizedPayload = { ...payload, text: sanitizeForPlainText(payload.text) };
+      }
+    }
+    // Layer 2: fix self-duplicated text (e.g. BlueBubbles streaming concatenation bug).
+    if (sanitizedPayload.text) {
+      const deduplicated = deduplicateText(sanitizedPayload.text);
+      if (deduplicated != null) {
+        sanitizedPayload = { ...sanitizedPayload, text: deduplicated };
       }
     }
     const normalized = normalizePayloadForChannelDelivery(sanitizedPayload, channel);
@@ -680,10 +693,14 @@ async function deliverOutboundPayloadsCore(
   }
   for (const payload of normalizedPayloads) {
     let payloadSummary = buildPayloadSummary(payload);
+    // Track the dedup claim key so we can rollback on failure.
+    let dedupeClaimKey: string | null = null;
     try {
       throwIfAborted(abortSignal);
 
-      // Run message_sending plugin hook (may modify content or cancel)
+      // Run message_sending plugin hook (may modify content or cancel).
+      // Hooks run BEFORE dedup so the key is built from the effective
+      // (post-hook) payload — the content that is actually delivered.
       const hookResult = await applyMessageSendingHook({
         hookRunner,
         enabled: hasMessageSendingHooks,
@@ -698,6 +715,33 @@ async function deliverOutboundPayloadsCore(
       }
       const effectivePayload = hookResult.payload;
       payloadSummary = hookResult.payloadSummary;
+
+      // Layer 1: cross-turn TTL dedup — atomically claim a slot for this
+      // payload. If it was recently delivered to the same recipient the
+      // claim returns null and we skip. On delivery failure the claim is
+      // rolled back so the payload can be retried.
+      const dedupeParams = {
+        channel,
+        to,
+        accountId,
+        threadId: params.threadId,
+        resolvedReplyToId: params.replyToId ?? undefined,
+        payload: effectivePayload,
+      };
+      dedupeClaimKey = claimOutboundDelivery(dedupeParams);
+      if (dedupeClaimKey === null) {
+        // claimOutboundDelivery returns null for both duplicates AND empty
+        // payloads. Only skip if the key is non-null (true duplicate).
+        const key = buildOutboundDedupeKey(dedupeParams);
+        if (key !== null) {
+          log.info("outbound dedup: skipping duplicate payload", {
+            channel,
+            to,
+            text: payloadSummary.text.slice(0, 80),
+          });
+          continue;
+        }
+      }
 
       params.onPayload?.(payloadSummary);
       const sendOverrides = {
@@ -752,6 +796,11 @@ async function deliverOutboundPayloadsCore(
         messageId: lastMessageId,
       });
     } catch (err) {
+      // Rollback the dedup claim so the payload can be retried.
+      if (dedupeClaimKey) {
+        rollbackOutboundClaim(dedupeClaimKey);
+        dedupeClaimKey = null;
+      }
       emitMessageSent({
         success: false,
         content: payloadSummary.text,
