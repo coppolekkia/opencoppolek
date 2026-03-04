@@ -21,7 +21,12 @@ import {
   resolveMattermostAccount,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
-import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
+import {
+  createMattermostClient,
+  deleteMattermostPost,
+  normalizeMattermostBaseUrl,
+  patchMattermostPost,
+} from "./mattermost/client.js";
 import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
 import { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
@@ -34,32 +39,107 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
     const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
     const baseReactions = actionsConfig?.reactions;
-    const hasReactionCapableAccount = listMattermostAccountIds(cfg)
+
+    const enabledAccounts = listMattermostAccountIds(cfg)
       .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
       .filter((account) => account.enabled)
-      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()))
-      .some((account) => {
-        const accountActions = account.config.actions as { reactions?: boolean } | undefined;
-        return (accountActions?.reactions ?? baseReactions ?? true) !== false;
-      });
+      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
 
-    if (!hasReactionCapableAccount) {
-      return [];
+    const hasReactionCapableAccount = enabledAccounts.some((account) => {
+      const accountActions = account.config.actions as { reactions?: boolean } | undefined;
+      return (accountActions?.reactions ?? baseReactions ?? true) !== false;
+    });
+
+    const hasEditDeleteCapableAccount = enabledAccounts.length > 0;
+
+    const actions: ChannelMessageActionName[] = [];
+    if (hasReactionCapableAccount) {
+      actions.push("react");
     }
-
-    return ["react"];
+    if (hasEditDeleteCapableAccount) {
+      actions.push("edit", "delete");
+    }
+    return actions;
   },
   supportsAction: ({ action }) => {
-    return action === "react";
+    return action === "react" || action === "edit" || action === "delete";
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
+    const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
+
+    if (action === "edit") {
+      const messageId =
+        typeof (params as any)?.messageId === "string"
+          ? (params as any).messageId.trim()
+          : typeof (params as any)?.postId === "string"
+            ? (params as any).postId.trim()
+            : "";
+      if (!messageId) {
+        throw new Error("Mattermost edit requires messageId (post id)");
+      }
+
+      const message =
+        typeof (params as any)?.message === "string"
+          ? (params as any).message
+          : typeof (params as any)?.text === "string"
+            ? (params as any).text
+            : "";
+      if (!message) {
+        throw new Error("Mattermost edit requires message text");
+      }
+
+      const resolved = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      const baseUrl = normalizeMattermostBaseUrl(resolved.baseUrl);
+      const botToken = resolved.botToken?.trim();
+      if (!baseUrl || !botToken) {
+        throw new Error(`Mattermost botToken/baseUrl missing for account "${resolvedAccountId}"`);
+      }
+
+      const client = createMattermostClient({ baseUrl, botToken });
+      const updated = await patchMattermostPost(client, {
+        postId: messageId,
+        message,
+      });
+
+      return {
+        content: [{ type: "text" as const, text: `Edited post ${messageId}` }],
+        details: { postId: updated.id },
+      };
+    }
+
+    if (action === "delete") {
+      const messageId =
+        typeof (params as any)?.messageId === "string"
+          ? (params as any).messageId.trim()
+          : typeof (params as any)?.postId === "string"
+            ? (params as any).postId.trim()
+            : "";
+      if (!messageId) {
+        throw new Error("Mattermost delete requires messageId (post id)");
+      }
+
+      const resolved = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      const baseUrl = normalizeMattermostBaseUrl(resolved.baseUrl);
+      const botToken = resolved.botToken?.trim();
+      if (!baseUrl || !botToken) {
+        throw new Error(`Mattermost botToken/baseUrl missing for account "${resolvedAccountId}"`);
+      }
+
+      const client = createMattermostClient({ baseUrl, botToken });
+      await deleteMattermostPost(client, messageId);
+
+      return {
+        content: [{ type: "text" as const, text: `Deleted post ${messageId}` }],
+        details: {},
+      };
+    }
+
     if (action !== "react") {
       throw new Error(`Mattermost action ${action} not supported`);
     }
     // Check reactions gate: per-account config takes precedence over base config
     const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
     const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
     const acctConfig = accounts?.[resolvedAccountId];
     const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
     const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
@@ -173,6 +253,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     threads: true,
     media: true,
     nativeCommands: true,
+    blockStreaming: true,
   },
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },

@@ -165,6 +165,28 @@ export async function createMattermostDirectChannel(
   });
 }
 
+export type MattermostAttachmentAction = {
+  id?: string;
+  name: string;
+  type?: "button" | "select";
+  style?: "default" | "primary" | "success" | "danger";
+  integration?: {
+    url: string;
+    context?: Record<string, unknown>;
+  };
+  options?: Array<{ text: string; value: string }>;
+};
+
+export type MattermostAttachment = {
+  fallback?: string;
+  color?: string;
+  pretext?: string;
+  text?: string;
+  title?: string;
+  actions?: MattermostAttachmentAction[];
+  fields?: Array<{ short?: boolean; title: string; value: string }>;
+};
+
 export async function createMattermostPost(
   client: MattermostClient,
   params: {
@@ -172,9 +194,10 @@ export async function createMattermostPost(
     message: string;
     rootId?: string;
     fileIds?: string[];
+    attachments?: MattermostAttachment[];
   },
 ): Promise<MattermostPost> {
-  const payload: Record<string, string> = {
+  const payload: Record<string, unknown> = {
     channel_id: params.channelId,
     message: params.message,
   };
@@ -182,7 +205,10 @@ export async function createMattermostPost(
     payload.root_id = params.rootId;
   }
   if (params.fileIds?.length) {
-    (payload as Record<string, unknown>).file_ids = params.fileIds;
+    payload.file_ids = params.fileIds;
+  }
+  if (params.attachments?.length) {
+    payload.props = { attachments: params.attachments };
   }
   return await client.request<MattermostPost>("/posts", {
     method: "POST",
@@ -240,4 +266,43 @@ export async function uploadMattermostFile(
     throw new Error("Mattermost file upload failed");
   }
   return info;
+}
+
+/**
+ * Update an existing Mattermost post (partial patch).
+ * Requires `edit_post` (own) or `edit_others_posts` permission.
+ * @see https://api.mattermost.com/#tag/posts/operation/PatchPost
+ */
+export async function patchMattermostPost(
+  client: MattermostClient,
+  params: {
+    postId: string;
+    message?: string;
+    props?: Record<string, unknown>;
+    fileIds?: string[];
+  },
+): Promise<MattermostPost> {
+  const body: Record<string, unknown> = {};
+  if (params.message !== undefined) body.message = params.message;
+  if (params.props !== undefined) body.props = params.props;
+  if (params.fileIds !== undefined) body.file_ids = params.fileIds;
+
+  return await client.request<MattermostPost>(`/posts/${params.postId}/patch`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Delete a Mattermost post.
+ * Requires `delete_post` (own) or `delete_others_posts` permission.
+ * @see https://api.mattermost.com/#tag/posts/operation/DeletePost
+ */
+export async function deleteMattermostPost(
+  client: MattermostClient,
+  postId: string,
+): Promise<void> {
+  await client.request<unknown>(`/posts/${postId}`, {
+    method: "DELETE",
+  });
 }
