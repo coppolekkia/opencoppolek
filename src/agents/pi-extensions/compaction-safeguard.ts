@@ -28,6 +28,14 @@ const log = createSubsystemLogger("compaction-safeguard");
 
 // Track session managers that have already logged the missing-model warning to avoid log spam.
 const missedModelWarningSessions = new WeakSet<object>();
+
+// Cache for workspace context to avoid repeated file reads
+type WorkspaceContextCache = {
+  content: string;
+  mtimeMs: number;
+  path: string;
+};
+let workspaceContextCache: WorkspaceContextCache | null = null;
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -530,6 +538,20 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
+    // Check cache first
+    try {
+      const stats = fs.statSync(agentsPath);
+      if (
+        workspaceContextCache &&
+        workspaceContextCache.path === agentsPath &&
+        workspaceContextCache.mtimeMs === stats.mtimeMs
+      ) {
+        return workspaceContextCache.content;
+      }
+    } catch {
+      // File doesn't exist or can't stat, continue to read
+    }
+
     const opened = await openBoundaryFile({
       absolutePath: agentsPath,
       rootPath: workspaceDir,
@@ -558,12 +580,25 @@ async function readWorkspaceContextForSummary(): Promise<string> {
         ? combined.slice(0, MAX_SUMMARY_CONTEXT_CHARS) + "\n...[truncated]..."
         : combined;
 
-    return `\n\n<workspace-critical-rules>\n${safeContent}\n</workspace-critical-rules>`;
+    const result = `\n\n<workspace-critical-rules>\n${safeContent}\n</workspace-critical-rules>`;
+
+    // Update cache
+    try {
+      const stats = fs.statSync(agentsPath);
+      workspaceContextCache = {
+        content: result,
+        mtimeMs: stats.mtimeMs,
+        path: agentsPath,
+      };
+    } catch {
+      // If we can't stat, don't cache
+    }
+
+    return result;
   } catch {
     return "";
   }
 }
-
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
