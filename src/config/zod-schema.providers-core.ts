@@ -955,6 +955,10 @@ export const SignalAccountSchemaBase = z
     actions: z
       .object({
         reactions: z.boolean().optional(),
+        poll: z.boolean().optional(),
+        unsend: z.boolean().optional(),
+        pollVote: z.boolean().optional(),
+        pollTerminate: z.boolean().optional(),
       })
       .strict()
       .optional(),
