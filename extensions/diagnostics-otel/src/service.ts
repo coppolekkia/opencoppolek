@@ -101,6 +101,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       }
 
       const resource = resourceFromAttributes({
+        ...(otel.resourceAttributes ?? {}),
         [ATTR_SERVICE_NAME]: serviceName,
       });
 
