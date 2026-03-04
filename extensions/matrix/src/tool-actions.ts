@@ -43,6 +43,7 @@ export async function handleMatrixAction(
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const isActionEnabled = createActionGate(cfg.channels?.matrix?.actions);
+  const accountId = readStringParam(params, "accountId") ?? undefined;
 
   if (reactionActions.has(action)) {
     if (!isActionEnabled("reactions")) {
@@ -57,13 +58,14 @@ export async function handleMatrixAction(
       if (remove || isEmpty) {
         const result = await removeMatrixReactions(roomId, messageId, {
           emoji: remove ? emoji : undefined,
+          accountId,
         });
         return jsonResult({ ok: true, removed: result.removed });
       }
-      await reactMatrixMessage(roomId, messageId, emoji);
+      await reactMatrixMessage(roomId, messageId, emoji, { accountId });
       return jsonResult({ ok: true, added: emoji });
     }
-    const reactions = await listMatrixReactions(roomId, messageId);
+    const reactions = await listMatrixReactions(roomId, messageId, { accountId });
     return jsonResult({ ok: true, reactions });
   }
 
@@ -86,6 +88,7 @@ export async function handleMatrixAction(
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
+          accountId,
         });
         return jsonResult({ ok: true, result });
       }
@@ -93,14 +96,17 @@ export async function handleMatrixAction(
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
         const content = readStringParam(params, "content", { required: true });
-        const result = await editMatrixMessage(roomId, messageId, content);
+        const result = await editMatrixMessage(roomId, messageId, content, { accountId });
         return jsonResult({ ok: true, result });
       }
       case "deleteMessage": {
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
         const reason = readStringParam(params, "reason");
-        await deleteMatrixMessage(roomId, messageId, { reason: reason ?? undefined });
+        await deleteMatrixMessage(roomId, messageId, {
+          reason: reason ?? undefined,
+          accountId,
+        });
         return jsonResult({ ok: true, deleted: true });
       }
       case "readMessages": {
@@ -112,6 +118,7 @@ export async function handleMatrixAction(
           limit: limit ?? undefined,
           before: before ?? undefined,
           after: after ?? undefined,
+          accountId,
         });
         return jsonResult({ ok: true, ...result });
       }
@@ -127,15 +134,15 @@ export async function handleMatrixAction(
     const roomId = readRoomId(params);
     if (action === "pinMessage") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const result = await pinMatrixMessage(roomId, messageId);
+      const result = await pinMatrixMessage(roomId, messageId, { accountId });
       return jsonResult({ ok: true, pinned: result.pinned });
     }
     if (action === "unpinMessage") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const result = await unpinMatrixMessage(roomId, messageId);
+      const result = await unpinMatrixMessage(roomId, messageId, { accountId });
       return jsonResult({ ok: true, pinned: result.pinned });
     }
-    const result = await listMatrixPins(roomId);
+    const result = await listMatrixPins(roomId, { accountId });
     return jsonResult({ ok: true, pinned: result.pinned, events: result.events });
   }
 
@@ -147,6 +154,7 @@ export async function handleMatrixAction(
     const roomId = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
     const result = await getMatrixMemberInfo(userId, {
       roomId: roomId ?? undefined,
+      accountId,
     });
     return jsonResult({ ok: true, member: result });
   }
@@ -156,7 +164,7 @@ export async function handleMatrixAction(
       throw new Error("Matrix room info is disabled.");
     }
     const roomId = readRoomId(params);
-    const result = await getMatrixRoomInfo(roomId);
+    const result = await getMatrixRoomInfo(roomId, { accountId });
     return jsonResult({ ok: true, room: result });
   }
 
