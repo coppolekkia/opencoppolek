@@ -984,6 +984,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
           },
           onModelSelected,
+          disableBlockStreaming: true,
         },
       })
         .then(() => {
