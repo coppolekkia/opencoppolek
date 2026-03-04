@@ -290,6 +290,8 @@ export const OpenClawSchema = z
         attachOnly: z.boolean().optional(),
         cdpPortRangeStart: z.number().int().min(1).max(65535).optional(),
         defaultProfile: z.string().optional(),
+        extraArgs: z.array(z.string()).optional(),
+        proxy: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
         ssrfPolicy: z
           .object({
@@ -312,6 +314,7 @@ export const OpenClawSchema = z
                 driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
+                proxy: z.string().optional(),
               })
               .strict()
               .refine((value) => value.cdpPort || value.cdpUrl, {
@@ -319,7 +322,6 @@ export const OpenClawSchema = z
               }),
           )
           .optional(),
-        extraArgs: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),
