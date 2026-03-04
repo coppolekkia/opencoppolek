@@ -97,6 +97,7 @@ type ChannelHandler = {
   chunker: Chunker | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
+  supportsNativeMedia: boolean;
   sendPayload?: (
     payload: ReplyPayload,
     overrides?: {
@@ -149,7 +150,7 @@ function createPluginHandler(
   params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
 ): ChannelHandler | null {
   const outbound = params.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  if (!outbound?.sendText) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
@@ -169,6 +170,7 @@ function createPluginHandler(
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
+    supportsNativeMedia: Boolean(sendMedia),
     sendPayload: outbound.sendPayload
       ? async (payload, overrides) =>
           outbound.sendPayload!({
@@ -183,12 +185,28 @@ function createPluginHandler(
         ...resolveCtx(overrides),
         text,
       }),
-    sendMedia: async (caption, mediaUrl, overrides) =>
-      sendMedia({
+    sendMedia: async (caption, mediaUrl, overrides) => {
+      if (sendMedia) {
+        return sendMedia({
+          ...resolveCtx(overrides),
+          text: caption,
+          mediaUrl,
+        });
+      }
+      // Text-only channels may omit sendMedia. Fall back to caption delivery.
+      log.warn(
+        "deliverOutboundPayloads: sendMedia not configured for channel; dropping mediaUrl and falling back to caption",
+        {
+          channel: params.channel,
+          to: baseCtx.to,
+          mediaUrl,
+        },
+      );
+      return sendText({
         ...resolveCtx(overrides),
         text: caption,
-        mediaUrl,
-      }),
+      });
+    },
   };
 }
 
@@ -732,6 +750,7 @@ async function deliverOutboundPayloadsCore(
 
       let first = true;
       let lastMessageId: string | undefined;
+      const beforeCount = results.length;
       for (const url of payloadSummary.mediaUrls) {
         throwIfAborted(abortSignal);
         const caption = first ? payloadSummary.text : "";
@@ -741,13 +760,24 @@ async function deliverOutboundPayloadsCore(
           results.push(delivery);
           lastMessageId = delivery.messageId;
         } else {
+          if (!handler.supportsNativeMedia && !caption.trim()) {
+            log.warn(
+              "deliverOutboundPayloads: sendMedia not configured and caption empty; dropping mediaUrl without fallback",
+              {
+                channel,
+                to,
+                mediaUrl: url,
+              },
+            );
+            continue;
+          }
           const delivery = await handler.sendMedia(caption, url, sendOverrides);
           results.push(delivery);
           lastMessageId = delivery.messageId;
         }
       }
       emitMessageSent({
-        success: true,
+        success: results.length > beforeCount,
         content: payloadSummary.text,
         messageId: lastMessageId,
       });
