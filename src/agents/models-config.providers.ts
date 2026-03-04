@@ -1057,15 +1057,26 @@ export async function resolveImplicitProviders(params: {
   } else {
     const ollamaBaseUrl = explicitOllama?.baseUrl;
     const hasExplicitOllamaConfig = Boolean(explicitOllama);
-    // Only suppress warnings for implicit local probing when user has not
-    // explicitly configured Ollama.
     const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
       quiet: !ollamaKey && !hasExplicitOllamaConfig,
     });
-    if (ollamaProvider.models.length > 0 || ollamaKey || explicitOllama?.apiKey) {
+    const shouldAdd = ollamaProvider.models.length > 0 || ollamaKey || hasExplicitOllamaConfig;
+    if (shouldAdd) {
       providers.ollama = {
         ...ollamaProvider,
-        apiKey: ollamaKey ?? explicitOllama?.apiKey ?? "ollama-local",
+        ...(explicitOllama
+          ? {
+              ...explicitOllama,
+              baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
+              api: explicitOllama.api ?? "ollama",
+              // Use explicit models only when user supplied a non-empty list; otherwise keep discovery results
+              models:
+                Array.isArray(explicitOllama.models) && explicitOllama.models.length > 0
+                  ? explicitOllama.models
+                  : ollamaProvider.models,
+              apiKey: ollamaKey ?? explicitOllama.apiKey ?? "ollama-local",
+            }
+          : { apiKey: ollamaKey ?? "ollama-local" }),
       };
     }
   }
