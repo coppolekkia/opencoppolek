@@ -181,6 +181,35 @@ describe("chat view", () => {
     nowSpy.mockRestore();
   });
 
+  it("uses compose placeholder text without image paste hint", () => {
+    const container = document.createElement("div");
+    render(renderChat(createProps()), container);
+
+    const input = container.querySelector("textarea");
+    expect(input?.getAttribute("placeholder")).toBe("Message (↩ to send, Shift+↩ for line breaks)");
+  });
+
+  it("uses attachment placeholder text without image paste hint", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          attachments: [
+            {
+              id: "att-1",
+              dataUrl: "data:text/plain;base64,bm90ZQ==",
+              mimeType: "text/plain",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const input = container.querySelector("textarea");
+    expect(input?.getAttribute("placeholder")).toBe("Add a message...");
+  });
+
   it("shows a stop button when aborting is available", () => {
     const container = document.createElement("div");
     const onAbort = vi.fn();
