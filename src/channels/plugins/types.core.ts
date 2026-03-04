@@ -327,6 +327,8 @@ export type ChannelMessageActionContext = {
   };
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
+  /** Whether the sender is the bot owner (used for privileged action gating). */
+  senderIsOwner?: boolean;
 };
 
 export type ChannelToolSend = {

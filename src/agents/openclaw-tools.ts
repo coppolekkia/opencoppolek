@@ -68,7 +68,7 @@ export function createOpenClawTools(options?: {
   disableMessageTool?: boolean;
   /** Trusted sender id from inbound context (not tool args). */
   requesterSenderId?: string | null;
-  /** Whether the requesting sender is an owner. */
+  /** Whether the sender is the bot owner (used for privileged action gating). */
   senderIsOwner?: boolean;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
@@ -122,6 +122,7 @@ export function createOpenClawTools(options?: {
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
+        senderIsOwner: options?.senderIsOwner,
       });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
