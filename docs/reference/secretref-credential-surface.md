@@ -29,6 +29,7 @@ Scope intent:
 - `talk.apiKey`
 - `talk.providers.*.apiKey`
 - `messages.tts.elevenlabs.apiKey`
+- `messages.tts.minimax.apiKey`
 - `messages.tts.openai.apiKey`
 - `tools.web.search.apiKey`
 - `tools.web.search.gemini.apiKey`
