@@ -12,6 +12,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_JINA_EMBEDDING_MODEL } from "./embeddings-jina.js";
 import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
@@ -24,6 +25,7 @@ import {
   type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
+  type JinaEmbeddingClient,
 } from "./embeddings.js";
 import { isFileMissingError } from "./fs-utils.js";
 import {
@@ -93,11 +95,12 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "jina" | "ollama";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
+  protected jina?: JinaEmbeddingClient;
   protected ollama?: OllamaEmbeddingClient;
   protected abstract batch: {
     enabled: boolean;
@@ -945,7 +948,8 @@ export abstract class MemoryManagerSyncOps {
       this.provider &&
       ((this.openAi && this.provider.id === "openai") ||
         (this.gemini && this.provider.id === "gemini") ||
-        (this.voyage && this.provider.id === "voyage")),
+        (this.voyage && this.provider.id === "voyage") ||
+        (this.jina && this.provider.id === "jina")),
     );
     return {
       enabled,
@@ -970,6 +974,7 @@ export abstract class MemoryManagerSyncOps {
       | "local"
       | "voyage"
       | "mistral"
+      | "jina"
       | "ollama";
 
     const fallbackModel =
@@ -981,9 +986,11 @@ export abstract class MemoryManagerSyncOps {
             ? DEFAULT_VOYAGE_EMBEDDING_MODEL
             : fallback === "mistral"
               ? DEFAULT_MISTRAL_EMBEDDING_MODEL
-              : fallback === "ollama"
-                ? DEFAULT_OLLAMA_EMBEDDING_MODEL
-                : this.settings.model;
+              : fallback === "jina"
+                ? DEFAULT_JINA_EMBEDDING_MODEL
+                : fallback === "ollama"
+                  ? DEFAULT_OLLAMA_EMBEDDING_MODEL
+                  : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -1002,6 +1009,7 @@ export abstract class MemoryManagerSyncOps {
     this.gemini = fallbackResult.gemini;
     this.voyage = fallbackResult.voyage;
     this.mistral = fallbackResult.mistral;
+    this.jina = fallbackResult.jina;
     this.ollama = fallbackResult.ollama;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
