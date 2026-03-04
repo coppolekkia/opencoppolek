@@ -12,12 +12,11 @@ import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -72,20 +71,6 @@ const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
-const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
-  "main",
-  "direct",
-  "dm",
-  "group",
-  "channel",
-  "cron",
-  "run",
-  "subagent",
-  "acp",
-  "thread",
-  "topic",
-]);
-const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
@@ -856,51 +841,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
-      const routeChannelCandidate = normalizeMessageChannel(
-        entry?.deliveryContext?.channel ?? entry?.lastChannel,
-      );
-      const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
-      const routeAccountIdCandidate =
-        entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
-      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
-      const parsedSessionKey = parseAgentSessionKey(sessionKey);
-      const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
-      const sessionScopeHead = sessionScopeParts[0];
-      const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
-      const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
-        .map((part) => (part ?? "").trim().toLowerCase())
-        .filter(Boolean);
-      const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
-        (sessionScopeHead ?? "").trim().toLowerCase(),
-      );
-      const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
-        CHANNEL_SCOPED_SESSION_SHAPES.has(part),
-      );
-      const hasLegacyChannelPeerShape =
-        !isChannelScopedSession &&
-        typeof sessionScopeParts[1] === "string" &&
-        sessionChannelHint === routeChannelCandidate;
-      // Only inherit prior external route metadata for channel-scoped sessions.
-      // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
-      // leak stale routes across surfaces.
-      const canInheritDeliverableRoute = Boolean(
-        sessionChannelHint &&
-        sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-        !isChannelAgnosticSessionScope &&
-        (isChannelScopedSession || hasLegacyChannelPeerShape),
-      );
-      const hasDeliverableRoute =
-        canInheritDeliverableRoute &&
-        routeChannelCandidate &&
-        routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
-        typeof routeToCandidate === "string" &&
-        routeToCandidate.trim().length > 0;
-      const originatingChannel = hasDeliverableRoute
-        ? routeChannelCandidate
-        : INTERNAL_MESSAGE_CHANNEL;
-      const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
-      const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
-      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
+      // Messages arriving via the gateway (chat.send) originate from the webchat /
+      // control-UI surface.  Always set OriginatingChannel to webchat so the reply
+      // dispatcher routes responses back to the gateway connection, not to an
+      // external channel stored in the session's delivery context (#34647).
+      const originatingChannel = INTERNAL_MESSAGE_CHANNEL;
+      const originatingTo = undefined;
+      const accountId = undefined;
+      const messageThreadId = undefined;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
