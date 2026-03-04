@@ -9,6 +9,8 @@ import {
   loadCron,
   refreshActiveTab,
   setLastActiveSessionKey,
+  setTabFromRoute,
+  syncUrlWithTab,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
@@ -186,6 +188,19 @@ export function connectGateway(host: GatewayHost) {
       if (code !== 1012) {
         if (error?.message) {
           host.lastError = error.message;
+          if (
+            !host.settings.token.trim() &&
+            !host.password.trim() &&
+            /gateway token missing/i.test(error.message) &&
+            host.tab === "chat"
+          ) {
+            setTabFromRoute(host as unknown as Parameters<typeof setTabFromRoute>[0], "overview");
+            syncUrlWithTab(
+              host as unknown as Parameters<typeof syncUrlWithTab>[0],
+              "overview",
+              false,
+            );
+          }
           return;
         }
         host.lastError = `disconnected (${code}): ${reason || "no reason"}`;

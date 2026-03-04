@@ -61,6 +61,18 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
 };
 
+function isBaseEntrypointPath(pathname: string, basePath: string): boolean {
+  let normalizedPath = normalizePath(pathname);
+  if (normalizedPath.endsWith("/index.html")) {
+    normalizedPath = normalizePath(normalizedPath.slice(0, -"/index.html".length)) || "/";
+  }
+  const base = normalizeBasePath(basePath);
+  if (!base) {
+    return normalizedPath === "/";
+  }
+  return normalizedPath === normalizePath(base);
+}
+
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
@@ -303,7 +315,13 @@ export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
   if (typeof window === "undefined") {
     return;
   }
-  const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "chat";
+  const hasAuth = Boolean(host.settings.token.trim() || host.password?.trim());
+  const atEntrypoint = isBaseEntrypointPath(window.location.pathname, host.basePath);
+  const resolvedFromPath = tabFromPath(window.location.pathname, host.basePath);
+  // Entrypoint without auth lands on overview; unknown routes also fall back to
+  // overview when unauthenticated so we avoid defaulting typo URLs to chat.
+  const resolved =
+    atEntrypoint && !hasAuth ? "overview" : (resolvedFromPath ?? (hasAuth ? "chat" : "overview"));
   setTabFromRoute(host, resolved);
   syncUrlWithTab(host, resolved, replace);
 }
