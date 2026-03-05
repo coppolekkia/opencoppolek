@@ -286,7 +286,14 @@ export function applyJobResult(
     startedAt: number;
     endedAt: number;
   },
+  opts?: {
+    /** When true, the next-run schedule is computed from the pre-run
+     *  lastRunAtMs rather than the manual run's startedAt.  This prevents
+     *  a force/manual CLI run from shifting the recurring schedule anchor. */
+    preserveSchedule?: boolean;
+  },
 ): boolean {
+  const prevLastRunAtMs = job.state.lastRunAtMs;
   job.state.runningAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
   job.state.lastRunStatus = result.status;
@@ -384,7 +391,16 @@ export function applyJobResult(
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
       try {
-        normalNext = computeJobNextRunAtMs(job, result.endedAt);
+        if (opts?.preserveSchedule && job.schedule.kind === "every") {
+          job.state.lastRunAtMs = prevLastRunAtMs;
+          try {
+            normalNext = computeJobNextRunAtMs(job, result.endedAt);
+          } finally {
+            job.state.lastRunAtMs = result.startedAt;
+          }
+        } else {
+          normalNext = computeJobNextRunAtMs(job, result.endedAt);
+        }
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)
@@ -407,7 +423,22 @@ export function applyJobResult(
     } else if (job.enabled) {
       let naturalNext: number | undefined;
       try {
-        naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+        if (opts?.preserveSchedule && job.schedule.kind === "every") {
+          // For manual/force runs on "every" schedules: compute the next
+          // occurrence from the original lastRunAtMs so the schedule anchor
+          // is preserved.  Without this, lastRunAtMs was just set to
+          // result.startedAt (an arbitrary manual-run time), and the first
+          // path in computeJobNextRunAtMs would return startedAt + everyMs
+          // instead of the next aligned occurrence.
+          job.state.lastRunAtMs = prevLastRunAtMs;
+          try {
+            naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+          } finally {
+            job.state.lastRunAtMs = result.startedAt;
+          }
+        } else {
+          naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+        }
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)
