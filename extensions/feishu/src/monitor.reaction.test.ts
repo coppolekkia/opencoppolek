@@ -291,6 +291,7 @@ describe("resolveReactionSyntheticEvent", () => {
       },
       message: {
         message_id: "om_msg1:reaction:THUMBSUP:fixed-uuid",
+        root_id: "om_msg1",
         chat_id: "oc_group_from_event",
         chat_type: "group",
         message_type: "text",

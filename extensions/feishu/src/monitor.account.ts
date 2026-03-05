@@ -116,6 +116,9 @@ export async function resolveReactionSyntheticEvent(
     },
     message: {
       message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      // Point root_id at the original message so the bot handler uses the
+      // base message_id (not the suffixed synthetic one) for API reply calls.
+      root_id: messageId,
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",
