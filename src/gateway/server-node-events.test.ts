@@ -255,6 +255,45 @@ describe("node exec events", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
+
+  it("suppresses exec.started when notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-1", {
+      event: "exec.started",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        runId: "run-silent-1",
+        command: "ls -la",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses exec.finished when notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-silent-2",
+        exitCode: 0,
+        timedOut: false,
+        output: "some output",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("voice transcript events", () => {
