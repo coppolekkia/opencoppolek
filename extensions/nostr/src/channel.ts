@@ -156,6 +156,31 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         messageId: `nostr-${Date.now()}`,
       };
     },
+    // The delivery framework requires both sendText and sendMedia.  Nostr
+    // has no native media support, so fall back to sending the media URL
+    // as a text link (same pattern as IRC channel).
+    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
+      const core = getNostrRuntime();
+      const combined = mediaUrl ? `${text ?? ""}\n\nAttachment: ${mediaUrl}` : (text ?? "");
+      const aid = accountId ?? DEFAULT_ACCOUNT_ID;
+      const bus = activeBuses.get(aid);
+      if (!bus) {
+        throw new Error(`Nostr bus not running for account ${aid}`);
+      }
+      const tableMode = core.channel.text.resolveMarkdownTableMode({
+        cfg: core.config.loadConfig(),
+        channel: "nostr",
+        accountId: aid,
+      });
+      const message = core.channel.text.convertMarkdownTables(combined, tableMode);
+      const normalizedTo = normalizePubkey(to);
+      await bus.sendDm(normalizedTo, message);
+      return {
+        channel: "nostr" as const,
+        to: normalizedTo,
+        messageId: `nostr-${Date.now()}`,
+      };
+    },
   },
 
   status: {
@@ -274,15 +299,22 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
       );
 
-      // Return cleanup function
-      return {
-        stop: () => {
-          bus.close();
-          activeBuses.delete(account.accountId);
-          metricsSnapshots.delete(account.accountId);
-          ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
-        },
-      };
+      // Keep the promise pending until abort.  Returning immediately causes
+      // the framework to treat startAccount as resolved and triggers an
+      // infinite auto-restart loop.
+      await new Promise<void>((resolve) => {
+        if (ctx.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+
+      // Cleanup when aborted
+      bus.close();
+      activeBuses.delete(account.accountId);
+      metricsSnapshots.delete(account.accountId);
+      ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
     },
   },
 };
