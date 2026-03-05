@@ -461,6 +461,7 @@ export async function runCronIsolatedAgentTurn(params: {
       agentDir,
       fallbacksOverride:
         payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
+      sessionKey: agentSessionKey,
       run: async (providerOverride, modelOverride) => {
         if (abortSignal?.aborted) {
           throw new Error(abortReason());
