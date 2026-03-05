@@ -75,19 +75,42 @@ function resolveCanonicalApprovalCwdSync(cwd: string):
     }
   | { ok: false; message: string } {
   const requestedCwd = path.resolve(cwd);
+
+  // Split try/catch: lstatSync failure (path truly absent) vs post-lstat failures (dangling symlink, etc.)
   let cwdLstat: fs.Stats;
+  try {
+    cwdLstat = fs.lstatSync(requestedCwd);
+  } catch (err: unknown) {
+    // lstatSync failed — path truly doesn't exist (or access error)
+    const code = err && typeof err === "object" && "code" in err ? (err as { code: string }).code : undefined;
+    if (code === "ENOENT") {
+      // Path genuinely absent — this is the only case that should trigger cross-platform fallback
+      return {
+        ok: false,
+        message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
+      };
+    }
+    return {
+      ok: false,
+      message: `SYSTEM_RUN_DENIED: cwd access error (${code ?? "unknown"})`,
+    };
+  }
+
+  // lstatSync succeeded — the path entry exists. Any ENOENT from here means dangling symlink,
+  // which should NOT trigger fallback (it's a security-relevant failure, not "path absent")
   let cwdStat: fs.Stats;
   let cwdReal: string;
   let cwdRealStat: fs.Stats;
   try {
-    cwdLstat = fs.lstatSync(requestedCwd);
     cwdStat = fs.statSync(requestedCwd);
     cwdReal = fs.realpathSync(requestedCwd);
     cwdRealStat = fs.statSync(cwdReal);
-  } catch {
+  } catch (err: unknown) {
+    const code = err && typeof err === "object" && "code" in err ? (err as { code: string }).code : undefined;
+    // ENOENT here = dangling symlink; treat as security failure, NOT "path absent"
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
+      message: `SYSTEM_RUN_DENIED: cwd access error (${code ?? "unknown"})`,
     };
   }
   if (!cwdStat.isDirectory()) {
@@ -245,14 +268,46 @@ export function buildSystemRunApprovalPlan(params: {
   if (command.argv.length === 0) {
     return { ok: false, message: "command required" };
   }
+  const requestedCwd = normalizeString(params.cwd) ?? undefined;
+  // During the prepare phase, try to validate the cwd. If validation fails
+  // (e.g., the gateway's cwd doesn't exist on the node in cross-platform exec),
+  // omit the cwd from the plan so the node can use its own default workspace.
+  // This allows exec to work when tools.exec.host=node and the gateway/node
+  // have different filesystem layouts (e.g., WSL gateway → Windows node).
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,
     argv: command.argv,
     shellCommand: command.shellCommand,
-    cwd: normalizeString(params.cwd) ?? undefined,
+    cwd: requestedCwd,
   });
   if (!hardening.ok) {
-    return { ok: false, message: hardening.message };
+    // Only retry without cwd for "path doesn't exist" errors (cross-platform exec scenario).
+    // Other hardening failures (directory check, symlink checks, identity mismatch) are
+    // security-related and must NOT be bypassed.
+    if (!hardening.message.includes("existing canonical cwd")) {
+      return { ok: false, message: hardening.message };
+    }
+    const hardeningWithoutCwd = hardenApprovedExecutionPaths({
+      approvedByAsk: true,
+      argv: command.argv,
+      shellCommand: command.shellCommand,
+      cwd: undefined,
+    });
+    if (!hardeningWithoutCwd.ok) {
+      // Command itself has issues (not cwd-related)
+      return { ok: false, message: hardeningWithoutCwd.message };
+    }
+    return {
+      ok: true,
+      plan: {
+        argv: hardeningWithoutCwd.argv,
+        cwd: null, // Omit cwd, let node use its default
+        rawCommand: command.cmdText.trim() || null,
+        agentId: normalizeString(params.agentId),
+        sessionKey: normalizeString(params.sessionKey),
+      },
+      cmdText: command.cmdText,
+    };
   }
   const rawCommand = hardening.argvChanged
     ? formatExecCommand(hardening.argv) || null
