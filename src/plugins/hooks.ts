@@ -49,6 +49,9 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookBeforeSkillsLoadContext,
+  PluginHookBeforeSkillsLoadEvent,
+  PluginHookBeforeSkillsLoadResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -369,6 +372,30 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookAgentContext,
   ): Promise<void> {
     return runVoidHook("before_reset", event, ctx);
+  }
+
+  // =========================================================================
+  // Skill Hooks
+  // =========================================================================
+  /**
+   * Run before_skills_load hook.
+   * Allows plugins to modify or block skill loading.
+   */
+  async function runBeforeSkillsLoad(
+    event: PluginHookBeforeSkillsLoadEvent,
+    ctx: PluginHookBeforeSkillsLoadContext,
+  ): Promise<PluginHookBeforeSkillsLoadResult | undefined> {
+    return runModifyingHook<"before_skills_load", PluginHookBeforeSkillsLoadResult>(
+      "before_skills_load",
+      event,
+      ctx,
+      (acc, next) => ({
+        blocked: next.blocked ?? acc?.blocked,
+        securityInfo: next.securityInfo ?? acc?.securityInfo,
+        riskScore: next.riskScore ?? acc?.riskScore,
+        severity: next.severity ?? acc?.severity,
+      }),
+    );
   }
 
   // =========================================================================
@@ -724,6 +751,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeCompaction,
     runAfterCompaction,
     runBeforeReset,
+    // Skills hooks
+    runBeforeSkillsLoad,
     // Message hooks
     runMessageReceived,
     runMessageSending,
