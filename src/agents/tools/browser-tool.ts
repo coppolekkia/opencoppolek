@@ -501,8 +501,24 @@ export function createBrowserTool(opts?: {
           });
         }
         case "navigate": {
-          const targetUrl = readTargetUrlParam(params);
+          const targetUrl = readStringParam(params, "targetUrl") ?? readStringParam(params, "url");
           const targetId = readStringParam(params, "targetId");
+          if (!targetUrl) {
+            const request = readActRequestParam(params);
+            if (!request) {
+              throw new Error("targetUrl required");
+            }
+            const requestWithTarget =
+              request.targetId === undefined && targetId
+                ? ({ ...request, targetId } as typeof request)
+                : request;
+            return await executeActAction({
+              request: requestWithTarget,
+              baseUrl,
+              profile,
+              proxyRequest,
+            });
+          }
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",

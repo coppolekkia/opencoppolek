@@ -310,10 +310,41 @@ describe("browser tool url alias support", () => {
     );
   });
 
+  it("falls back to act request when navigate has no url", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "navigate",
+      targetId: "tab-1",
+      request: {
+        kind: "evaluate",
+        fn: "() => document.title",
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "evaluate",
+        fn: "() => document.title",
+        targetId: "tab-1",
+      }),
+      expect.objectContaining({ profile: undefined }),
+    );
+    expect(browserActionsMocks.browserNavigate).not.toHaveBeenCalled();
+  });
+
   it("keeps targetUrl required error label when both params are missing", async () => {
     const tool = createBrowserTool();
 
     await expect(tool.execute?.("call-1", { action: "open" })).rejects.toThrow(
+      "targetUrl required",
+    );
+  });
+
+  it("keeps targetUrl required error label for navigate when url and request are missing", async () => {
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "navigate" })).rejects.toThrow(
       "targetUrl required",
     );
   });
