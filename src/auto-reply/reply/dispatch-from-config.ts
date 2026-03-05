@@ -567,6 +567,49 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+
+    // Silent failure detection: agent ran but produced no output
+    // This can happen when all tool calls fail or model returns empty content
+    // Note: Don't check replies.length - it includes suppressed reasoning payloads
+    const totalReplies = counts.final + counts.block + counts.tool;
+    if (!queuedFinal && totalReplies === 0 && blockCount === 0) {
+      // Send fallback message to inform user instead of silent drop
+      const fallbackPayload: ReplyPayload = {
+        text: "I wasn't able to complete your request. Please try again or rephrase your message.",
+      };
+      logVerbose(
+        "dispatch-from-config: silent failure detected (no replies generated), sending fallback",
+      );
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        const result = await routeReply({
+          payload: fallbackPayload,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: ctx.MessageThreadId,
+          cfg,
+          isGroup,
+          groupId,
+        });
+        queuedFinal = result.ok;
+        if (result.ok) {
+          counts.final += 1;
+        }
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (fallback) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+      } else {
+        const didQueue = dispatcher.sendFinalReply(fallbackPayload);
+        queuedFinal = didQueue;
+        if (didQueue) {
+          counts.final += 1;
+        }
+      }
+    }
+
     recordProcessed("completed");
     markIdle("message_completed");
     return { queuedFinal, counts };
