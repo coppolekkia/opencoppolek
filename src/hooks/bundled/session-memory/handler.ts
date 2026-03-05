@@ -177,6 +177,12 @@ const saveSessionToMemory: HookHandler = async (event) => {
     return;
   }
 
+  // Check if another hook (e.g., security plugin) blocked the save
+  if (event.context.blockSessionSave === true) {
+    log.debug("Session save blocked by upstream hook");
+    return;
+  }
+
   try {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
@@ -243,7 +249,13 @@ const saveSessionToMemory: HookHandler = async (event) => {
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (sessionFile) {
+    // Check early if upstream hook provided custom content — if so, skip
+    // transcript loading and LLM slug generation to avoid leaking raw
+    // session text to the model provider in redaction workflows.
+    const customContent = event.context.sessionSaveContent;
+    const hasCustomContent = typeof customContent === "string" && customContent.length > 0;
+
+    if (sessionFile && !hasCustomContent) {
       // Get recent conversation content, with fallback to rotated reset transcript.
       sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
@@ -276,10 +288,23 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Create filename with date and slug
     const filename = `${dateStr}-${slug}.md`;
-    const memoryFilePath = path.join(memoryDir, filename);
+
+    // Determine write target. Redirect paths are validated by writeFileWithinRoot
+    // which handles path traversal, symlink resolution, and containment checks.
+    const redirectPath = event.context.sessionSaveRedirectPath;
+    const isRedirected = typeof redirectPath === "string" && redirectPath.length > 0;
+    // For redirects, compute a workspace-relative path so writeFileWithinRoot
+    // can validate containment. Absolute paths are made relative to workspace.
+    const writeRelativePath = isRedirected
+      ? path.isAbsolute(redirectPath)
+        ? path.relative(workspaceDir, redirectPath)
+        : redirectPath
+      : path.join("memory", filename);
+
     log.debug("Memory file path resolved", {
       filename,
-      path: memoryFilePath.replace(os.homedir(), "~"),
+      redirected: isRedirected,
+      relativePath: writeRelativePath,
     });
 
     // Format time as HH:MM:SS UTC
@@ -289,35 +314,71 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
-    // Build Markdown entry
-    const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
-      "",
-      `- **Session Key**: ${event.sessionKey}`,
-      `- **Session ID**: ${sessionId}`,
-      `- **Source**: ${source}`,
-      "",
-    ];
+    // Use custom content from upstream hook if available (checked earlier)
+    let entry: string;
 
-    // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+    if (hasCustomContent) {
+      // Use custom content provided by upstream hook
+      entry = customContent;
+      log.debug("Using custom session content from upstream hook");
+    } else {
+      // Build Markdown entry
+      const entryParts = [
+        `# Session: ${dateStr} ${timeStr} UTC`,
+        "",
+        `- **Session Key**: ${event.sessionKey}`,
+        `- **Session ID**: ${sessionId}`,
+        `- **Source**: ${source}`,
+        "",
+      ];
+
+      // Include conversation content if available
+      if (sessionContent) {
+        entryParts.push("## Conversation Summary", "", sessionContent, "");
+      }
+
+      entry = entryParts.join("\n");
     }
 
-    const entry = entryParts.join("\n");
+    // Write session memory — writeFileWithinRoot handles path traversal,
+    // symlink resolution, containment validation, and mkdir in one call.
+    // Root is always workspaceDir; the relative path encodes the target.
+    // If a redirect path fails validation (e.g. escapes workspace), fall
+    // back to the default memory directory.
+    let writePath = writeRelativePath;
+    if (isRedirected) {
+      try {
+        await writeFileWithinRoot({
+          rootDir: workspaceDir,
+          relativePath: writeRelativePath,
+          data: entry,
+          encoding: "utf-8",
+        });
+        log.debug("Memory file written to redirect path");
+      } catch (redirectErr) {
+        log.warn(
+          `sessionSaveRedirectPath rejected, falling back to memory dir: ${String(redirectErr)}`,
+        );
+        writePath = path.join("memory", filename);
+        await writeFileWithinRoot({
+          rootDir: workspaceDir,
+          relativePath: writePath,
+          data: entry,
+          encoding: "utf-8",
+        });
+        log.debug("Memory file written to fallback path");
+      }
+    } else {
+      await writeFileWithinRoot({
+        rootDir: workspaceDir,
+        relativePath: writePath,
+        data: entry,
+        encoding: "utf-8",
+      });
+      log.debug("Memory file written successfully");
+    }
 
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: filename,
-      data: entry,
-      encoding: "utf-8",
-    });
-    log.debug("Memory file written successfully");
-
-    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
-    log.info(`Session context saved to ${relPath}`);
+    log.info(`Session context saved to ${writeRelativePath}`);
   } catch (err) {
     if (err instanceof Error) {
       log.error("Failed to save session memory", {
