@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
-import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -643,10 +642,9 @@ export function registerPluginsCli(program: Command) {
       if (cfg.plugins?.slots?.memory === pluginId) {
         preview.push(`memory slot (will reset to "memory-core")`);
       }
-      const channelKey = normalizeChatChannelId(pluginId) ?? pluginId;
       const channels = cfg.channels as Record<string, unknown> | undefined;
-      if (channels && channelKey in channels) {
-        preview.push(`channel config (channels.${channelKey})`);
+      if (channels && pluginId in channels) {
+        preview.push(`channel config (channels.${pluginId})`);
       }
       const deleteTarget = !keepFiles
         ? resolveUninstallDirectoryTarget({

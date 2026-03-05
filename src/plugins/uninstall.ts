@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginInstallDir } from "./install.js";
@@ -158,11 +157,12 @@ export function removePluginFromConfig(
     delete cleanedPlugins.slots;
   }
 
-  // Remove channel config entry (channels.<pluginId> or channels.<builtInId>)
-  const channelId = normalizeChatChannelId(pluginId) ?? pluginId;
+  // Remove channel config entry matching the plugin id.
+  // Only remove channels[pluginId] by exact match to avoid alias collisions
+  // (e.g. uninstalling a plugin named "gchat" must not delete channels.googlechat).
   let channels = cfg.channels as Record<string, unknown> | undefined;
-  if (channels && channelId in channels) {
-    const { [channelId]: _, ...rest } = channels;
+  if (channels && pluginId in channels) {
+    const { [pluginId]: _, ...rest } = channels;
     channels = Object.keys(rest).length > 0 ? rest : undefined;
     actions.channelConfig = true;
   }

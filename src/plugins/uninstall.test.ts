@@ -380,6 +380,47 @@ describe("removePluginFromConfig", () => {
 
     expect(actions.channelConfig).toBe(false);
   });
+
+  it("does not remove aliased channel config when plugin id matches an alias", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          gchat: { enabled: true },
+        },
+      },
+      channels: {
+        googlechat: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "gchat");
+
+    // gchat is an alias for googlechat, but the plugin "gchat" is not the googlechat channel;
+    // channels.googlechat must remain untouched.
+    expect((result.channels as Record<string, unknown>)?.googlechat).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(false);
+  });
+
+  it("prefers exact pluginId key over normalized alias", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          gchat: { enabled: true },
+        },
+      },
+      channels: {
+        gchat: { token: "abc" },
+        googlechat: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "gchat");
+
+    // Should remove channels.gchat (exact match), not channels.googlechat (alias target).
+    expect((result.channels as Record<string, unknown>)?.gchat).toBeUndefined();
+    expect((result.channels as Record<string, unknown>)?.googlechat).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(true);
+  });
 });
 
 describe("uninstallPlugin", () => {
