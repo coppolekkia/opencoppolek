@@ -329,10 +329,31 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
-export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+// Keep the default path close to Node/undici defaults for fast networks.
+export const PINNED_AUTO_SELECT_FAMILY_PRIMARY_TIMEOUT_MS = 300;
+// Use a relaxed timeout only for targeted retry paths on slow networks.
+export const PINNED_AUTO_SELECT_FAMILY_FALLBACK_TIMEOUT_MS = 2500;
+
+type CreatePinnedDispatcherOptions = {
+  autoSelectFamilyAttemptTimeoutMs?: number;
+};
+
+export function createPinnedDispatcher(
+  pinned: PinnedHostname,
+  options: CreatePinnedDispatcherOptions = {},
+): Dispatcher {
+  const autoSelectFamilyAttemptTimeoutMs =
+    typeof options.autoSelectFamilyAttemptTimeoutMs === "number" &&
+    Number.isFinite(options.autoSelectFamilyAttemptTimeoutMs) &&
+    options.autoSelectFamilyAttemptTimeoutMs > 0
+      ? Math.floor(options.autoSelectFamilyAttemptTimeoutMs)
+      : PINNED_AUTO_SELECT_FAMILY_PRIMARY_TIMEOUT_MS;
+
   return new Agent({
     connect: {
       lookup: pinned.lookup,
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: autoSelectFamilyAttemptTimeoutMs,
     },
   });
 }
