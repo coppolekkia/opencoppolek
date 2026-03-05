@@ -290,6 +290,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       if (phase === "end") {
         setActivityStatus("idle");
+        // Refresh session info to update token counts after command completion
+        void refreshSessionInfo();
       }
       if (phase === "error") {
         setActivityStatus("error");

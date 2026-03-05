@@ -357,6 +357,38 @@ export function formatContextUsageLine(params: {
   return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
 }
 
+/**
+ * Render a compact context usage bar for the TUI header.
+ * Returns a string like "██░░░░░░░░ 9% (18K/200K)" with ANSI color coding.
+ * Green (0-60%), Yellow (60-85%), Red (85%+).
+ */
+export function formatContextBar(
+  total?: number | null,
+  context?: number | null,
+  barWidth = 10,
+  colorFn?: {
+    green: (s: string) => string;
+    yellow: (s: string) => string;
+    red: (s: string) => string;
+  },
+): string | null {
+  if (total == null || context == null || context <= 0) {
+    return null;
+  }
+  const pct = Math.min(100, Math.round((total / context) * 100));
+  const filled = Math.round((pct / 100) * barWidth);
+  const empty = barWidth - filled;
+  const bar = "█".repeat(filled) + "░".repeat(empty);
+  const label = `${pct}% (${formatTokenCount(total)}/${formatTokenCount(context)})`;
+
+  if (!colorFn) {
+    return `${bar} ${label}`;
+  }
+
+  const colorize = pct >= 85 ? colorFn.red : pct >= 60 ? colorFn.yellow : colorFn.green;
+  return `${colorize(bar)} ${colorize(label)}`;
+}
+
 export function asString(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;

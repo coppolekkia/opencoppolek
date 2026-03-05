@@ -14,7 +14,7 @@ const palette = {
   dim: "#7B7F87",
   accent: "#F6C453",
   accentSoft: "#F2A65A",
-  border: "#3C414B",
+  border: "#454B57",
   userBg: "#2B2F36",
   userText: "#F3EEE0",
   systemText: "#9BA3B2",

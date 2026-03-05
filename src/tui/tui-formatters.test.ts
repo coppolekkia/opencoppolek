@@ -3,6 +3,7 @@ import {
   extractContentFromMessage,
   extractTextFromMessage,
   extractThinkingFromMessage,
+  formatContextBar,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
@@ -268,5 +269,77 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
+  });
+});
+
+describe("formatContextBar", () => {
+  it("returns null when total or context is missing", () => {
+    expect(formatContextBar(null, null)).toBeNull();
+    expect(formatContextBar(1000, null)).toBeNull();
+    expect(formatContextBar(null, 200000)).toBeNull();
+    expect(formatContextBar(undefined, undefined)).toBeNull();
+  });
+
+  it("returns null when context is zero", () => {
+    expect(formatContextBar(1000, 0)).toBeNull();
+  });
+
+  it("renders bar without colors when no colorFn provided", () => {
+    const result = formatContextBar(18000, 200000);
+    expect(result).not.toBeNull();
+    expect(result).toContain("░");
+    expect(result).toContain("9%");
+    expect(result).toContain("18k");
+    expect(result).toContain("200k");
+  });
+
+  it("renders correct fill at 50%", () => {
+    const result = formatContextBar(100000, 200000, 10);
+    expect(result).not.toBeNull();
+    // 50% of 10 = 5 filled
+    expect(result!.match(/█/g)?.length).toBe(5);
+    expect(result!.match(/░/g)?.length).toBe(5);
+    expect(result).toContain("50%");
+  });
+
+  it("caps at 100%", () => {
+    const result = formatContextBar(300000, 200000, 10);
+    expect(result).toContain("100%");
+    expect(result!.match(/█/g)?.length).toBe(10);
+  });
+
+  it("applies green color for low usage", () => {
+    const colors = {
+      green: (s: string) => `[G]${s}`,
+      yellow: (s: string) => `[Y]${s}`,
+      red: (s: string) => `[R]${s}`,
+    };
+    const result = formatContextBar(10000, 200000, 10, colors);
+    expect(result).toContain("[G]");
+    expect(result).not.toContain("[Y]");
+    expect(result).not.toContain("[R]");
+  });
+
+  it("applies yellow color at 60-84%", () => {
+    const colors = {
+      green: (s: string) => `[G]${s}`,
+      yellow: (s: string) => `[Y]${s}`,
+      red: (s: string) => `[R]${s}`,
+    };
+    const result = formatContextBar(140000, 200000, 10, colors);
+    expect(result).toContain("[Y]");
+    expect(result).not.toContain("[G]");
+  });
+
+  it("applies red color at 85%+", () => {
+    const colors = {
+      green: (s: string) => `[G]${s}`,
+      yellow: (s: string) => `[Y]${s}`,
+      red: (s: string) => `[R]${s}`,
+    };
+    const result = formatContextBar(180000, 200000, 10, colors);
+    expect(result).toContain("[R]");
+    expect(result).not.toContain("[G]");
+    expect(result).not.toContain("[Y]");
   });
 });
