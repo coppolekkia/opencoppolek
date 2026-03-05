@@ -212,6 +212,70 @@ export async function isChromeCdpReady(
   return await canRunCdpHealthCommand(wsUrl, handshakeTimeoutMs);
 }
 
+export function buildOpenClawChromeArgs(
+  resolved: Pick<ResolvedBrowserConfig, "headless" | "noSandbox" | "extraArgs">,
+  profile: Pick<ResolvedBrowserProfile, "cdpPort" | "name">,
+  userDataDir: string,
+): string[] {
+  const args: string[] = [
+    `--remote-debugging-port=${profile.cdpPort}`,
+    `--user-data-dir=${userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-sync",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-features=Translate,MediaRouter",
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+    "--password-store=basic",
+  ];
+
+  if (resolved.headless) {
+    // Best-effort; older Chromes may ignore.
+    args.push("--headless=new");
+    args.push("--disable-gpu");
+  }
+  if (resolved.noSandbox) {
+    args.push("--no-sandbox");
+    args.push("--disable-setuid-sandbox");
+  }
+  if (process.platform === "linux") {
+    args.push("--disable-dev-shm-usage");
+  }
+
+  // Stealth: hide navigator.webdriver from automation detection (#80)
+  // Newer Chromes show a warning for this unsupported switch.
+  // Allow users to opt out by adding "!--disable-blink-features=AutomationControlled" to browser.extraArgs.
+  args.push("--disable-blink-features=AutomationControlled");
+
+  // Support a best-effort negation convention: "!--flag".
+  // This is a config directive and is NOT forwarded to Chrome.
+  const negations = new Set(
+    resolved.extraArgs.filter((arg) => arg.startsWith("!--")).map((arg) => arg.slice(1)),
+  );
+
+  // Apply negations only to OpenClaw-injected args (i.e., before appending user args).
+  for (const flag of negations) {
+    const idx = args.indexOf(flag);
+    if (idx >= 0) {
+      args.splice(idx, 1);
+    }
+  }
+
+  // Append user-configured extra arguments (e.g., stealth flags, window size)
+  for (const arg of resolved.extraArgs) {
+    if (!arg.startsWith("!--")) {
+      args.push(arg);
+    }
+  }
+
+  // Always open a blank tab to ensure a target exists.
+  args.push("about:blank");
+
+  return args;
+}
+
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -239,43 +303,7 @@ export async function launchOpenClawChrome(
 
   // First launch to create preference files if missing, then decorate and relaunch.
   const spawnOnce = () => {
-    const args: string[] = [
-      `--remote-debugging-port=${profile.cdpPort}`,
-      `--user-data-dir=${userDataDir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-sync",
-      "--disable-background-networking",
-      "--disable-component-update",
-      "--disable-features=Translate,MediaRouter",
-      "--disable-session-crashed-bubble",
-      "--hide-crash-restore-bubble",
-      "--password-store=basic",
-    ];
-
-    if (resolved.headless) {
-      // Best-effort; older Chromes may ignore.
-      args.push("--headless=new");
-      args.push("--disable-gpu");
-    }
-    if (resolved.noSandbox) {
-      args.push("--no-sandbox");
-      args.push("--disable-setuid-sandbox");
-    }
-    if (process.platform === "linux") {
-      args.push("--disable-dev-shm-usage");
-    }
-
-    // Stealth: hide navigator.webdriver from automation detection (#80)
-    args.push("--disable-blink-features=AutomationControlled");
-
-    // Append user-configured extra arguments (e.g., stealth flags, window size)
-    if (resolved.extraArgs.length > 0) {
-      args.push(...resolved.extraArgs);
-    }
-
-    // Always open a blank tab to ensure a target exists.
-    args.push("about:blank");
+    const args = buildOpenClawChromeArgs(resolved, profile, userDataDir);
 
     return spawn(exe.path, args, {
       stdio: "pipe",
