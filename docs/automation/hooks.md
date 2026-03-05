@@ -351,13 +351,15 @@ These hooks are not event-stream listeners; they let plugins synchronously adjus
 
 - **`tool_result_persist`**: transform tool results before they are written to the session transcript. Must be synchronous; return the updated tool result payload or `undefined` to keep it as-is. See [Agent Loop](/concepts/agent-loop).
 
-### Future Events
+### Session + Agent Lifecycle Events
 
-Planned event types:
+Available lifecycle event types:
 
-- **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
-- **`agent:error`**: When an agent encounters an error
+- **`session:start`**: emitted when a session is created/re-created during reset flows.
+- **`session:end`**: emitted when a session is reset or deleted.
+- **`agent:error`**: emitted when agent reply dispatch fails with an exception.
+
+These events are emitted through the same internal hook event pipeline (`type:action`) as other hook events.
 
 ## Creating Custom Hooks
 

@@ -1,9 +1,71 @@
-"""Tests for write_gallery HTML escaping (fixes #12538 - stored XSS)."""
+"""Tests for openai-image-gen helpers."""
 
+import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
-from gen import write_gallery
+from gen import request_images, write_gallery
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        return False
+
+
+def test_request_images_includes_stream_and_moderation_for_gpt_models():
+    captured_body = {}
+
+    def fake_urlopen(req, timeout=300):
+        body = req.data.decode("utf-8")
+        captured_body.update(json.loads(body))
+        return _FakeResponse({"data": [{"url": "https://example.com/image.png"}]})
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        request_images(
+            api_key="test-key",
+            prompt="test prompt",
+            model="gpt-image-1",
+            size="1024x1024",
+            quality="high",
+            stream=True,
+            moderation="low",
+        )
+
+    assert captured_body.get("stream") is True
+    assert captured_body.get("moderation") == "low"
+
+
+def test_request_images_omits_stream_and_moderation_for_dalle_models():
+    captured_body = {}
+
+    def fake_urlopen(req, timeout=300):
+        body = req.data.decode("utf-8")
+        captured_body.update(json.loads(body))
+        return _FakeResponse({"data": [{"url": "https://example.com/image.png"}]})
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        request_images(
+            api_key="test-key",
+            prompt="test prompt",
+            model="dall-e-3",
+            size="1024x1024",
+            quality="standard",
+            stream=True,
+            moderation="low",
+        )
+
+    assert "stream" not in captured_body
+    assert "moderation" not in captured_body
 
 
 def test_write_gallery_escapes_prompt_xss():
