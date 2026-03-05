@@ -30,6 +30,15 @@ RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi
 
+# Install Python packages for Monica workspace tools (job_scraper, linkedin-feed, gmail-monitor).
+# Using apt for well-packaged libs; pip (--break-system-packages) for langdetect which is not in Debian repos.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      python3-pip python3-requests python3-bs4 python3-yaml && \
+    pip3 install --no-cache-dir --break-system-packages langdetect linkedin-api && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
