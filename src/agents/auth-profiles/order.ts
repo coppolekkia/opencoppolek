@@ -36,6 +36,29 @@ export function resolveAuthProfileEligibility(params: {
 }): AuthProfileEligibility {
   const providerAuthKey = normalizeProviderIdForAuth(params.provider);
   const cred = params.store.profiles[params.profileId];
+  const resolveProfileMode = (value?: string): "api_key" | "oauth" | "token" | undefined => {
+    if (value === "api-key") {
+      return "api_key";
+    }
+    if (value === "api_key" || value === "oauth" || value === "token") {
+      return value;
+    }
+    return undefined;
+  };
+  const isCompatibleMode = (
+    configuredMode: "api_key" | "oauth" | "token" | undefined,
+    credentialType: "api_key" | "oauth" | "token",
+  ): boolean => {
+    if (!configuredMode || !credentialType) {
+      return false;
+    }
+    if (configuredMode === credentialType) {
+      return true;
+    }
+    const isBearerMode = (mode: "api_key" | "oauth" | "token"): boolean =>
+      mode === "oauth" || mode === "token";
+    return isBearerMode(configuredMode) && isBearerMode(credentialType);
+  };
   if (!cred) {
     return { eligible: false, reasonCode: "profile_missing" };
   }
@@ -47,11 +70,9 @@ export function resolveAuthProfileEligibility(params: {
     if (normalizeProviderIdForAuth(profileConfig.provider) !== providerAuthKey) {
       return { eligible: false, reasonCode: "provider_mismatch" };
     }
-    if (profileConfig.mode !== cred.type) {
-      const oauthCompatible = profileConfig.mode === "oauth" && cred.type === "token";
-      if (!oauthCompatible) {
-        return { eligible: false, reasonCode: "mode_mismatch" };
-      }
+    const configuredMode = resolveProfileMode(profileConfig.mode ?? (profileConfig as { type?: string }).type);
+    if (!isCompatibleMode(configuredMode, cred.type)) {
+      return { eligible: false, reasonCode: "mode_mismatch" };
     }
   }
   const credentialEligibility = evaluateStoredCredentialEligibility({
