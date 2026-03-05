@@ -117,10 +117,16 @@ function contentToText(content: unknown): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return (content as Array<{ type?: string; text?: string }>)
-    .filter((p) => p.type === "text" && typeof p.text === "string")
-    .map((p) => p.text as string)
-    .join("");
+  const parts: string[] = [];
+  for (const part of content as Array<{ type?: unknown; text?: unknown }>) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    if (part.type === "text" && typeof part.text === "string") {
+      parts.push(part.text);
+    }
+  }
+  return parts.join("");
 }
 
 /** Convert pi-ai content to OpenAI ContentPart[]. */
@@ -133,11 +139,14 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
   }
   const parts: ContentPart[] = [];
   for (const part of content as Array<{
-    type?: string;
-    text?: string;
-    data?: string;
-    mimeType?: string;
-  }>) {
+    type?: unknown;
+    text?: unknown;
+    data?: unknown;
+    mimeType?: unknown;
+  } | null>) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
     if (part.type === "text" && typeof part.text === "string") {
       parts.push({ type: "input_text", text: part.text });
     } else if (part.type === "image" && typeof part.data === "string") {
@@ -145,7 +154,7 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
         type: "input_image",
         source: {
           type: "base64",
-          media_type: part.mimeType ?? "image/jpeg",
+          media_type: typeof part.mimeType === "string" ? part.mimeType : "image/jpeg",
           data: part.data,
         },
       });
@@ -205,11 +214,22 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
           arguments?: Record<string, unknown>;
           thinking?: string;
         }>) {
-          if (block.type === "text" && typeof block.text === "string") {
-            textParts.push(block.text);
-          } else if (block.type === "thinking" && typeof block.thinking === "string") {
+          if (!block || typeof block !== "object") {
+            continue;
+          }
+          const rec = block as {
+            type?: unknown;
+            text?: unknown;
+            id?: unknown;
+            name?: unknown;
+            arguments?: unknown;
+            thinking?: unknown;
+          };
+          if (rec.type === "text" && typeof rec.text === "string") {
+            textParts.push(rec.text);
+          } else if (rec.type === "thinking" && typeof rec.thinking === "string") {
             // Skip thinking blocks — not sent back to the model
-          } else if (block.type === "toolCall") {
+          } else if (rec.type === "toolCall") {
             // Push accumulated text first
             if (textParts.length > 0) {
               items.push({
@@ -219,8 +239,8 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
               });
               textParts.length = 0;
             }
-            const callId = toNonEmptyString(block.id);
-            const toolName = toNonEmptyString(block.name);
+            const callId = toNonEmptyString(rec.id);
+            const toolName = toNonEmptyString(rec.name);
             if (!callId || !toolName) {
               continue;
             }
@@ -230,9 +250,9 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
               call_id: callId,
               name: toolName,
               arguments:
-                typeof block.arguments === "string"
-                  ? block.arguments
-                  : JSON.stringify(block.arguments ?? {}),
+                typeof rec.arguments === "string"
+                  ? rec.arguments
+                  : JSON.stringify(rec.arguments ?? {}),
             });
           }
         }
