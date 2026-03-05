@@ -8,6 +8,46 @@ import {
   runOpenAIOAuthTlsPreflight,
 } from "./oauth-tls-preflight.js";
 
+const OPENAI_PROFILE_CLAIM = "https://api.openai.com/profile";
+
+/**
+ * Extract the user's email from an OpenAI Codex JWT access token.
+ *
+ * Checks the OpenAI-specific profile claim first, then falls back to
+ * the standard OIDC `email` claim. Returns undefined when no email
+ * can be extracted (malformed token, missing claims, etc.).
+ */
+export function extractEmailFromCodexToken(accessToken: string): string | undefined {
+  try {
+    const parts = accessToken.split(".");
+    if (parts.length !== 3) {
+      return undefined;
+    }
+    const raw = parts[1] ?? "";
+    // Node.js Buffer handles base64url natively (no manual padding needed).
+    const payload = JSON.parse(Buffer.from(raw, "base64url").toString()) as Record<string, unknown>;
+
+    // OpenAI-specific namespaced claim (preferred)
+    const profile = payload[OPENAI_PROFILE_CLAIM];
+    if (profile && typeof profile === "object") {
+      const profileEmail = (profile as Record<string, unknown>).email;
+      if (typeof profileEmail === "string" && profileEmail.trim()) {
+        return profileEmail.trim().toLowerCase();
+      }
+    }
+
+    // Standard OIDC email claim (fallback)
+    const oidcEmail = payload.email;
+    if (typeof oidcEmail === "string" && oidcEmail.trim()) {
+      return oidcEmail.trim().toLowerCase();
+    }
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -56,6 +96,17 @@ export async function loginOpenAICodexOAuth(params: {
       onProgress: (msg) => spin.update(msg),
     });
     spin.stop("OpenAI OAuth complete");
+
+    // Enrich credentials with email from JWT when pi-ai doesn't populate it.
+    // This ensures each user gets a distinct profile ID (e.g. openai-codex:user@org.com)
+    // instead of all users on the same Team sharing openai-codex:default.
+    if (creds && !creds.email) {
+      const email = extractEmailFromCodexToken(creds.access);
+      if (email) {
+        creds.email = email;
+      }
+    }
+
     return creds ?? null;
   } catch (err) {
     spin.stop("OpenAI OAuth failed");
