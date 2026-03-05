@@ -165,6 +165,7 @@ describe("delivery-queue", () => {
       "Bot was blocked by the user",
       "Forbidden: bot was kicked from the group chat",
       "chat_id is empty",
+      "Feishu send failed: open_id belongs to a different Feishu app",
       "Outbound not configured for channel: msteams",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);

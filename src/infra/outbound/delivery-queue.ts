@@ -385,6 +385,7 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /chat_id is empty/i,
   /recipient is not a valid/i,
+  /open_id belongs to a different feishu app/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
 ];

@@ -477,7 +477,8 @@ openclaw pairing list feishu
 
 1. Ensure the app has `im:message:send_as_bot` permission
 2. Ensure the app is published
-3. Check logs for detailed errors
+3. In multi-app setups, ensure the target `open_id` belongs to the same Feishu app that is sending
+4. Check logs for detailed errors
 
 ---
 
@@ -509,6 +510,8 @@ openclaw pairing list feishu
 ```
 
 `defaultAccount` controls which Feishu account is used when outbound APIs do not specify an `accountId` explicitly.
+
+`open_id` values are app-scoped. If App X tries to send to an `open_id` from App Y, Feishu returns a 400 cross-app error. OpenClaw surfaces this as: `open_id belongs to a different Feishu app`.
 
 ### Message limits
 

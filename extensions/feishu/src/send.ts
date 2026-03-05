@@ -5,7 +5,11 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import {
+  assertFeishuMessageApiSuccess,
+  rethrowFeishuCrossAppOpenIdError,
+  toFeishuSendResult,
+} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuSendResult } from "./types.js";
 
@@ -62,14 +66,19 @@ async function sendFallbackDirect(
   },
   errorPrefix: string,
 ): Promise<FeishuSendResult> {
-  const response = await client.im.message.create({
-    params: { receive_id_type: params.receiveIdType },
-    data: {
-      receive_id: params.receiveId,
-      content: params.content,
-      msg_type: params.msgType,
-    },
-  });
+  let response: { code?: number; msg?: string; data?: { message_id?: string } };
+  try {
+    response = await client.im.message.create({
+      params: { receive_id_type: params.receiveIdType },
+      data: {
+        receive_id: params.receiveId,
+        content: params.content,
+        msg_type: params.msgType,
+      },
+    });
+  } catch (err) {
+    rethrowFeishuCrossAppOpenIdError(err, errorPrefix);
+  }
   assertFeishuMessageApiSuccess(response, errorPrefix);
   return toFeishuSendResult(response, params.receiveId);
 }
@@ -309,7 +318,7 @@ export async function sendMessageFeishu(
       });
     } catch (err) {
       if (!isWithdrawnReplyError(err)) {
-        throw err;
+        rethrowFeishuCrossAppOpenIdError(err, "Feishu reply failed");
       }
       return sendFallbackDirect(client, directParams, "Feishu send failed");
     }
@@ -353,7 +362,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
       });
     } catch (err) {
       if (!isWithdrawnReplyError(err)) {
-        throw err;
+        rethrowFeishuCrossAppOpenIdError(err, "Feishu card reply failed");
       }
       return sendFallbackDirect(client, directParams, "Feishu card send failed");
     }

@@ -176,4 +176,40 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  it("surfaces a clear cross-app open_id error when create returns 400 cross app", async () => {
+    createMock.mockResolvedValue({
+      code: 400,
+      msg: "Bad Request: cross app open_id is invalid",
+    });
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as never,
+        to: "user:ou_target",
+        text: "hello",
+      }),
+    ).rejects.toThrow("open_id belongs to a different Feishu app");
+  });
+
+  it("surfaces a clear cross-app open_id error when reply throws axios cross app", async () => {
+    const axiosError = Object.assign(new Error("Request failed with status code 400"), {
+      response: {
+        status: 400,
+        data: { code: 400, msg: "cross app open_id not allowed" },
+      },
+    });
+    replyMock.mockRejectedValue(axiosError);
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as never,
+        to: "user:ou_target",
+        text: "hello",
+        replyToMessageId: "om_parent",
+      }),
+    ).rejects.toThrow("open_id belongs to a different Feishu app");
+
+    expect(createMock).not.toHaveBeenCalled();
+  });
 });
