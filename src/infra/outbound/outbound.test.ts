@@ -135,6 +135,33 @@ describe("delivery-queue", () => {
       expect(entry.lastAttemptAt).toBeGreaterThan(0);
       expect(entry.lastError).toBe("connection refused");
     });
+
+    it("silently returns when queue file contains corrupted JSON", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir,
+      );
+
+      // Corrupt the file on disk.
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      const filePath = path.join(queueDir, `${id}.json`);
+      fs.writeFileSync(filePath, "NOT VALID JSON{{{", "utf-8");
+
+      // Should not throw — just return silently.
+      await expect(failDelivery(id, "some error", tmpDir)).resolves.toBeUndefined();
+
+      // File should remain unchanged (corrupted content untouched).
+      const raw = fs.readFileSync(filePath, "utf-8");
+      expect(raw).toBe("NOT VALID JSON{{{");
+    });
+
+    it("silently returns when queue file is missing", async () => {
+      await expect(failDelivery("nonexistent-id", "some error", tmpDir)).resolves.toBeUndefined();
+    });
   });
 
   describe("moveToFailed", () => {

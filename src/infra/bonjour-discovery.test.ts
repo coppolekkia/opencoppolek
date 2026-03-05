@@ -164,6 +164,50 @@ describe("bonjour-discovery", () => {
     ]);
   });
 
+  it("returns empty beacons when tailscale status returns malformed JSON", async () => {
+    const run = vi.fn(async (argv: string[], options: { timeoutMs: number }) => {
+      if (options.timeoutMs < 0) {
+        throw new Error("invalid timeout");
+      }
+      const cmd = argv[0];
+
+      // dns-sd browse returns nothing so fallback to tailnet probing kicks in.
+      if (cmd === "dns-sd" && argv[1] === "-B") {
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      }
+
+      // Tailscale returns malformed/truncated JSON.
+      if (cmd === "tailscale" && argv[1] === "status" && argv[2] === "--json") {
+        return {
+          stdout: '{"Self":{"TailscaleIPs":["100.69.232.64"',
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      }
+
+      throw new Error(`unexpected argv: ${argv.join(" ")}`);
+    });
+
+    const beacons = await discoverGatewayBeacons({
+      platform: "darwin",
+      timeoutMs: 1200,
+      domains: [WIDE_AREA_DOMAIN],
+      wideAreaDomain: WIDE_AREA_DOMAIN,
+      run: run as unknown as typeof runCommandWithTimeout,
+    });
+
+    // Malformed JSON should not crash — returns empty beacons.
+    expect(beacons).toEqual([]);
+  });
+
   it("falls back to tailnet DNS probing for wide-area when split DNS is not configured", async () => {
     const calls: Array<{ argv: string[]; timeoutMs: number }> = [];
     const zone = WIDE_AREA_DOMAIN.replace(/\.$/, "");
