@@ -85,7 +85,9 @@ describe("doctor state integrity oauth dir checks", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv();
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-integrity-"));
+    tempHome = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-integrity-")),
+    );
     process.env.HOME = tempHome;
     process.env.OPENCLAW_HOME = tempHome;
     process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
@@ -175,6 +177,43 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     expect(text).not.toContain("--active");
     expect(text).not.toContain(" ls ");
+  });
+
+  it("does not flag transcripts from other agents as orphaned in shared sessions dir", async () => {
+    // Multi-agent config where per-agent stores live in the default agent's
+    // sessions directory.  The orphan scanner reads from
+    // resolveSessionTranscriptsDirForAgent("main"), so stores and transcripts
+    // must be placed there for the test to exercise the detection path.
+    // Without checking all agent stores, transcripts belonging to non-default
+    // agents would be incorrectly flagged as orphans.
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+      session: {
+        store: path.join(sessionsDir, "{agentId}-store.json"),
+      },
+    };
+    const mainStorePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const opsStorePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+    // Write main agent store with one session
+    fs.writeFileSync(
+      mainStorePath,
+      JSON.stringify({ "agent:main:main": { sessionId: "main-sess", updatedAt: Date.now() } }),
+    );
+    // Write ops agent store with a different session
+    fs.writeFileSync(
+      opsStorePath,
+      JSON.stringify({ "agent:ops:ops": { sessionId: "ops-sess", updatedAt: Date.now() } }),
+    );
+    // Place transcript files in the scanned sessions dir
+    fs.writeFileSync(path.join(sessionsDir, "main-sess.jsonl"), '{"type":"session"}\n');
+    fs.writeFileSync(path.join(sessionsDir, "ops-sess.jsonl"), '{"type":"session"}\n');
+    const text = await runStateIntegrityText(cfg);
+    // ops-sess.jsonl must NOT be flagged as orphan
+    expect(text).not.toContain("orphan transcript file");
   });
 
   it("ignores slash-routing sessions for recent missing transcript warnings", async () => {
