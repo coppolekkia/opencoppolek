@@ -163,6 +163,7 @@ Notes:
 
 - `gateway install` supports `--port`, `--runtime`, `--token`, `--force`, `--json`.
 - Lifecycle commands accept `--json` for scripting.
+- On macOS, `gateway stop` sends `SIGTERM` to the LaunchAgent job without unloading the plist. This keeps launchd registration intact (`KeepAlive` can restart it).
 
 ## Discover gateways (Bonjour)
 
