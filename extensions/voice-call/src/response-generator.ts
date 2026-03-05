@@ -149,64 +149,65 @@ export function generateVoiceResponseStream(params: VoiceResponseParams): {
     const sessionKey = `voice:${normalizedPhone}`;
     const agentId = "main";
 
-    // Resolve paths
-    const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
-    const agentDir = deps.resolveAgentDir(cfg, agentId);
-    const workspaceDir = deps.resolveAgentWorkspaceDir(cfg, agentId);
-
-    // Ensure workspace exists
-    await deps.ensureAgentWorkspace({ dir: workspaceDir });
-
-    // Load or create session entry
-    const sessionStore = deps.loadSessionStore(storePath);
-    const now = Date.now();
-    let sessionEntry = sessionStore[sessionKey] as SessionEntry | undefined;
-
-    if (!sessionEntry) {
-      sessionEntry = {
-        sessionId: crypto.randomUUID(),
-        updatedAt: now,
-      };
-      sessionStore[sessionKey] = sessionEntry;
-      await deps.saveSessionStore(storePath, sessionStore);
-    }
-
-    const sessionId = sessionEntry.sessionId;
-    const sessionFile = deps.resolveSessionFilePath(sessionId, sessionEntry, {
-      agentId,
-    });
-
-    // Resolve model from config
-    const modelRef = voiceConfig.responseModel || `${deps.DEFAULT_PROVIDER}/${deps.DEFAULT_MODEL}`;
-    const slashIndex = modelRef.indexOf("/");
-    const provider = slashIndex === -1 ? deps.DEFAULT_PROVIDER : modelRef.slice(0, slashIndex);
-    const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
-
-    // Resolve thinking level
-    const thinkLevel = deps.resolveThinkingDefault({ cfg, provider, model });
-
-    // Resolve agent identity for personalized prompt
-    const identity = deps.resolveAgentIdentity(cfg, agentId);
-    const agentName = identity?.name?.trim() || "assistant";
-
-    // Build system prompt with conversation history
-    const basePrompt =
-      voiceConfig.responseSystemPrompt ??
-      `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
-
-    let extraSystemPrompt = basePrompt;
-    if (transcript.length > 0) {
-      const history = transcript
-        .map((entry) => `${entry.speaker === "bot" ? "You" : "Caller"}: ${entry.text}`)
-        .join("\n");
-      extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
-    }
-
-    // Resolve timeout
-    const timeoutMs = voiceConfig.responseTimeoutMs ?? deps.resolveAgentTimeoutMs({ cfg });
-    const runId = `voice:${callId}:${Date.now()}`;
-
     try {
+      // Resolve paths
+      const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
+      const agentDir = deps.resolveAgentDir(cfg, agentId);
+      const workspaceDir = deps.resolveAgentWorkspaceDir(cfg, agentId);
+
+      // Ensure workspace exists
+      await deps.ensureAgentWorkspace({ dir: workspaceDir });
+
+      // Load or create session entry
+      const sessionStore = deps.loadSessionStore(storePath);
+      const now = Date.now();
+      let sessionEntry = sessionStore[sessionKey] as SessionEntry | undefined;
+
+      if (!sessionEntry) {
+        sessionEntry = {
+          sessionId: crypto.randomUUID(),
+          updatedAt: now,
+        };
+        sessionStore[sessionKey] = sessionEntry;
+        await deps.saveSessionStore(storePath, sessionStore);
+      }
+
+      const sessionId = sessionEntry.sessionId;
+      const sessionFile = deps.resolveSessionFilePath(sessionId, sessionEntry, {
+        agentId,
+      });
+
+      // Resolve model from config
+      const modelRef =
+        voiceConfig.responseModel || `${deps.DEFAULT_PROVIDER}/${deps.DEFAULT_MODEL}`;
+      const slashIndex = modelRef.indexOf("/");
+      const provider = slashIndex === -1 ? deps.DEFAULT_PROVIDER : modelRef.slice(0, slashIndex);
+      const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
+
+      // Resolve thinking level
+      const thinkLevel = deps.resolveThinkingDefault({ cfg, provider, model });
+
+      // Resolve agent identity for personalized prompt
+      const identity = deps.resolveAgentIdentity(cfg, agentId);
+      const agentName = identity?.name?.trim() || "assistant";
+
+      // Build system prompt with conversation history
+      const basePrompt =
+        voiceConfig.responseSystemPrompt ??
+        `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
+
+      let extraSystemPrompt = basePrompt;
+      if (transcript.length > 0) {
+        const history = transcript
+          .map((entry) => `${entry.speaker === "bot" ? "You" : "Caller"}: ${entry.text}`)
+          .join("\n");
+        extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
+      }
+
+      // Resolve timeout
+      const timeoutMs = voiceConfig.responseTimeoutMs ?? deps.resolveAgentTimeoutMs({ cfg });
+      const runId = `voice:${callId}:${Date.now()}`;
+
       const agentResult = await deps.runEmbeddedPiAgent({
         sessionId,
         sessionKey,
