@@ -237,6 +237,16 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
+      const gap = received - expected;
+      if (gap <= 3) {
+        console.debug(
+          `[gateway] small event gap (${gap} events), auto-recovering via state refresh`,
+        );
+        const app = host as unknown as OpenClawApp;
+        void loadChatHistory(app);
+        void loadDevices(app, { quiet: true });
+        return;
+      }
       host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
       host.lastErrorCode = null;
     },
