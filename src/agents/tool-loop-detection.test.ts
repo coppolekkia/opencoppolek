@@ -199,6 +199,12 @@ describe("tool-loop-detection", () => {
       expect(hash.startsWith("read:")).toBe(true);
       expect(hash.length).toBe("read:".length + 64);
     });
+
+    it("normalizes exec timing knobs so repeats hash the same", () => {
+      const hash1 = hashToolCall("exec", { command: "ls", timeout: 30, yieldMs: 250 });
+      const hash2 = hashToolCall("exec", { command: "ls", timeout: 120, yieldMs: 1000 });
+      expect(hash1).toBe(hash2);
+    });
   });
 
   describe("recordToolCall", () => {
@@ -296,6 +302,32 @@ describe("tool-loop-detection", () => {
         expect(result.count).toBe(WARNING_THRESHOLD);
         expect(result.message).toContain("WARNING");
         expect(result.message).toContain(`${WARNING_THRESHOLD} times`);
+      }
+    });
+
+    it("warns on repeated exec calls even when timeout/yield vary", () => {
+      const state = createState();
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(
+          state,
+          "exec",
+          { command: "npm test", timeout: 30 + i, yieldMs: 100 + i * 10 },
+          `exec-${i}`,
+        );
+      }
+
+      const result = detectToolCallLoop(
+        state,
+        "exec",
+        { command: "npm test", timeout: 999, yieldMs: 5000 },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("warning");
+        expect(result.detector).toBe("generic_repeat");
+        expect(result.count).toBe(WARNING_THRESHOLD);
       }
     });
 

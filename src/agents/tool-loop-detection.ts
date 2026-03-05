@@ -104,7 +104,7 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
  * Uses tool name + deterministic JSON serialization digest of params.
  */
 export function hashToolCall(toolName: string, params: unknown): string {
-  return `${toolName}:${digestStable(params)}`;
+  return `${toolName}:${digestStable(normalizeParamsForLoopHash(toolName, params))}`;
 }
 
 function stableStringify(value: unknown): string {
@@ -142,6 +142,33 @@ function stableStringifyFallback(value: unknown): string {
     }
     return Object.prototype.toString.call(value);
   }
+}
+
+function normalizeParamsForLoopHash(toolName: string, params: unknown): unknown {
+  if (toolName !== "exec" || !isPlainObject(params)) {
+    return params;
+  }
+  // Keep exec repeat detection focused on semantic command identity.
+  // Timing/streaming knobs (timeout/yield/background) are intentionally ignored.
+  const normalized: Record<string, unknown> = {};
+  const semanticKeys = [
+    "command",
+    "cmd",
+    "workdir",
+    "env",
+    "host",
+    "security",
+    "pty",
+    "node",
+    "elevated",
+    "ask",
+  ] as const;
+  for (const key of semanticKeys) {
+    if (key in params) {
+      normalized[key] = params[key];
+    }
+  }
+  return normalized;
 }
 
 function isKnownPollToolCall(toolName: string, params: unknown): boolean {
