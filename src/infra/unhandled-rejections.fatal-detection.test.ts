@@ -93,6 +93,13 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
+        Object.assign(new Error("SQLITE_CANTOPEN: unable to open database file"), {
+          code: "SQLITE_CANTOPEN",
+        }),
+        Object.assign(new Error("unable to open database file"), {
+          errno: 14,
+          code: "14",
+        }),
         Object.assign(
           new Error(
             "A request error occurred: Client network socket disconnected before secure TLS connection was established",

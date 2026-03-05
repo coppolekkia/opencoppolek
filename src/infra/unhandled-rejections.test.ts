@@ -60,12 +60,18 @@ describe("isTransientNetworkError", () => {
       "UND_ERR_SOCKET",
       "UND_ERR_HEADERS_TIMEOUT",
       "UND_ERR_BODY_TIMEOUT",
+      "SQLITE_CANTOPEN",
     ];
 
     for (const code of codes) {
       const error = Object.assign(new Error("test"), { code });
       expect(isTransientNetworkError(error), `code: ${code}`).toBe(true);
     }
+
+    const sqliteCantOpenErrnoError = Object.assign(new Error("unable to open database file"), {
+      errno: 14,
+    });
+    expect(isTransientNetworkError(sqliteCantOpenErrnoError)).toBe(true);
   });
 
   it('returns true for TypeError with "fetch failed" message', () => {

@@ -38,6 +38,7 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "UND_ERR_SOCKET",
   "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_BODY_TIMEOUT",
+  "SQLITE_CANTOPEN",
 ]);
 
 const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
@@ -49,7 +50,7 @@ const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
 ]);
 
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
-  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
+  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|SQLITE_CANTOPEN)\b/i;
 
 const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "getaddrinfo",
@@ -59,6 +60,9 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "network is unreachable",
   "temporary failure in name resolution",
 ];
+
+const SQLITE_CANTOPEN_ERRNOS = new Set(["14"]);
+const SQLITE_CANTOPEN_MESSAGE_SNIPPET = "unable to open database file";
 
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
@@ -147,6 +151,16 @@ export function isTransientNetworkError(err: unknown): boolean {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_NETWORK_CODES.has(code)) {
       return true;
+    }
+
+    if (code && SQLITE_CANTOPEN_ERRNOS.has(code)) {
+      const rawMessage =
+        typeof (candidate as { message?: unknown }).message === "string"
+          ? (candidate as { message: string }).message
+          : "";
+      if (rawMessage.toLowerCase().includes(SQLITE_CANTOPEN_MESSAGE_SNIPPET)) {
+        return true;
+      }
     }
 
     const name = readErrorName(candidate);
