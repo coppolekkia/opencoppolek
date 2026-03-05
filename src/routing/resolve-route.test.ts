@@ -827,6 +827,30 @@ describe("mention-based explicit routing", () => {
     expect(route.matchedBy).toBe("mention");
   });
 
+  test("email-like text does not trigger mention routing", () => {
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "please contact alice@steve.com for details",
+    });
+    expect(route.agentId).toBe("tim");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("standalone mention with punctuation still routes correctly", () => {
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "please ask (@steve), thanks",
+    });
+    expect(route.agentId).toBe("steve");
+    expect(route.matchedBy).toBe("mention");
+  });
+
   test("mention alias cache refreshes when agents reference changes", () => {
     const mutableCfg: OpenClawConfig = {
       agents: {

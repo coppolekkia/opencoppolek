@@ -88,6 +88,19 @@ type AgentMentionAliasCache = {
 };
 
 const agentMentionAliasCacheByCfg = new WeakMap<OpenClawConfig, AgentMentionAliasCache>();
+const STANDALONE_MENTION_TOKEN_REGEX =
+  /(^|[^\p{L}\p{N}_@])@([a-zA-Z0-9_-]+)(?!\.[\p{L}\p{N}_-])(?=$|[^\p{L}\p{N}_-])/gu;
+
+function extractStandaloneMentionTokens(text: string): string[] {
+  const tokens: string[] = [];
+  for (const match of text.matchAll(STANDALONE_MENTION_TOKEN_REGEX)) {
+    const token = match[2];
+    if (token) {
+      tokens.push(token);
+    }
+  }
+  return tokens;
+}
 
 function buildAgentMentionAliasMap(cfg: OpenClawConfig): Map<string, string> {
   const agentsRef = cfg.agents;
@@ -132,9 +145,8 @@ function resolveMentionTargetAgentId(
     return null;
   }
 
-  const tokens = text.match(/@[a-zA-Z0-9_-]+/g) ?? [];
-  for (const token of tokens) {
-    const key = normalizeMentionAlias(token.slice(1));
+  for (const token of extractStandaloneMentionTokens(text)) {
+    const key = normalizeMentionAlias(token);
     if (!key) {
       continue;
     }
