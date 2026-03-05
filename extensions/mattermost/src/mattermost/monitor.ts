@@ -29,7 +29,7 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount } from "./accounts.js";
+import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
@@ -664,10 +664,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const baseSessionKey = route.sessionKey;
     const threadRootId = post.root_id?.trim() || undefined;
+    const replyToMode = resolveMattermostReplyToMode(account, kind);
+    const effectiveReplyToId =
+      threadRootId ??
+      (kind !== "direct" && (replyToMode === "all" || replyToMode === "first")
+        ? post.id
+        : undefined);
     const threadKeys = resolveThreadSessionKeys({
       baseSessionKey,
-      threadId: threadRootId,
-      parentSessionKey: threadRootId ? baseSessionKey : undefined,
+      threadId: effectiveReplyToId,
+      parentSessionKey: effectiveReplyToId ? baseSessionKey : undefined,
     });
     const sessionKey = threadKeys.sessionKey;
     const historyKey = kind === "direct" ? null : sessionKey;
@@ -838,8 +844,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
       MessageSidLast:
         allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
-      ReplyToId: threadRootId,
-      MessageThreadId: threadRootId,
+      ReplyToId: effectiveReplyToId,
+      MessageThreadId: effectiveReplyToId,
       Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
       WasMentioned: kind !== "direct" ? effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
@@ -891,7 +897,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const typingCallbacks = createTypingCallbacks({
-      start: () => sendTypingIndicator(channelId, threadRootId),
+      start: () => sendTypingIndicator(channelId, effectiveReplyToId),
       onStartError: (err) => {
         logTypingFailure({
           log: (message) => logger.debug?.(message),
@@ -922,7 +928,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
               await sendMessageMattermost(to, chunk, {
                 accountId: account.accountId,
-                replyToId: threadRootId,
+                replyToId: effectiveReplyToId,
               });
             }
           } else {
@@ -933,7 +939,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await sendMessageMattermost(to, caption, {
                 accountId: account.accountId,
                 mediaUrl,
-                replyToId: threadRootId,
+                replyToId: effectiveReplyToId,
               });
             }
           }
