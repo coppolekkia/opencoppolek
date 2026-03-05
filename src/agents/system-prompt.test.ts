@@ -350,7 +350,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
   });
 
-  it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
+  it("shows datetime and timezone for 12h, 24h, and timezone-only modes", () => {
     const cases = [
       {
         name: "12-hour",
@@ -360,6 +360,7 @@ describe("buildAgentSystemPrompt", () => {
           userTime: "Monday, January 5th, 2026 — 3:26 PM",
           userTimeFormat: "12" as const,
         },
+        expectTime: "Monday, January 5th, 2026 — 3:26 PM",
       },
       {
         name: "24-hour",
@@ -369,14 +370,16 @@ describe("buildAgentSystemPrompt", () => {
           userTime: "Monday, January 5th, 2026 — 15:26",
           userTimeFormat: "24" as const,
         },
+        expectTime: "Monday, January 5th, 2026 — 15:26",
       },
       {
-        name: "timezone-only",
+        name: "timezone-only (no userTime)",
         params: {
           workspaceDir: "/tmp/openclaw",
           userTimezone: "America/Chicago",
           userTimeFormat: "24" as const,
         },
+        expectTime: undefined,
       },
     ] as const;
 
@@ -384,26 +387,19 @@ describe("buildAgentSystemPrompt", () => {
       const prompt = buildAgentSystemPrompt(testCase.params);
       expect(prompt, testCase.name).toContain("## Current Date & Time");
       expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
+      if (testCase.expectTime) {
+        expect(prompt, testCase.name).toContain(`Current date and time: ${testCase.expectTime}`);
+      }
     }
   });
 
-  it("hints to use session_status for current date/time", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/clawd",
-      userTimezone: "America/Chicago",
-    });
-
-    expect(prompt).toContain("session_status");
-    expect(prompt).toContain("current date");
-  });
-
-  // The system prompt intentionally does NOT include the current date/time.
-  // Only the timezone is included, to keep the prompt stable for caching.
-  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
-  // Agents should use session_status or message timestamps to determine the date/time.
-  // Related: https://github.com/moltbot/moltbot/issues/1897
-  //          https://github.com/moltbot/moltbot/issues/3658
-  it("does NOT include a date or time in the system prompt (cache stability)", () => {
+  // The system prompt includes the pre-formatted userTime (minute-level granularity,
+  // no seconds) to give agents immediate temporal awareness without a tool call.
+  // This is a deliberate trade-off: prompt cache invalidates once per minute, but
+  // agents can reason about time-sensitive tasks without calling session_status first.
+  // The datetime is computed by formatUserTime() which respects the user's 12/24h
+  // preference and does not include seconds.
+  it("includes userTime in the system prompt when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
@@ -411,15 +407,21 @@ describe("buildAgentSystemPrompt", () => {
       userTimeFormat: "12",
     });
 
-    // The prompt should contain the timezone but NOT the formatted date/time string.
-    // This is intentional for prompt cache stability — the date/time was removed in
-    // commit 66eec295b. If you're here because you want to add it back, please see
-    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
-    // gateway-level timestamp injection into messages, not the system prompt.
+    expect(prompt).toContain("Current date and time: Monday, January 5th, 2026 — 3:26 PM");
     expect(prompt).toContain("Time zone: America/Chicago");
-    expect(prompt).not.toContain("Monday, January 5th, 2026");
-    expect(prompt).not.toContain("3:26 PM");
-    expect(prompt).not.toContain("15:26");
+    // The old hint to call session_status for date/time is no longer needed
+    expect(prompt).not.toContain("If you need the current date");
+  });
+
+  it("falls back to timezone-only when userTime is not provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      userTimezone: "America/Chicago",
+    });
+
+    expect(prompt).toContain("## Current Date & Time");
+    expect(prompt).toContain("Time zone: America/Chicago");
+    expect(prompt).not.toContain("Current date and time:");
   });
 
   it("includes model alias guidance when aliases are provided", () => {
