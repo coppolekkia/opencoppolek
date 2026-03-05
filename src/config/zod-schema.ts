@@ -537,6 +537,8 @@ export const OpenClawSchema = z
         wideArea: z
           .object({
             enabled: z.boolean().optional(),
+            /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
+            domain: z.string().optional(),
           })
           .strict()
           .optional(),
