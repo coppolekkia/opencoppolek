@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginInstallDir } from "./install.js";
@@ -11,6 +12,7 @@ export type UninstallActions = {
   allowlist: boolean;
   loadPath: boolean;
   memorySlot: boolean;
+  channelConfig: boolean;
   directory: boolean;
 };
 
@@ -72,6 +74,7 @@ export function removePluginFromConfig(
     allowlist: false,
     loadPath: false,
     memorySlot: false,
+    channelConfig: false,
   };
 
   const pluginsConfig = cfg.plugins ?? {};
@@ -155,9 +158,19 @@ export function removePluginFromConfig(
     delete cleanedPlugins.slots;
   }
 
+  // Remove channel config entry (channels.<pluginId> or channels.<builtInId>)
+  const channelId = normalizeChatChannelId(pluginId) ?? pluginId;
+  let channels = cfg.channels as Record<string, unknown> | undefined;
+  if (channels && channelId in channels) {
+    const { [channelId]: _, ...rest } = channels;
+    channels = Object.keys(rest).length > 0 ? rest : undefined;
+    actions.channelConfig = true;
+  }
+
   const config: OpenClawConfig = {
     ...cfg,
     plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+    channels: channels as OpenClawConfig["channels"],
   };
 
   return { config, actions };
