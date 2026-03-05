@@ -249,6 +249,27 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).toBe(input);
   });
 
+  it("preserves long all-letter hex tokens for copy safety", () => {
+    const input = "deadbeefcafebabe".repeat(3);
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long hex tokens for copy safety", () => {
+    const input = "3ec1311e304d0b34d59fd8a4d4add0a8a3f8eba2d85c1a25";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long all-digit hex tokens for copy safety", () => {
+    const input = "1234567890".repeat(4);
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
   it("wraps rtl lines with directional isolation marks", () => {
     const input = "مرحبا بالعالم";
     const sanitized = sanitizeRenderableText(input);
