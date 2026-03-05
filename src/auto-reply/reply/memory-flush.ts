@@ -14,6 +14,7 @@ export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
   "Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).",
   "IMPORTANT: If the file already exists, APPEND new content only and do not overwrite existing entries.",
+  "Never create timestamped variant files (for example memory/YYYY-MM-DD-HHMM.md); always append to memory/YYYY-MM-DD.md.",
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 
