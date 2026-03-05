@@ -996,9 +996,11 @@ export function startHeartbeatRunner(opts: {
     runtime,
     agents: new Map<string, HeartbeatAgentState>(),
     timer: null as NodeJS.Timeout | null,
+    watchdog: null as NodeJS.Timeout | null,
     stopped: false,
   };
   let initialized = false;
+  const WATCHDOG_INTERVAL_MS = 60_000;
 
   const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
     if (typeof prevState?.lastRunMs === "number") {
@@ -1013,6 +1015,25 @@ export function startHeartbeatRunner(opts: {
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunMs = now;
     agent.nextDueMs = now + agent.intervalMs;
+  };
+
+  const armWatchdog = () => {
+    if (state.watchdog || state.stopped) {
+      return;
+    }
+    state.watchdog = setInterval(() => {
+      if (state.stopped || state.agents.size === 0) {
+        return;
+      }
+      const now = Date.now();
+      for (const agent of state.agents.values()) {
+        if (now >= agent.nextDueMs) {
+          requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+          return;
+        }
+      }
+    }, WATCHDOG_INTERVAL_MS);
+    state.watchdog.unref?.();
   };
 
   const scheduleNext = () => {
@@ -1041,7 +1062,7 @@ export function startHeartbeatRunner(opts: {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, delay);
-    state.timer.unref?.();
+    armWatchdog();
   };
 
   const updateConfig = (cfg: OpenClawConfig) => {
@@ -1212,6 +1233,10 @@ export function startHeartbeatRunner(opts: {
       clearTimeout(state.timer);
     }
     state.timer = null;
+    if (state.watchdog) {
+      clearInterval(state.watchdog);
+    }
+    state.watchdog = null;
   };
 
   opts.abortSignal?.addEventListener("abort", cleanup, { once: true });
