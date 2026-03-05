@@ -426,4 +426,30 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
+
+  it("suppresses duplicate local final text after a non-local final", () => {
+    const { state, chatLog, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-external",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "same reply" }] },
+    });
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("same reply", "run-external");
+
+    noteLocalRunId("run-local");
+    chatLog.finalizeAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-local",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "same reply" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+  });
 });

@@ -47,6 +47,14 @@ export function createEventHandlers(context: EventHandlerContext) {
   const sessionRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
+  let lastRenderedAssistantFinal:
+    | {
+        runId: string;
+        text: string;
+        isLocalRun: boolean;
+        ts: number;
+      }
+    | undefined;
 
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
@@ -79,6 +87,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRuns.clear();
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
+    lastRenderedAssistantFinal = undefined;
     clearLocalRunIds?.();
   };
 
@@ -177,6 +186,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "final") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
+      const isLocalRun = Boolean(isLocalRunId?.(evt.runId));
       if (!evt.message) {
         maybeRefreshHistoryForRun(evt.runId);
         chatLog.dropAssistant(evt.runId);
@@ -203,12 +213,28 @@ export function createEventHandlers(context: EventHandlerContext) {
           : "";
 
       const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
-      const suppressEmptyExternalPlaceholder =
-        finalText === "(no output)" && !isLocalRunId?.(evt.runId);
-      if (suppressEmptyExternalPlaceholder) {
+      const shouldSuppressDuplicateLocalFinal = Boolean(
+        isLocalRun &&
+        lastRenderedAssistantFinal &&
+        !lastRenderedAssistantFinal.isLocalRun &&
+        lastRenderedAssistantFinal.text === finalText &&
+        Date.now() - lastRenderedAssistantFinal.ts <= 2_000,
+      );
+      const suppressEmptyExternalPlaceholder = finalText === "(no output)" && !isLocalRun;
+      if (shouldSuppressDuplicateLocalFinal) {
+        // Some gateways can emit a non-local finalized run followed by the local
+        // client run final with identical text. Avoid rendering the same assistant
+        // reply twice in TUI while still finalizing run state.
+      } else if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
         chatLog.finalizeAssistant(finalText, evt.runId);
+        lastRenderedAssistantFinal = {
+          runId: evt.runId,
+          text: finalText,
+          isLocalRun,
+          ts: Date.now(),
+        };
       }
       finalizeRun({
         runId: evt.runId,
