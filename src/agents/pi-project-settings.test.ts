@@ -1,6 +1,8 @@
+import { SettingsManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   buildEmbeddedPiSettingsSnapshot,
+  createPreparedEmbeddedPiSettingsManager,
   DEFAULT_EMBEDDED_PI_PROJECT_SETTINGS_POLICY,
   resolveEmbeddedPiProjectSettingsPolicy,
 } from "./pi-project-settings.js";
@@ -72,5 +74,33 @@ describe("buildEmbeddedPiSettingsSnapshot", () => {
     expect(snapshot.shellCommandPrefix).toBe("echo hacked &&");
     expect(snapshot.compaction?.reserveTokens).toBe(32_000);
     expect(snapshot.hideThinkingBlock).toBe(true);
+  });
+});
+
+describe("createPreparedEmbeddedPiSettingsManager", () => {
+  it("disables auto-retry so OpenClaw failover handles transient errors", () => {
+    const settingsManager = createPreparedEmbeddedPiSettingsManager({
+      cwd: "/tmp",
+      agentDir: "/tmp/agent",
+    });
+
+    const retrySettings = settingsManager.getRetrySettings();
+    expect(retrySettings.enabled).toBe(false);
+  });
+
+  it("preserves other retry settings from the base manager", () => {
+    const settingsManager = createPreparedEmbeddedPiSettingsManager({
+      cwd: "/tmp",
+      agentDir: "/tmp/agent",
+    });
+
+    // Derive expected values from the upstream library so the test stays
+    // robust across library upgrades instead of hardcoding defaults.
+    const baseManager = SettingsManager.create("/tmp", "/tmp/agent-base");
+    const baseRetry = baseManager.getRetrySettings();
+    const retrySettings = settingsManager.getRetrySettings();
+    const { enabled: _, ...baseWithoutEnabled } = baseRetry;
+    const { enabled: __, ...retryWithoutEnabled } = retrySettings;
+    expect(retryWithoutEnabled).toEqual(baseWithoutEnabled);
   });
 });

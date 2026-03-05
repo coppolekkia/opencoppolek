@@ -71,5 +71,15 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
     settingsManager,
     cfg: params.cfg,
   });
+  // Disable pi-coding-agent auto-retry for embedded runs. OpenClaw's own
+  // failover system (auth-profile rotation + model fallback) handles
+  // transient errors. The library's internal auto-retry consumes
+  // overloaded/529 errors before the failover classifier sees them,
+  // masking the original error as a timeout abort (#34535).
+  const baseGetRetrySettings = settingsManager.getRetrySettings.bind(settingsManager);
+  settingsManager.getRetrySettings = () => ({
+    ...baseGetRetrySettings(),
+    enabled: false,
+  });
   return settingsManager;
 }
