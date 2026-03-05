@@ -35,6 +35,17 @@ function makeLegacyToolResult(id: string, text: string): AgentMessage {
   });
 }
 
+function makeMalformedToolResultTextBlock(id: string): AgentMessage {
+  return castAgentMessage({
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "read",
+    content: [{ type: "text" }],
+    isError: false,
+    timestamp: Date.now(),
+  });
+}
+
 function makeToolResultWithDetails(id: string, text: string, detailText: string): AgentMessage {
   return castAgentMessage({
     role: "toolResult",
@@ -267,5 +278,20 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(oldResult.details).toBeUndefined();
     expect(newResult.details).toBeUndefined();
+  });
+
+  it("does not throw on malformed toolResult text blocks missing text", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [makeUser("hello"), makeMalformedToolResultTextBlock("call_bad")];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).resolves.toBeDefined();
   });
 });
