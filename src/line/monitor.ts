@@ -11,6 +11,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
+import { probeLineBot } from "./probe.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import {
   replyMessageLine,
@@ -151,12 +152,20 @@ export async function monitorLineProvider(
   });
 
   // Create the bot
+  let botUserId: string | undefined;
+  try {
+    const probe = await probeLineBot(token, 2500);
+    botUserId = probe.ok ? probe.bot?.userId?.trim() || undefined : undefined;
+  } catch {
+    botUserId = undefined;
+  }
   const bot = createLineBot({
     channelAccessToken: token,
     channelSecret: secret,
     accountId,
     runtime,
     config,
+    botUserId,
     onMessage: async (ctx) => {
       if (!ctx) {
         return;
