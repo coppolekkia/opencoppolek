@@ -68,6 +68,35 @@ describe("inbound-path-policy", () => {
     ]);
   });
 
+  it("rejects path traversal via .. segments", () => {
+    const roots = ["/Users/*/Library/Messages/Attachments"];
+    expect(
+      isInboundPathAllowed({
+        filePath: "/Users/alice/Library/Messages/Attachments/../../../etc/passwd",
+        roots,
+      }),
+    ).toBe(false);
+    expect(
+      isInboundPathAllowed({
+        filePath: "/Users/alice/Library/Messages/Attachments/../../alice/.ssh/id_rsa",
+        roots,
+      }),
+    ).toBe(false);
+    expect(
+      isInboundPathAllowed({
+        filePath: "/Users/alice/Library/Messages/../../../etc/shadow",
+        roots,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects empty and relative paths", () => {
+    const roots = ["/Users/*/Library/Messages/Attachments"];
+    expect(isInboundPathAllowed({ filePath: "", roots })).toBe(false);
+    expect(isInboundPathAllowed({ filePath: "relative/path.jpg", roots })).toBe(false);
+    expect(isInboundPathAllowed({ filePath: "./local/file.txt", roots })).toBe(false);
+  });
+
   it("falls back to default iMessage roots", () => {
     const cfg = {} as OpenClawConfig;
     expect(resolveIMessageAttachmentRoots({ cfg })).toEqual([...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS]);
