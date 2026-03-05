@@ -169,6 +169,59 @@ describe("ws connect policy", () => {
         isLocalClient: false,
       }).kind,
     ).toBe("allow");
+
+    // dangerouslyDisableDeviceAuth + authOk=true should allow even when sharedAuthOk=false.
+    // This covers auth modes (e.g. mode=none, trusted-proxy) where authOk is true but
+    // sharedAuthOk stays false, which would otherwise cause roleCanSkipDeviceIdentity to
+    // fail and produce a spurious "device identity required" rejection.
+    const controlUiBypass = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: controlUiBypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: true,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
+    // dangerouslyDisableDeviceAuth + authOk=true should allow on remote clients too.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: controlUiBypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: true,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
+    // dangerouslyDisableDeviceAuth with authOk=false should still reject.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: controlUiBypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("reject-unauthorized");
   });
 
   test("pairing bypass requires control-ui bypass + shared auth (or trusted-proxy auth)", () => {

@@ -82,6 +82,14 @@ export function evaluateMissingDeviceIdentity(params: {
   if (params.isControlUi && params.trustedProxyAuthOk) {
     return { kind: "allow" };
   }
+  // When dangerouslyDisableDeviceAuth=true (allowBypass), device identity is explicitly
+  // disabled. If authentication has already succeeded via any method (authOk=true), allow
+  // the connection without requiring device identity. This handles auth methods that succeed
+  // (e.g. mode=none, trusted-proxy) but don't set sharedAuthOk, which would otherwise
+  // cause roleCanSkipDeviceIdentity() to fail and produce a false "device identity required".
+  if (params.isControlUi && params.controlUiAuthPolicy.allowBypass && params.authOk) {
+    return { kind: "allow" };
+  }
   if (params.isControlUi && !params.controlUiAuthPolicy.allowBypass) {
     // Allow localhost Control UI connections when allowInsecureAuth is configured.
     // Localhost has no network interception risk, and browser SubtleCrypto
