@@ -11,11 +11,15 @@ type ResolveParams = Parameters<typeof resolveWhatsAppOutboundTarget>[0];
 const PRIMARY_TARGET = "+11234567890";
 const SECONDARY_TARGET = "+19876543210";
 
-function expectResolutionError(params: ResolveParams) {
+function expectResolutionError(params: ResolveParams, expectedMessage?: string) {
   const result = resolveWhatsAppOutboundTarget(params);
   expect(result.ok).toBe(false);
   if (result.ok) {
     throw new Error("expected resolution to fail");
+  }
+  if (expectedMessage) {
+    expect(result.error.message).toContain(expectedMessage);
+    return;
   }
   expect(result.error.message).toContain("WhatsApp");
 }
@@ -53,12 +57,16 @@ function expectDeniedForTarget(params: {
   allowFrom: ResolveParams["allowFrom"];
   mode: ResolveParams["mode"];
   to?: string;
+  expectedMessage?: string;
 }) {
-  expectResolutionError({
-    to: params.to ?? PRIMARY_TARGET,
-    allowFrom: params.allowFrom,
-    mode: params.mode,
-  });
+  expectResolutionError(
+    {
+      to: params.to ?? PRIMARY_TARGET,
+      allowFrom: params.allowFrom,
+      mode: params.mode,
+    },
+    params.expectedMessage,
+  );
 }
 
 describe("resolveWhatsAppOutboundTarget", () => {
@@ -134,9 +142,13 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectAllowedForTarget({ allowFrom: [PRIMARY_TARGET], mode: "implicit" });
     });
 
-    it("denies message when target is not in allowList", () => {
+    it("denies message when target is not in allowList with allowFrom policy error", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
-      expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "implicit" });
+      expectDeniedForTarget({
+        allowFrom: [SECONDARY_TARGET],
+        mode: "implicit",
+        expectedMessage: "allowFrom policy",
+      });
     });
 
     it("handles mixed numeric and string allowList entries", () => {
@@ -172,9 +184,13 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectAllowedForTarget({ allowFrom: [PRIMARY_TARGET], mode: "heartbeat" });
     });
 
-    it("denies message when target is not in allowList in heartbeat mode", () => {
+    it("denies message when target is not in allowList in heartbeat mode with allowFrom policy error", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
-      expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "heartbeat" });
+      expectDeniedForTarget({
+        allowFrom: [SECONDARY_TARGET],
+        mode: "heartbeat",
+        expectedMessage: "allowFrom policy",
+      });
     });
   });
 
@@ -189,9 +205,13 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectAllowedForTarget({ allowFrom: undefined, mode: undefined });
     });
 
-    it("enforces allowList in custom mode string", () => {
+    it("enforces allowList in custom mode string with allowFrom policy error", () => {
       mockNormalizedDirectMessage(SECONDARY_TARGET, PRIMARY_TARGET);
-      expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "broadcast" });
+      expectDeniedForTarget({
+        allowFrom: [SECONDARY_TARGET],
+        mode: "broadcast",
+        expectedMessage: "allowFrom policy",
+      });
     });
 
     it("allows message in custom mode string when target is in allowList", () => {
