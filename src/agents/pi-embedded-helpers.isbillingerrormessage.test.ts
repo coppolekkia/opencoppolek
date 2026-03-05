@@ -493,6 +493,10 @@ describe("classifyFailoverReason", () => {
     ).toBe("rate_limit");
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
+    // Billing with "limit exhausted" must stay billing, not rate_limit (avoids key-disable regression)
+    expect(
+      classifyFailoverReason("HTTP 402 payment required. Your limit exhausted for this plan."),
+    ).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
     expect(classifyFailoverReason("Connection error.")).toBe("timeout");
@@ -533,6 +537,15 @@ describe("classifyFailoverReason", () => {
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
     ).toBe("rate_limit");
+  });
+  it("classifies zhipuai Weekly/Monthly Limit Exhausted as rate_limit", () => {
+    expect(
+      classifyFailoverReason(
+        "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54 (request_id: 20260303141547610b7f574d1b44cb)",
+      ),
+    ).toBe("rate_limit");
+    // Independent coverage for /weekly\/monthly limit/i (no generic "limit exhausted")
+    expect(classifyFailoverReason("LLM error: weekly/monthly limit reached")).toBe("rate_limit");
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
