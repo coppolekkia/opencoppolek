@@ -760,7 +760,9 @@ export function attachGatewayUpgradeHandler(opts: {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
       });
-    })().catch(() => {
+    })().catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error(`gateway: WebSocket upgrade failed: ${String(err)}`);
       socket.destroy();
     });
   });

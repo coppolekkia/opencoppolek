@@ -98,6 +98,10 @@ export function removeAckReactionAfterReply(params: {
     if (!didAck) {
       return;
     }
-    params.remove().catch((err) => params.onError?.(err));
+    params.remove().catch((err) => {
+      if (params.onError) {
+        params.onError(err);
+      }
+    });
   });
 }
