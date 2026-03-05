@@ -218,6 +218,38 @@ function unwrapLoadedSkills(loaded: unknown): Skill[] {
   return [];
 }
 
+function isDirectory(targetPath: string): boolean {
+  try {
+    return fs.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function resolveManagedSkillsDir(params: {
+  workspaceDir: string;
+  managedSkillsDir?: string;
+}): string {
+  const configured =
+    params.managedSkillsDir && params.managedSkillsDir.trim()
+      ? path.resolve(params.managedSkillsDir)
+      : path.join(CONFIG_DIR, "skills");
+  const workspaceSkillsDir = path.resolve(params.workspaceDir, "skills");
+  const sharedSiblingSkillsDir = path.resolve(params.workspaceDir, "..", "skills");
+
+  // Sub-agent environments can incorrectly resolve managed skills to <workspace>/skills.
+  // Prefer the shared sibling state dir (<state>/skills) when it exists.
+  if (
+    (configured === workspaceSkillsDir || !isDirectory(configured)) &&
+    sharedSiblingSkillsDir !== configured &&
+    isDirectory(sharedSiblingSkillsDir)
+  ) {
+    return sharedSiblingSkillsDir;
+  }
+
+  return configured;
+}
+
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
@@ -321,7 +353,10 @@ function loadSkillEntries(
     return loadedSkills;
   };
 
-  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const managedSkillsDir = resolveManagedSkillsDir({
+    workspaceDir,
+    managedSkillsDir: opts?.managedSkillsDir,
+  });
   const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
