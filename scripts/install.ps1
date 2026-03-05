@@ -296,8 +296,9 @@ function Main {
         }
     } else {
         # npm method
-        if (!(Ensure-Git)) {
-            Write-Host "Git is required for npm installs. Please install Git and try again." -Level warn
+        if (!(Get-GitVersion)) {
+            Write-Host "Git is required for npm installs. Install Git for Windows from: https://git-scm.com/download/win, then re-run this installer." -Level error
+            exit 1
         }
         
         if ($DryRun) {
