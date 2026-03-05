@@ -101,6 +101,10 @@ export type CompactEmbeddedPiSessionParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** Sender identity for plugin hooks (e.g. trust classification). */
+  senderId?: string | null;
+  /** Sender display name for plugin hooks. */
+  senderName?: string | null;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   sessionFile: string;
@@ -377,6 +381,8 @@ export async function compactEmbeddedPiSessionDirect(
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
       senderIsOwner: params.senderIsOwner,
       agentDir,
       workspaceDir: effectiveWorkspace,
@@ -631,6 +637,11 @@ export async function compactEmbeddedPiSessionDirect(
           sessionId: params.sessionId,
           workspaceDir: params.workspaceDir,
           messageProvider: params.messageChannel ?? params.messageProvider,
+          senderId: params.senderId ?? null,
+          senderName: params.senderName ?? null,
+          senderIsOwner: params.senderIsOwner,
+          groupId: params.groupId ?? null,
+          spawnedBy: params.spawnedBy ?? null,
         };
         if (hookRunner?.hasHooks("before_compaction")) {
           hookRunner
