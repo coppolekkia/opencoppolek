@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
@@ -274,6 +275,19 @@ export const SECTION_META: Record<string, { label: string; description: string }
   plugins: { label: "Plugins", description: "Plugin management and extensions" },
 };
 
+// Resolve section label/description from i18n, falling back to SECTION_META
+function resolveI18nSectionMeta(key: string): { label: string; description: string } {
+  const label = t(`configView.sectionMeta.${key}.label`);
+  const desc = t(`configView.sectionMeta.${key}.description`);
+  const hasI18n = label !== `configView.sectionMeta.${key}.label`;
+  if (hasI18n) {
+    return { label, description: desc };
+  }
+  return (
+    SECTION_META[key] ?? { label: key.charAt(0).toUpperCase() + key.slice(1), description: "" }
+  );
+}
+
 function getSectionIcon(key: string) {
   return sectionIcons[key as keyof typeof sectionIcons] ?? sectionIcons.default;
 }
@@ -290,7 +304,7 @@ function matchesSearch(params: {
   }
   const criteria = parseConfigSearchQuery(params.query);
   const q = criteria.text;
-  const meta = SECTION_META[params.key];
+  const meta = resolveI18nSectionMeta(params.key);
 
   // Check key name
   if (q && params.key.toLowerCase().includes(q)) {
@@ -298,7 +312,7 @@ function matchesSearch(params: {
   }
 
   // Check label and description
-  if (q && meta) {
+  if (q) {
     if (meta.label.toLowerCase().includes(q)) {
       return true;
     }
@@ -438,10 +452,7 @@ export function renderConfigForm(props: ConfigFormProps) {
             `;
             })()
           : filteredEntries.map(([key, node]) => {
-              const meta = SECTION_META[key] ?? {
-                label: key.charAt(0).toUpperCase() + key.slice(1),
-                description: node.description ?? "",
-              };
+              const meta = resolveI18nSectionMeta(key);
 
               return html`
               <section class="config-section-card" id="config-section-${key}">
