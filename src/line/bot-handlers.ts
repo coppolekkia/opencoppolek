@@ -8,7 +8,14 @@ import type {
   PostbackEvent,
 } from "@line/bot-sdk";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
+import {
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+  type HistoryEntry,
+} from "../auto-reply/reply/history.js";
+import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -64,6 +71,8 @@ export interface LineHandlerContext {
   mediaMaxBytes: number;
   processMessage: (ctx: LineInboundContext) => Promise<void>;
   replayCache?: LineWebhookReplayCache;
+  groupHistories?: Map<string, HistoryEntry[]>;
+  historyLimit?: number;
 }
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
@@ -399,6 +408,36 @@ async function shouldProcessLineEvent(
   return { allowed: true, commandAuthorized: commandGate.commandAuthorized };
 }
 
+/**
+ * Detect whether the bot was @mentioned in a LINE text message.
+ * LINE webhook payloads include `mention.mentionees` on text messages with
+ * `isSelf: true` for the bot and `type: "all"` for @All mentions.
+ * The `@line/bot-sdk` types don't expose these fields, so we use a type assertion.
+ */
+/** Extract the mentionees array from a LINE text message (SDK types omit it). */
+function getLineMentionees(
+  message: MessageEvent["message"],
+): Array<{ type?: string; isSelf?: boolean }> {
+  if (message.type !== "text") {
+    return [];
+  }
+  const mentionees = (
+    message as Record<string, unknown> & {
+      mention?: { mentionees?: Array<{ type?: string; isSelf?: boolean }> };
+    }
+  ).mention?.mentionees;
+  return Array.isArray(mentionees) ? mentionees : [];
+}
+
+function isLineBotMentioned(message: MessageEvent["message"]): boolean {
+  return getLineMentionees(message).some((m) => m.isSelf === true || m.type === "all");
+}
+
+/** True when *any* @mention exists (bot or other users). */
+function hasAnyLineMention(message: MessageEvent["message"]): boolean {
+  return getLineMentionees(message).length > 0;
+}
+
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
   if (event.type === "message") {
     const msg = event.message;
@@ -420,6 +459,55 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const decision = await shouldProcessLineEvent(event, context);
   if (!decision.allowed) {
     return;
+  }
+
+  // Mention gating: skip group messages that don't @mention the bot when required.
+  // Default requireMention to true (consistent with all other channels) unless
+  // the group config explicitly sets it to false.
+  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  if (isGroup) {
+    const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
+    const requireMention = groupConfig?.requireMention !== false;
+    const rawText = message.type === "text" ? message.text : "";
+    const mentionRegexes = buildMentionRegexes(cfg);
+    const wasMentionedByNative = isLineBotMentioned(message);
+    const wasMentionedByPattern =
+      message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
+    const wasMentioned = wasMentionedByNative || wasMentionedByPattern;
+    const mentionGate = resolveMentionGatingWithBypass({
+      isGroup: true,
+      requireMention,
+      // Only text messages carry mention metadata; non-text (image/video/etc.)
+      // cannot be gated on mentions, so we let them through.
+      canDetectMention: message.type === "text",
+      wasMentioned,
+      hasAnyMention: hasAnyLineMention(message),
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommand(rawText, cfg),
+      commandAuthorized: decision.commandAuthorized,
+    });
+    if (mentionGate.shouldSkip) {
+      logVerbose(`line: skipping group message (requireMention, not mentioned)`);
+      // Store as pending history so the agent has context when later mentioned.
+      const historyKey = groupId ?? roomId;
+      const senderId =
+        event.source.type === "group" || event.source.type === "room"
+          ? (event.source.userId ?? "unknown")
+          : "unknown";
+      if (historyKey && context.groupHistories) {
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: context.groupHistories,
+          historyKey,
+          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+          entry: {
+            sender: `user:${senderId}`,
+            body: rawText || `<${message.type}>`,
+            timestamp: event.timestamp,
+          },
+        });
+      }
+      return;
+    }
   }
 
   // Download media if applicable
@@ -449,6 +537,8 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     cfg,
     account,
     commandAuthorized: decision.commandAuthorized,
+    groupHistories: context.groupHistories,
+    historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   });
 
   if (!messageContext) {
