@@ -184,4 +184,31 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts channels.signal.accountUuid in strict schema validation", () => {
+    const res = validateConfigObject({
+      channels: {
+        signal: {
+          accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects channels.signal.accountUuid when not a UUID", () => {
+    const res = validateConfigObject({
+      channels: {
+        signal: {
+          accountUuid: "not-a-uuid",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "channels.signal.accountUuid")).toBe(true);
+    }
+  });
 });
