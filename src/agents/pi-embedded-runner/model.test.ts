@@ -278,6 +278,98 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("prefers configured provider api metadata over discovered registry model", () => {
+    mockDiscoveredModel({
+      provider: "onehub",
+      modelId: "glm-5",
+      templateModel: {
+        id: "glm-5",
+        name: "GLM-5 (cached)",
+        provider: "onehub",
+        api: "anthropic-messages",
+        baseUrl: "https://old-provider.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          onehub: {
+            baseUrl: "http://new-provider.example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("glm-5"),
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 198000,
+                maxTokens: 16000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("onehub", "glm-5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "onehub",
+      id: "glm-5",
+      api: "openai-completions",
+      baseUrl: "http://new-provider.example.com/v1",
+      reasoning: true,
+      contextWindow: 198000,
+      maxTokens: 16000,
+    });
+  });
+
+  it("prefers exact provider key over normalized alias when both are configured", () => {
+    mockDiscoveredModel({
+      provider: "zai",
+      modelId: "glm-4.7",
+      templateModel: buildForwardCompatTemplate({
+        id: "glm-4.7",
+        name: "GLM-4.7",
+        provider: "zai",
+        api: "openai-completions",
+        baseUrl: "https://registry-zai.example.com/v1",
+        input: ["text"],
+      }),
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "z.ai": {
+            baseUrl: "https://alias-z-ai.example.com/v1",
+            headers: { "X-Provider-Key": "alias" },
+            models: [],
+          },
+          zai: {
+            baseUrl: "https://canonical-zai.example.com/v1",
+            headers: { "X-Provider-Key": "exact" },
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("zai", "glm-4.7", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.baseUrl).toBe("https://canonical-zai.example.com/v1");
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Provider-Key": "exact",
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
     mockOpenAICodexTemplateModel();
 
