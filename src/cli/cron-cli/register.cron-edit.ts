@@ -168,9 +168,14 @@ export function registerCronEditCommand(cron: Command) {
             }
             patch.schedule = { kind: "at", at: atIso };
           } else if (opts.every) {
-            const everyMs = parseDurationMs(String(opts.every));
-            if (!everyMs) {
+            let everyMs: number;
+            try {
+              everyMs = parseDurationMs(String(opts.every));
+            } catch {
               throw new Error("Invalid --every");
+            }
+            if (!everyMs) {
+              throw new Error("--every must be positive; use e.g. 10m, 1h, 1d");
             }
             patch.schedule = { kind: "every", everyMs };
           } else if (opts.cron) {
@@ -314,8 +319,10 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.to = to ? to : undefined;
             }
             if (hasFailureAlertCooldown) {
-              const cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
-              if (!cooldownMs && cooldownMs !== 0) {
+              let cooldownMs: number;
+              try {
+                cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+              } catch {
                 throw new Error("Invalid --failure-alert-cooldown.");
               }
               failureAlert.cooldownMs = cooldownMs;

@@ -124,9 +124,14 @@ export function registerCronAddCommand(cron: Command) {
               return { kind: "at" as const, at: atIso };
             }
             if (every) {
-              const everyMs = parseDurationMs(every);
-              if (!everyMs) {
+              let everyMs: number;
+              try {
+                everyMs = parseDurationMs(every);
+              } catch {
                 throw new Error("Invalid --every; use e.g. 10m, 1h, 1d");
+              }
+              if (!everyMs) {
+                throw new Error("--every must be positive; use e.g. 10m, 1h, 1d");
               }
               return { kind: "every" as const, everyMs };
             }
