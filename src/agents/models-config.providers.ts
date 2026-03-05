@@ -54,6 +54,14 @@ import {
 } from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 
+/**
+ * Sentinel value written to models.json instead of a real API key when the
+ * auth source is an exec/file SecretRef that cannot be resolved synchronously.
+ * The runtime async path (resolveApiKeyForProvider) handles actual credential
+ * resolution at request time.  See #34335.
+ */
+export const REDACTED_API_KEY_SENTINEL = "__redacted__";
+
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
@@ -421,6 +429,12 @@ function resolveApiKeyFromProfiles(params: {
       if (keyRef?.source === "env" && keyRef.id.trim()) {
         return keyRef.id.trim();
       }
+      // exec/file SecretRefs cannot be resolved synchronously.
+      // Return a sentinel so normalizeProviders knows auth is configured
+      // without persisting the actual secret to models.json (#34335).
+      if (keyRef?.source === "exec" || keyRef?.source === "file") {
+        return REDACTED_API_KEY_SENTINEL;
+      }
       continue;
     }
     if (cred.type === "token") {
@@ -430,6 +444,9 @@ function resolveApiKeyFromProfiles(params: {
       const tokenRef = coerceSecretRef(cred.tokenRef);
       if (tokenRef?.source === "env" && tokenRef.id.trim()) {
         return tokenRef.id.trim();
+      }
+      if (tokenRef?.source === "exec" || tokenRef?.source === "file") {
+        return REDACTED_API_KEY_SENTINEL;
       }
       continue;
     }
