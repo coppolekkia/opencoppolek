@@ -18,6 +18,7 @@ vi.mock("../../globals.js", () => ({
 }));
 
 const {
+  __getDiscordChannelInfoCacheSizeForTest,
   __resetDiscordChannelInfoCacheForTest,
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
@@ -705,5 +706,22 @@ describe("resolveDiscordChannelInfo", () => {
     expect(first).toBeNull();
     expect(second).toBeNull();
     expect(fetchChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds the channel info cache and evicts the oldest entry", async () => {
+    const fetchChannel = vi.fn().mockImplementation(async (channelId: string) => ({
+      type: ChannelType.DM,
+      name: channelId,
+    }));
+    const client = { fetchChannel } as unknown as Client;
+
+    for (let idx = 0; idx < 501; idx += 1) {
+      await resolveDiscordChannelInfo(client, `cache-cap-${idx}`);
+    }
+
+    expect(__getDiscordChannelInfoCacheSizeForTest()).toBeLessThanOrEqual(500);
+    await resolveDiscordChannelInfo(client, "cache-cap-0");
+
+    expect(fetchChannel).toHaveBeenCalledTimes(502);
   });
 });

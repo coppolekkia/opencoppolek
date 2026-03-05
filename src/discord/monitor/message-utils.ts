@@ -95,6 +95,7 @@ type DiscordMessageSnapshot = {
 
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
+const DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES = 500;
 const DISCORD_CHANNEL_INFO_CACHE = new Map<
   string,
   { value: DiscordChannelInfo | null; expiresAt: number }
@@ -103,6 +104,35 @@ const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
 
 export function __resetDiscordChannelInfoCacheForTest() {
   DISCORD_CHANNEL_INFO_CACHE.clear();
+}
+
+export function __getDiscordChannelInfoCacheSizeForTest(): number {
+  return DISCORD_CHANNEL_INFO_CACHE.size;
+}
+
+function trimDiscordChannelInfoCache(): void {
+  while (DISCORD_CHANNEL_INFO_CACHE.size > DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES) {
+    const oldestKey = DISCORD_CHANNEL_INFO_CACHE.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    DISCORD_CHANNEL_INFO_CACHE.delete(oldestKey);
+  }
+}
+
+function setDiscordChannelInfoCacheEntry(
+  channelId: string,
+  value: DiscordChannelInfo | null,
+  ttlMs: number,
+): void {
+  if (DISCORD_CHANNEL_INFO_CACHE.has(channelId)) {
+    DISCORD_CHANNEL_INFO_CACHE.delete(channelId);
+  }
+  DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  });
+  trimDiscordChannelInfoCache();
 }
 
 function normalizeDiscordChannelId(value: unknown): string {
@@ -142,10 +172,7 @@ export async function resolveDiscordChannelInfo(
   try {
     const channel = await client.fetchChannel(channelId);
     if (!channel) {
-      DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
-        value: null,
-        expiresAt: Date.now() + DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS,
-      });
+      setDiscordChannelInfoCacheEntry(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS);
       return null;
     }
     const name = "name" in channel ? (channel.name ?? undefined) : undefined;
@@ -159,17 +186,11 @@ export async function resolveDiscordChannelInfo(
       parentId,
       ownerId,
     };
-    DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
-      value: payload,
-      expiresAt: Date.now() + DISCORD_CHANNEL_INFO_CACHE_TTL_MS,
-    });
+    setDiscordChannelInfoCacheEntry(channelId, payload, DISCORD_CHANNEL_INFO_CACHE_TTL_MS);
     return payload;
   } catch (err) {
     logVerbose(`discord: failed to fetch channel ${channelId}: ${String(err)}`);
-    DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
-      value: null,
-      expiresAt: Date.now() + DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS,
-    });
+    setDiscordChannelInfoCacheEntry(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS);
     return null;
   }
 }
