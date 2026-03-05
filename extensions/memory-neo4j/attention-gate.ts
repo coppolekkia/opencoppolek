@@ -1,0 +1,266 @@
+/**
+ * Attention gate — lightweight heuristic filter (phase 1 of memory pipeline).
+ *
+ * Rejects obvious noise without any LLM call, analogous to how the brain's
+ * sensory gating filters out irrelevant stimuli before they enter working
+ * memory. Everything that passes gets stored; the sleep cycle decides what
+ * matters.
+ */
+
+const NOISE_PATTERNS = [
+  // Greetings / acknowledgments (exact match, with optional punctuation)
+  /^(hi|hey|hello|yo|sup|ok|okay|sure|thanks|thank you|thx|ty|yep|yup|nope|no|yes|yeah|cool|nice|great|got it|sounds good|perfect|alright|fine|noted|ack|kk|k)\s*[.!?]*$/i,
+  // Two-word affirmations: "ok great", "sounds good", "yes please", etc.
+  /^(ok|okay|yes|yeah|yep|sure|no|nope|alright|right|fine|cool|nice|great)\s+(great|good|sure|thanks|please|ok|fine|cool|yeah|perfect|noted|absolutely|definitely|exactly)\s*[.!?]*$/i,
+  // Deictic: messages that are only pronouns/articles/common verbs — no standalone meaning
+  // e.g. "I need those", "let me do it", "ok let me test it out", "I got it"
+  /^(ok[,.]?\s+)?(i('ll|'m|'d|'ve)?\s+)?(just\s+)?(need|want|got|have|let|let's|let me|give me|send|do|did|try|check|see|look at|test|take|get|go|use)\s+(it|that|this|those|these|them|some|one|the|a|an|me|him|her|us)\s*(out|up|now|then|too|again|later|first|here|there|please)?\s*[.!?]*$/i,
+  // Short acknowledgments with trailing context: "ok, ..." / "yes, ..." when total is brief
+  /^(ok|okay|yes|yeah|yep|sure|no|nope|right|alright|fine|cool|nice|great|perfect)[,.]?\s+.{0,20}$/i,
+  // Conversational filler / noise phrases (standalone, with optional punctuation)
+  /^(hmm+|huh|haha|ha|lol|lmao|rofl|nah|meh|idk|brb|ttyl|omg|wow|whoa|welp|oops|ooh|aah|ugh|bleh|pfft|smh|ikr|tbh|imo|fwiw|np|nvm|nm|wut|wat|wha|heh|tsk|sigh|yay|woo+|boo|dang|darn|geez|gosh|sheesh|oof)\s*[.!?]*$/i,
+  // Single-word or near-empty
+  /^\S{0,3}$/,
+  // Pure emoji
+  /^[\p{Emoji}\s]+$/u,
+  // System/XML markup
+  /^<[a-z-]+>[\s\S]*<\/[a-z-]+>$/i,
+
+  // --- Imperative instructions / commands (contextual, not standalone knowledge) ---
+  // "Let's uninstall X", "Let's switch to X", "Let's completely remove X"
+  /^let'?s\s+(completely\s+)?(uninstall|install|remove|delete|set up|configure|update|change|switch|replace|move|migrate|upgrade|downgrade|enable|disable|stop|start|restart|revert|rollback|undo|redo|rebuild|refactor|rewrite|clean up|fix|patch|deploy)/i,
+  // "Yes, ensure we're using X", "Yes switch to X", "Yes deliver to X"
+  /^(ok|okay|yes|yeah|yep|sure|right|alright|go ahead)[,.]?\s+(deliver|send|ensure|make sure|use|switch|change|update|move|enable|disable|remove|delete|install|uninstall|set up|configure)/i,
+  // "Can you/please uninstall X", "Go ahead and remove X", "Ok go ahead and remove X"
+  /^(ok[,.]?\s+)?(can you|could you|please|go ahead and)\s+(completely\s+)?(uninstall|install|remove|delete|set up|configure|update|change|switch|replace|move|migrate|upgrade|downgrade|enable|disable|stop|start|restart)/i,
+  // Short tool/config change directives: "Use chatterbox instead", "Switch to port 4123"
+  /^(use|switch to|change to|move to|replace with|swap to|go with|try|enable|disable)\s+\S+\s+(instead|rather|now|from now on|going forward)?\s*[.!?]*$/i,
+
+  // --- Session reset prompts (from /new and /reset commands) ---
+  /^A new session was started via/i,
+
+  // --- Raw chat messages with channel metadata (autocaptured noise) ---
+  /\[slack message id:/i,
+  /\[message_id:/i,
+  /\[telegram message id:/i,
+  // Raw message envelope metadata that survived the stripping layer
+  /^Sender \(untrusted metadata\)/i,
+  // Channel envelope JSON keys leaked into message text
+  /["']?(sender_id|chat_id)["']?\s*[:=]/i,
+
+  // --- System infrastructure messages (never user-generated) ---
+  // Heartbeat prompts
+  /Read HEARTBEAT\.md if it exists/i,
+  // Pre-compaction flush prompts
+  /^Pre-compaction memory flush/i,
+  // System timestamp messages (cron outputs, reminders, exec reports)
+  /^System:\s*\[/i,
+  // Cron job wrappers
+  /^\[cron:[0-9a-f-]+/i,
+  // Gateway restart JSON payloads
+  /^GatewayRestart:\s*\{/i,
+  // Background task completion reports
+  /^\[\w{3}\s+\d{4}-\d{2}-\d{2}\s.*\]\s*A background task/i,
+
+  // --- Conversation metadata that survived stripping ---
+  /^Conversation info\s*\(/i,
+  /^\[Queued messages/i,
+
+  // --- Cron delivery outputs & scheduled reminders ---
+  // Scheduled reminder injection text (appears mid-message)
+  /A scheduled reminder has been triggered/i,
+  // Cron delivery instruction to agent (summarize for user)
+  /Summarize this naturally for the user/i,
+  // Relay instruction from cron announcements
+  /Please relay this reminder to the user/i,
+  // Subagent completion announcements (date-stamped)
+  /^\[.*\d{4}-\d{2}-\d{2}.*\]\s*A sub-?agent task/i,
+  // Formatted urgency/priority reports (email summaries, briefings)
+  /(\*\*)?🔴\s*(URGENT|Priority)/i,
+  // Subagent findings header
+  /^Findings:\s*$/im,
+  // "Stats:" lines from subagent completions
+  /^Stats:\s*runtime\s/im,
+];
+
+/** Maximum message length — code dumps, logs, etc. are not memories. */
+const MAX_CAPTURE_CHARS = 2000;
+
+/** Minimum message length — too short to be meaningful. */
+const MIN_CAPTURE_CHARS = 30;
+
+/** Minimum word count — short contextual phrases lack standalone meaning. */
+const MIN_WORD_COUNT = 8;
+
+/** Shared checks applied by both user and assistant attention gates. */
+function failsSharedGateChecks(trimmed: string): boolean {
+  // Injected context from the memory system itself
+  if (trimmed.includes("<relevant-memories>") || trimmed.includes("<core-memory-refresh>")) {
+    return true;
+  }
+
+  // Noise patterns
+  if (NOISE_PATTERNS.some((r) => r.test(trimmed))) {
+    return true;
+  }
+
+  // Excessive emoji (likely reaction, not substance)
+  const emojiCount = (
+    trimmed.match(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1FA00}-\u{1FAFF}]/gu) ||
+    []
+  ).length;
+  if (emojiCount > 3) {
+    return true;
+  }
+
+  return false;
+}
+
+export function passesAttentionGate(text: string): boolean {
+  const trimmed = text.trim();
+
+  // Length bounds
+  if (trimmed.length < MIN_CAPTURE_CHARS || trimmed.length > MAX_CAPTURE_CHARS) {
+    return false;
+  }
+
+  // Word count — short phrases ("I need those") lack context for recall
+  const wordCount = trimmed.split(/\s+/).length;
+  if (wordCount < MIN_WORD_COUNT) {
+    return false;
+  }
+
+  if (failsSharedGateChecks(trimmed)) {
+    return false;
+  }
+
+  // Passes gate — retain for short-term storage
+  return true;
+}
+
+// ============================================================================
+// Assistant attention gate — stricter filter for assistant messages
+// ============================================================================
+
+/** Maximum assistant message length — shorter than user to avoid code dumps. */
+const MAX_ASSISTANT_CAPTURE_CHARS = 1000;
+
+/** Minimum word count for assistant messages — higher than user. */
+const MIN_ASSISTANT_WORD_COUNT = 10;
+
+/**
+ * Patterns that reject assistant self-narration — play-by-play commentary
+ * that reads like thinking out loud rather than a conclusion or fact.
+ * These are the single biggest source of noise in auto-captured assistant memories.
+ */
+const ASSISTANT_NARRATION_PATTERNS = [
+  // "Let me ..." / "Now let me ..." / "I'll ..." action narration
+  /^(ok[,.]?\s+)?(now\s+)?let me\s+(check|look|see|try|run|start|test|read|update|verify|fix|search|process|create|build|set up|examine|investigate|query|fetch|pull|scan|clean|install|download|configure|make|select|click|type|fill|open|close|switch|send|post|submit|edit|change|add|remove|write|save|upload)/i,
+  // "I'll ..." action narration
+  /^I('ll| will)\s+(check|look|see|try|run|start|test|read|update|verify|fix|search|process|create|build|set up|examine|investigate|query|fetch|pull|scan|clean|install|download|configure|execute|help|handle|make|select|click|type|fill|open|close|switch|send|post|submit|edit|change|add|remove|write|save|upload|use|grab|get|do)/i,
+  // "Starting ..." / "Running ..." / "Processing ..." status updates
+  /^(starting|running|processing|checking|fetching|scanning|building|installing|downloading|configuring|executing|loading|updating|filling|selecting|clicking|typing|opening|closing|switching|navigating|uploading|saving|sending|posting|submitting)\s/i,
+  // "Good!" / "Great!" / "Perfect!" / "Done!" as opener followed by narration
+  /^(good|great|perfect|nice|excellent|awesome|done)[!.]?\s+(i |the |now |let |we |that |here)/i,
+  // Progress narration: "Now I have..." / "Now I can see..." / "Now let me..."
+  /^now\s+(i\s+(have|can|need|see|understand)|we\s+(have|can|need)|the\s|on\s)/i,
+  // Step narration: "Step 1:" / "**Step 1:**"
+  /^\*?\*?step\s+\d/i,
+  // Page/section progress narration: "Page 1 done!", "Page 3 — final page!"
+  /^Page\s+\d/i,
+  // Narration of what was found/done: "Found it." / "Found X." / "I see — ..."
+  /^(found it|found the|i see\s*[—–-])/i,
+  // Sub-agent task descriptions (workflow narration)
+  /^\[?(mon|tue|wed|thu|fri|sat|sun)\s+\d{4}-\d{2}-\d{2}/i,
+  // Context compaction self-announcements
+  /^🔄\s*\*?\*?context reset/i,
+  // Filename slug generation prompts (internal tool use)
+  /^based on this conversation,?\s*generate a short/i,
+
+  // --- Conversational filler responses (not knowledge) ---
+  // "I'm here" / "I am here" filler: "I'm here to help", "I am here and listening", etc.
+  /^I('m| am) here\b/i,
+  // Ready-state: "Sure, (just) tell me what you want..."
+  /^Sure[,!.]?\s+(just\s+)?(tell|let)\s+me/i,
+  // Observational UI narration: "I can see the picker", "I can see the button"
+  /^I can see\s/i,
+  // A sub-agent task report (quoted or inline)
+  /^A sub-?agent task\b/i,
+
+  // --- Injected system/voice context (not user knowledge) ---
+  // Voice mode formatting instructions injected into sessions
+  /^\[VOICE\s*(MODE|OUTPUT)/i,
+  /^\[voice[-\s]?context\]/i,
+  // Voice tag prefix
+  /^\[voice\]\s/i,
+
+  // --- Session completion summaries (ephemeral, not long-term knowledge) ---
+  // "Done ✅ ..." completion messages (assistant summarizing what it just did)
+  /^Done\s*[✅✓☑️]\s/i,
+  // "All good" / "All set" wrap-ups
+  /^All (good|set|done)[!.]/i,
+  // "Here's what changed" / "Summary of changes" (session-specific)
+  /^(here'?s\s+(what|the|a)\s+(changed?|summary|breakdown|recap))/i,
+
+  // --- Open proposals / action items (cause rogue actions when recalled) ---
+  // These are dangerous in memory: when auto-recalled, other sessions interpret
+  // them as active instructions and attempt to carry them out.
+  // "Want me to...?" / "Should I...?" / "Shall I...?" / "Would you like me to...?"
+  /want me to\s.+\?/i,
+  /should I\s.+\?/i,
+  /shall I\s.+\?/i,
+  /would you like me to\s.+\?/i,
+  // "Do you want me to...?"
+  /do you want me to\s.+\?/i,
+  // "Can I...?" / "May I...?" assistant proposals
+  /^(can|may) I\s.+\?/i,
+  // "Ready to...?" / "Proceed with...?"
+  /ready to\s.+\?/i,
+  /proceed with\s.+\?/i,
+];
+
+export function passesAssistantAttentionGate(text: string): boolean {
+  const trimmed = text.trim();
+
+  // Length bounds (stricter than user)
+  if (trimmed.length < MIN_CAPTURE_CHARS || trimmed.length > MAX_ASSISTANT_CAPTURE_CHARS) {
+    return false;
+  }
+
+  // Word count — higher threshold than user messages
+  const wordCount = trimmed.split(/\s+/).length;
+  if (wordCount < MIN_ASSISTANT_WORD_COUNT) {
+    return false;
+  }
+
+  // Reject messages that are mostly code (>50% inside triple-backtick fences)
+  const codeBlockRegex = /```[\s\S]*?```/g;
+  let codeChars = 0;
+  let match: RegExpExecArray | null;
+  while ((match = codeBlockRegex.exec(trimmed)) !== null) {
+    codeChars += match[0].length;
+  }
+  if (codeChars > trimmed.length * 0.5) {
+    return false;
+  }
+
+  // Reject messages that are mostly tool output
+  if (
+    trimmed.includes("<tool_result>") ||
+    trimmed.includes("<tool_use>") ||
+    trimmed.includes("<function_call>")
+  ) {
+    return false;
+  }
+
+  if (failsSharedGateChecks(trimmed)) {
+    return false;
+  }
+
+  // Assistant-specific narration patterns (play-by-play self-talk)
+  if (ASSISTANT_NARRATION_PATTERNS.some((r) => r.test(trimmed))) {
+    return false;
+  }
+
+  return true;
+}

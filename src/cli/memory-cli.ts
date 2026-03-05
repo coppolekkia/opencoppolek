@@ -124,6 +124,7 @@ async function withMemoryManagerForAgent(params: {
   cfg: ReturnType<typeof loadConfig>;
   agentId: string;
   purpose?: MemoryManagerPurpose;
+  onMissing?: (error?: string) => void;
   run: (manager: MemoryManager) => Promise<void>;
 }): Promise<void> {
   const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
@@ -135,7 +136,8 @@ async function withMemoryManagerForAgent(params: {
   }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
-    onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
+    onMissing:
+      params.onMissing ?? ((error) => defaultRuntime.log(error ?? "Memory search disabled.")),
     onCloseError: (err) =>
       defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
     close: async (manager) => {
@@ -345,12 +347,16 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     scan?: MemorySourceScan;
   }> = [];
 
+  const disabledAgentIds: string[] = [];
   for (const agentId of agentIds) {
     const managerPurpose = opts.index ? "default" : "status";
     await withMemoryManagerForAgent({
       cfg,
       agentId,
       purpose: managerPurpose,
+      onMissing: () => {
+        disabledAgentIds.push(agentId);
+      },
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
         let embeddingProbe:
@@ -435,11 +441,22 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const accent = (text: string) => colorize(rich, theme.accent, text);
   const label = (text: string) => muted(`${text}:`);
 
+  const emptyAgentIds: string[] = [];
   for (const result of allResults) {
     const { agentId, status, embeddingProbe, indexError, scan } = result;
     const filesIndexed = status.files ?? 0;
     const chunksIndexed = status.chunks ?? 0;
     const totalFiles = scan?.totalFiles ?? null;
+
+    // Skip agents with no indexed content (0 files, 0 chunks, no source files, no errors).
+    // These agents aren't using the core memory search system — no need to show them.
+    const isEmpty =
+      status.files === 0 && status.chunks === 0 && (totalFiles ?? 0) === 0 && !indexError;
+    if (isEmpty) {
+      emptyAgentIds.push(agentId);
+      continue;
+    }
+
     const indexedLabel =
       totalFiles === null
         ? `${filesIndexed}/? files · ${chunksIndexed} chunks`
@@ -571,6 +588,78 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     defaultRuntime.log(lines.join("\n"));
     defaultRuntime.log("");
   }
+
+  // Show compact summary for agents with no indexed memory-search content
+  if (emptyAgentIds.length > 0) {
+    const agentList = emptyAgentIds.join(", ");
+    defaultRuntime.log(
+      muted(
+        `Memory Search: ${emptyAgentIds.length} agent${emptyAgentIds.length > 1 ? "s" : ""} with no indexed files (${agentList})`,
+      ),
+    );
+    defaultRuntime.log("");
+  }
+
+  // Show compact summary for agents with memory search disabled
+  if (disabledAgentIds.length > 0 && emptyAgentIds.length === 0) {
+    const agentList = disabledAgentIds.join(", ");
+    defaultRuntime.log(
+      muted(
+        `Memory Search: disabled for ${disabledAgentIds.length} agent${disabledAgentIds.length > 1 ? "s" : ""} (${agentList})`,
+      ),
+    );
+    defaultRuntime.log("");
+  }
+
+  // Detect configured memory plugins and show hints
+  const memoryPlugins = detectMemoryPlugins(cfg);
+  if (memoryPlugins.length > 0) {
+    defaultRuntime.log(heading("Memory Plugins"));
+    for (const plugin of memoryPlugins) {
+      const statusText = plugin.enabled ? success("enabled") : muted("disabled");
+      defaultRuntime.log(`${info(plugin.id)} ${statusText}`);
+      if (plugin.hint) {
+        defaultRuntime.log(muted(`  → ${plugin.hint}`));
+      }
+    }
+    defaultRuntime.log("");
+  }
+}
+
+type MemoryPluginInfo = {
+  id: string;
+  enabled: boolean;
+  hint?: string;
+};
+
+function detectMemoryPlugins(cfg: ReturnType<typeof loadConfig>): MemoryPluginInfo[] {
+  const plugins: MemoryPluginInfo[] = [];
+  const entries = cfg.plugins?.entries ?? {};
+  const activeSlot = cfg.plugins?.slots?.memory;
+
+  // Check for memory-neo4j plugin
+  if (entries["memory-neo4j"]) {
+    const entry = entries["memory-neo4j"];
+    const enabled = entry.enabled !== false && activeSlot !== "none";
+    plugins.push({
+      id: "memory-neo4j",
+      enabled,
+      hint: enabled ? "Run `openclaw memory neo4j stats` for detailed statistics" : undefined,
+    });
+  }
+
+  // Check for memory-lancedb plugin
+  if (entries["memory-lancedb"]) {
+    const entry = entries["memory-lancedb"];
+    const enabled = entry.enabled !== false && activeSlot !== "none";
+    plugins.push({
+      id: "memory-lancedb",
+      enabled,
+      hint: enabled ? "Run `openclaw memory lancedb stats` for detailed statistics" : undefined,
+    });
+  }
+
+  return plugins;
 }
 
 export function registerMemoryCli(program: Command) {

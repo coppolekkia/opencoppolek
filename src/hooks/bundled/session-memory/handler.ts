@@ -1,8 +1,9 @@
 /**
  * Session memory hook handler
  *
- * Saves session context to memory when /new or /reset command is triggered
- * Creates a new dated memory file with LLM-generated slug
+ * Saves session context when /new or /reset command is triggered.
+ * Default target: writes SESSION_CONTEXT.md in the workspace root (overwrite).
+ * LanceDB target: stores to LanceDB via Gateway API with LLM-generated slug.
  */
 
 import fs from "node:fs/promises";
@@ -11,8 +12,8 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { localDateStr, localTimeStr, tzOffsetLabel } from "../../../logging/timestamp.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { resolveHookConfig } from "../../config.js";
@@ -168,6 +169,68 @@ async function findPreviousSessionFile(params: {
 }
 
 /**
+ * Save session to LanceDB via Gateway API
+ */
+async function saveToLanceDB(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  slug: string;
+  sessionContent: string;
+  timestamp: Date;
+}): Promise<void> {
+  const { cfg, sessionKey, slug, sessionContent, timestamp } = params;
+
+  // Get gateway config
+  const gatewayPort = cfg.gateway?.port || 18789;
+  const gatewayToken = cfg.gateway?.auth?.token;
+
+  if (!gatewayToken) {
+    throw new Error("Gateway auth token not found in config");
+  }
+
+  // Format memory text with metadata and truncated content
+  const dateStr = localDateStr(timestamp);
+  const timeStr = localTimeStr(timestamp);
+  const tz = tzOffsetLabel(timestamp);
+  const truncatedContent = sessionContent.slice(0, 2000);
+  const wasTruncated = sessionContent.length > 2000;
+
+  const memoryText = [
+    `Session: ${slug}`,
+    `Date: ${dateStr} ${timeStr} ${tz}`,
+    `Session Key: ${sessionKey}`,
+    "",
+    truncatedContent,
+    wasTruncated ? "\n[...truncated to 2000 chars]" : "",
+  ].join("\n");
+
+  // Call Gateway API to invoke memory_store
+  const apiUrl = `http://localhost:${gatewayPort}/tools/invoke`;
+  const response = await fetch(apiUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${gatewayToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tool: "memory_store",
+      args: {
+        text: memoryText,
+        importance: 0.7,
+        category: "fact",
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gateway API call failed: ${response.status} ${errorText}`);
+  }
+
+  log.debug("Successfully stored to LanceDB via Gateway API");
+}
+
+/**
  * Save session context to memory when /new or /reset command is triggered
  */
 const saveSessionToMemory: HookHandler = async (event) => {
@@ -186,12 +249,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const workspaceDir = cfg
       ? resolveAgentWorkspaceDir(cfg, agentId)
       : path.join(resolveStateDir(process.env, os.homedir), "workspace");
-    const memoryDir = path.join(workspaceDir, "memory");
-    await fs.mkdir(memoryDir, { recursive: true });
 
     // Get today's date for filename
     const now = new Date(event.timestamp);
-    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
+    const dateStr = localDateStr(now);
 
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
@@ -233,12 +294,15 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const sessionFile = currentSessionFile || undefined;
 
-    // Read message count from hook config (default: 15)
+    // Read hook config (default: 15 messages, file target)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
     const messageCount =
       typeof hookConfig?.messages === "number" && hookConfig.messages > 0
         ? hookConfig.messages
         : 15;
+    const target = hookConfig?.target === "lancedb" ? "lancedb" : "file";
+
+    log.debug("Storage target resolved", { target });
 
     let slug: string | null = null;
     let sessionContent: string | null = null;
@@ -269,55 +333,56 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
+      const timeSlug = localTimeStr(now).replace(/:/g, "");
       slug = timeSlug.slice(0, 4); // HHMM
       log.debug("Using fallback timestamp slug", { slug });
     }
 
-    // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
-    const memoryFilePath = path.join(memoryDir, filename);
-    log.debug("Memory file path resolved", {
-      filename,
-      path: memoryFilePath.replace(os.homedir(), "~"),
-    });
+    // Route to appropriate storage target
+    if (target === "lancedb") {
+      // Store in LanceDB via Gateway API
+      if (!cfg) {
+        throw new Error("Config not available for LanceDB storage");
+      }
+      if (!sessionContent) {
+        log.debug("No session content available, skipping LanceDB storage");
+        return;
+      }
 
-    // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1].split(".")[0];
+      await saveToLanceDB({
+        cfg,
+        sessionKey: event.sessionKey,
+        slug,
+        sessionContent,
+        timestamp: now,
+      });
+      log.info(`Session context stored in LanceDB: ${slug}`);
+    } else {
+      // Write session context to SESSION_CONTEXT.md (overwrite, not append).
+      // This file is read by the session-context hook at bootstrap to provide
+      // continuity across sessions. It is separate from MEMORY.md (core memories).
+      const sessionContextPath = path.join(workspaceDir, "SESSION_CONTEXT.md");
 
-    // Extract context details
-    const sessionId = (sessionEntry.sessionId as string) || "unknown";
-    const source = (context.commandSource as string) || "unknown";
+      const timeStr = localTimeStr(now);
+      const tz = tzOffsetLabel(now);
 
-    // Build Markdown entry
-    const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
-      "",
-      `- **Session Key**: ${event.sessionKey}`,
-      `- **Session ID**: ${sessionId}`,
-      `- **Source**: ${source}`,
-      "",
-    ];
+      // Build Markdown entry
+      const entryParts = [`# Session Context — ${dateStr} ${timeStr} ${tz}`, ""];
 
-    // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+      // Include conversation content if available
+      if (sessionContent) {
+        entryParts.push("## Recent Conversation", "", sessionContent, "");
+      }
+
+      const entry = entryParts.join("\n");
+
+      // Overwrite SESSION_CONTEXT.md
+      await fs.writeFile(sessionContextPath, entry, "utf-8");
+      log.debug("SESSION_CONTEXT.md written successfully");
+
+      const relPath = sessionContextPath.replace(os.homedir(), "~");
+      log.info(`Session context saved to ${relPath}`);
     }
-
-    const entry = entryParts.join("\n");
-
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: filename,
-      data: entry,
-      encoding: "utf-8",
-    });
-    log.debug("Memory file written successfully");
-
-    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
-    log.info(`Session context saved to ${relPath}`);
   } catch (err) {
     if (err instanceof Error) {
       log.error("Failed to save session memory", {

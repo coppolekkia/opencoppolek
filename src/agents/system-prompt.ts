@@ -93,11 +93,19 @@ function buildOwnerIdentityLine(
   return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
+function buildTimeSection(params: { userTimezone?: string; userTime?: string }) {
   if (!params.userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  const lines = ["## Current Date & Time", `Time zone: ${params.userTimezone}`];
+  if (params.userTime) {
+    lines.push(`Current time: ${params.userTime}`);
+  }
+  lines.push(
+    "If you need the current date, time, or day of week, use the session_status tool.",
+    "",
+  );
+  return lines;
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
@@ -362,6 +370,7 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
+  const userTime = params.userTime?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const heartbeatPromptLine = heartbeatPrompt
@@ -560,6 +569,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
+      userTime,
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
@@ -658,6 +668,38 @@ export function buildAgentSystemPrompt(params: {
       `❌ Wrong: "Here's help... ${SILENT_REPLY_TOKEN}"`,
       `❌ Wrong: "${SILENT_REPLY_TOKEN}"`,
       `✅ Right: ${SILENT_REPLY_TOKEN}`,
+      "",
+    );
+  }
+
+  // Task Ledger instructions (skip for subagent/none modes)
+  if (!isMinimal) {
+    lines.push(
+      "## Task Ledger (TASKS.md)",
+      "Maintain a TASKS.md file in the workspace root to track active work across compaction events.",
+      "Update it whenever you start, progress, or complete a task. Format:",
+      "",
+      "```markdown",
+      "# Active Tasks",
+      "",
+      "## TASK-001: <short title>",
+      "- **Status:** in_progress | awaiting_input | blocked | done",
+      "- **Started:** YYYY-MM-DD HH:MM",
+      "- **Updated:** YYYY-MM-DD HH:MM",
+      "- **Details:** What this task is about",
+      "- **Current Step:** What you're doing right now",
+      "- **Blocked On:** (if applicable) What's preventing progress",
+      "",
+      "# Completed",
+      "<!-- Move done tasks here with completion date -->",
+      "```",
+      "",
+      "Rules:",
+      "- Create TASKS.md on first task if it doesn't exist.",
+      "- Update **Updated** timestamp and **Current Step** as you make progress.",
+      "- Move tasks to Completed when done; include completion date.",
+      "- Keep IDs sequential (TASK-001, TASK-002, etc.).",
+      "- Stale tasks (>24h with no update) may be auto-archived by the sleep cycle.",
       "",
     );
   }
