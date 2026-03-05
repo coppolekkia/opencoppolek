@@ -165,22 +165,21 @@ export async function resolveDeliveryTarget(
     allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
     allowSendToOverride = whatsappAccount.allowSendTo;
 
-    // When allowSendTo is defined, use it for implicit-mode target validation
-    // instead of allowFrom. Normalize entries so comparison with the normalized
-    // toCandidate works regardless of config formatting.
+    // When allowSendTo is explicitly defined, use it for implicit-mode target
+    // validation. Otherwise fall back to allowFromOverride (already normalized
+    // and wildcard-stripped above).
+    const hasExplicitSendTo = allowSendToOverride !== undefined && allowSendToOverride !== null;
     const normalizedAllowSendTo = allowSendToOverride
       ?.map((entry) => String(entry).trim())
       .filter((entry) => entry && entry !== "*")
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
-    const effectiveSendList = normalizedAllowSendTo ?? allowFromOverride;
-    // allowFromOverride never contains wildcards (filtered out at line 159),
-    // so hasWildcard only fires when allowSendToOverride is defined.
-    const hasWildcard = (allowSendToOverride ?? allowFromOverride)?.some(
-      (entry) => String(entry).trim() === "*",
-    );
+    const hasSendToWildcard =
+      hasExplicitSendTo &&
+      (allowSendToOverride ?? []).some((entry) => String(entry).trim() === "*");
+    const effectiveSendList = hasExplicitSendTo ? (normalizedAllowSendTo ?? []) : allowFromOverride;
 
-    if (toCandidate && mode === "implicit" && effectiveSendList.length > 0 && !hasWildcard) {
+    if (toCandidate && mode === "implicit" && effectiveSendList.length > 0 && !hasSendToWildcard) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
       // Group JIDs bypass allowSendTo (governed by groupPolicy instead).
       if (
