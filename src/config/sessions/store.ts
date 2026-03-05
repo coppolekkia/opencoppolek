@@ -266,7 +266,13 @@ export function loadSessionStore(
     });
   }
 
-  return structuredClone(store);
+  // Use JSON round-trip instead of structuredClone for the deep copy.
+  // structuredClone triggers a V8 FATAL ERROR (uncatchable process abort)
+  // when the store contains non-cloneable host objects (e.g., from corrupt
+  // session data or plugin mutations).  JSON round-trip throws a catchable
+  // TypeError instead, and is semantically equivalent since the store
+  // originates from JSON.parse.
+  return JSON.parse(JSON.stringify(store));
 }
 
 export function readSessionUpdatedAt(params: {
