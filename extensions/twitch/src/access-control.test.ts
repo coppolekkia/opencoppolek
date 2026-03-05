@@ -149,6 +149,45 @@ describe("checkTwitchAccessControl", () => {
   });
 
   describe("allowFrom allowlist", () => {
+    it("fails closed when allowFrom is explicitly empty", () => {
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowFrom: [],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("explicitly empty");
+    });
+
+    it("keeps explicit empty allowFrom as deny-all even when roles are configured", () => {
+      const account: TwitchAccountConfig = {
+        ...mockAccount,
+        allowFrom: [],
+        allowedRoles: ["all"],
+      };
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+      };
+
+      const result = checkTwitchAccessControl({
+        message,
+        account,
+        botUsername: "testbot",
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("explicitly empty");
+    });
+
     it("allows users in the allowlist", () => {
       const account: TwitchAccountConfig = {
         ...mockAccount,

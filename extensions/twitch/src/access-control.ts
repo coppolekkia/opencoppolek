@@ -48,8 +48,14 @@ export function checkTwitchAccessControl(params: {
     }
   }
 
-  if (account.allowFrom && account.allowFrom.length > 0) {
+  if (Array.isArray(account.allowFrom)) {
     const allowFrom = account.allowFrom;
+    if (allowFrom.length === 0) {
+      return {
+        allowed: false,
+        reason: "allowFrom is explicitly empty",
+      };
+    }
     const senderId = message.userId;
 
     if (!senderId) {
