@@ -756,6 +756,8 @@ export async function runTui(opts: TuiOptions) {
     chatLog,
     tui,
     opts,
+    heartbeatAckMaxChars: config.agents?.defaults?.heartbeat?.ackMaxChars,
+    heartbeatPrompt: config.agents?.defaults?.heartbeat?.prompt,
     state,
     agentNames,
     initialSessionInput,

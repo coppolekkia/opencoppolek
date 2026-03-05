@@ -1,4 +1,5 @@
 import type { TUI } from "@mariozechner/pi-tui";
+import { HEARTBEAT_PROMPT, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
@@ -15,6 +16,8 @@ type SessionActionContext = {
   chatLog: ChatLog;
   tui: TUI;
   opts: TuiOptions;
+  heartbeatAckMaxChars?: number | string;
+  heartbeatPrompt?: string;
   state: TuiStateAccess;
   agentNames: Map<string, string>;
   initialSessionInput: string;
@@ -38,12 +41,69 @@ type SessionInfoEntry = SessionInfo & {
   providerOverride?: string;
 };
 
+function isHeartbeatPollHistoryText(text: string, heartbeatPrompt?: string): boolean {
+  const lower = text.trim().toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  const resolvedHeartbeatPrompt = heartbeatPrompt?.trim() || HEARTBEAT_PROMPT;
+  const heartbeatPromptLower = resolvedHeartbeatPrompt.toLowerCase();
+  return (
+    lower.includes("<relevant-memories>") ||
+    lower.includes(heartbeatPromptLower) ||
+    lower.includes("heartbeat poll:")
+  );
+}
+
+function isHeartbeatAckOnlyHistoryText(text: string, maxAckChars?: number | string): boolean {
+  const stripped = stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars });
+  return stripped.didStrip && stripped.shouldSkip;
+}
+
+function shouldSuppressHistoryMessage(
+  message: Record<string, unknown>,
+  heartbeatAckMaxChars?: number | string,
+  heartbeatPrompt?: string,
+): boolean {
+  const role = message.role;
+  if (role !== "user" && role !== "assistant") {
+    return false;
+  }
+  const text = extractTextFromMessage(message);
+  if (!text) {
+    return false;
+  }
+  if (role === "user" && isHeartbeatPollHistoryText(text, heartbeatPrompt)) {
+    return true;
+  }
+  if (role === "assistant" && isHeartbeatPollHistoryText(text, heartbeatPrompt)) {
+    return false;
+  }
+  return role === "assistant" && isHeartbeatAckOnlyHistoryText(text, heartbeatAckMaxChars);
+}
+
+function normalizeAssistantHistoryText(
+  text: string,
+  heartbeatAckMaxChars?: number | string,
+): string {
+  const stripped = stripHeartbeatToken(text, {
+    mode: "heartbeat",
+    maxAckChars: heartbeatAckMaxChars,
+  });
+  if (stripped.didStrip && !stripped.shouldSkip && stripped.text) {
+    return stripped.text;
+  }
+  return text;
+}
+
 export function createSessionActions(context: SessionActionContext) {
   const {
     client,
     chatLog,
     tui,
     opts,
+    heartbeatAckMaxChars,
+    heartbeatPrompt,
     state,
     agentNames,
     initialSessionInput,
@@ -304,6 +364,9 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         const message = entry as Record<string, unknown>;
+        if (shouldSuppressHistoryMessage(message, heartbeatAckMaxChars, heartbeatPrompt)) {
+          continue;
+        }
         if (isCommandMessage(message)) {
           const text = extractTextFromMessage(message);
           if (text) {
@@ -319,9 +382,10 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         if (message.role === "assistant") {
-          const text = extractTextFromMessage(message, {
+          const rawText = extractTextFromMessage(message, {
             includeThinking: state.showThinking,
           });
+          const text = rawText ? normalizeAssistantHistoryText(rawText, heartbeatAckMaxChars) : "";
           if (text) {
             chatLog.finalizeAssistant(text);
           }
