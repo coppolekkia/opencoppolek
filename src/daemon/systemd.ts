@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  GATEWAY_SERVICE_KIND,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayServiceDescription,
   resolveGatewaySystemdServiceName,
@@ -74,6 +75,29 @@ function resolveSystemdServiceName(env: GatewayServiceEnv): string {
 
 function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
+}
+
+function resolvePreviousGatewayUnitNameForCleanup(
+  env: GatewayServiceEnv,
+  serviceName: string,
+): string | null {
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim().toLowerCase();
+  if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
+    return null;
+  }
+  const defaultName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  if (serviceName === defaultName) {
+    return null;
+  }
+  return defaultName;
+}
+
+/** @internal Exported for testing only. */
+export function _resolvePreviousGatewayUnitNameForCleanupForTests(
+  env: GatewayServiceEnv,
+  serviceName: string,
+): string | null {
+  return resolvePreviousGatewayUnitNameForCleanup(env, serviceName);
 }
 
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
@@ -376,11 +400,11 @@ export async function installSystemdService({
 
   // When OPENCLAW_SYSTEMD_UNIT overrides the name, disable the previous
   // profile-based unit so two units don't compete for the same gateway.
-  const defaultName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-  if (serviceName !== defaultName) {
-    const prevUnit = `${defaultName}.service`;
+  const previousGatewayUnit = resolvePreviousGatewayUnitNameForCleanup(env, serviceName);
+  if (previousGatewayUnit) {
+    const prevUnit = `${previousGatewayUnit}.service`;
     await execSystemctlUser(env, ["disable", "--now", prevUnit]);
-    const prevPath = resolveSystemdUnitPathForName(env, defaultName);
+    const prevPath = resolveSystemdUnitPathForName(env, previousGatewayUnit);
     try {
       await fs.unlink(prevPath);
     } catch {
@@ -429,11 +453,11 @@ export async function uninstallSystemdService({
 
   // When OPENCLAW_SYSTEMD_UNIT overrides the name, also disable the previous
   // profile-based unit so it doesn't remain enabled as a dangling service.
-  const defaultName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-  if (serviceName !== defaultName) {
-    const prevUnit = `${defaultName}.service`;
+  const previousGatewayUnit = resolvePreviousGatewayUnitNameForCleanup(env, serviceName);
+  if (previousGatewayUnit) {
+    const prevUnit = `${previousGatewayUnit}.service`;
     await execSystemctlUser(env, ["disable", "--now", prevUnit]);
-    const prevPath = resolveSystemdUnitPathForName(env, defaultName);
+    const prevPath = resolveSystemdUnitPathForName(env, previousGatewayUnit);
     try {
       await fs.unlink(prevPath);
       stdout.write(`${formatLine("Removed previous systemd service", prevPath)}\n`);

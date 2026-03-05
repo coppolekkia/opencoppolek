@@ -9,6 +9,7 @@ vi.mock("node:child_process", () => ({
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  _resolvePreviousGatewayUnitNameForCleanupForTests,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   restartSystemdService,
@@ -212,6 +213,39 @@ describe("resolveSystemdUserUnitPath", () => {
         OPENCLAW_SYSTEMD_UNIT: unit,
       }),
     ).toThrow("Invalid systemd unit name");
+  });
+});
+
+describe("resolvePreviousGatewayUnitNameForCleanup", () => {
+  it("returns previous gateway unit when gateway unit name is overridden", () => {
+    expect(
+      _resolvePreviousGatewayUnitNameForCleanupForTests(
+        { OPENCLAW_SYSTEMD_UNIT: "custom-gateway" },
+        "custom-gateway",
+      ),
+    ).toBe("openclaw-gateway");
+  });
+
+  it("returns null when current unit matches default gateway unit", () => {
+    expect(_resolvePreviousGatewayUnitNameForCleanupForTests({}, "openclaw-gateway")).toBeNull();
+  });
+
+  it("returns null for non-gateway service kinds", () => {
+    expect(
+      _resolvePreviousGatewayUnitNameForCleanupForTests(
+        { OPENCLAW_SERVICE_KIND: "node", OPENCLAW_SYSTEMD_UNIT: "openclaw-node" },
+        "openclaw-node",
+      ),
+    ).toBeNull();
+  });
+
+  it("returns profile-specific previous gateway unit", () => {
+    expect(
+      _resolvePreviousGatewayUnitNameForCleanupForTests(
+        { OPENCLAW_PROFILE: "work", OPENCLAW_SYSTEMD_UNIT: "custom-work-gateway" },
+        "custom-work-gateway",
+      ),
+    ).toBe("openclaw-gateway-work");
   });
 });
 
