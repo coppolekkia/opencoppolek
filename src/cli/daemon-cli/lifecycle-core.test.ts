@@ -39,10 +39,11 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
-    ({ runServiceRestart } = await import("./lifecycle-core.js"));
+    ({ runServiceRestart, runServiceStart } = await import("./lifecycle-core.js"));
   });
 
   beforeEach(() => {
@@ -63,6 +64,7 @@ describe("runServiceRestart token drift", () => {
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
     });
     service.restart.mockResolvedValue(undefined);
+    service.label = "TestService";
     vi.unstubAllEnvs();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
@@ -122,5 +124,81 @@ describe("runServiceRestart token drift", () => {
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
+  });
+
+  it("blocks systemd restarts from agent exec sessions", async () => {
+    service.label = "systemd";
+    vi.stubEnv("OPENCLAW_SHELL", "exec");
+
+    await expect(
+      runServiceRestart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [],
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { error?: string; hints?: string[] };
+    expect(payload.error).toContain("blocked from agent exec sessions on systemd");
+    expect(payload.hints?.[0]).toContain("outside agent exec sessions");
+  });
+
+  it("does not block node restarts from agent exec sessions", async () => {
+    service.label = "systemd";
+    vi.stubEnv("OPENCLAW_SHELL", "exec");
+
+    await runServiceRestart({
+      serviceNoun: "Node",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; error?: string };
+    expect(payload.result).toBe("restarted");
+    expect(payload.error).toBeUndefined();
+  });
+
+  it("blocks systemd starts from agent exec sessions when gateway is already loaded", async () => {
+    service.label = "systemd";
+    vi.stubEnv("OPENCLAW_SHELL", "exec");
+
+    await expect(
+      runServiceStart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [],
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { error?: string; hints?: string[] };
+    expect(payload.error).toContain("Gateway start is blocked from agent exec sessions on systemd");
+    expect(payload.hints?.[0]).toContain("outside agent exec sessions");
+  });
+
+  it("does not block node starts from agent exec sessions", async () => {
+    service.label = "systemd";
+    vi.stubEnv("OPENCLAW_SHELL", "exec");
+
+    await runServiceStart({
+      serviceNoun: "Node",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; error?: string };
+    expect(payload.result).toBe("started");
+    expect(payload.error).toBeUndefined();
   });
 });

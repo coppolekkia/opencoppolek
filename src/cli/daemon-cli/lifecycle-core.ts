@@ -8,6 +8,7 @@ import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { resolveGatewayCredentialsFromConfig } from "../../gateway/credentials.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   buildDaemonServiceSnapshot,
   createNullWriter,
@@ -36,6 +37,39 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
     return hints;
   }
   return [...hints, ...renderSystemdUnavailableHints({ wsl: await isWSL() })];
+}
+
+function shouldBlockSystemdRestartFromAgentExec(params: {
+  service: GatewayService;
+  serviceNoun: string;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  if (params.serviceNoun.trim().toLowerCase() !== "gateway") {
+    return false;
+  }
+  const serviceLabel = params.service.label.trim().toLowerCase();
+  if (serviceLabel !== "systemd") {
+    return false;
+  }
+  return params.env.OPENCLAW_SHELL?.trim().toLowerCase() === "exec";
+}
+
+function resolveAgentExecSystemdRestartBlock(params: {
+  service: GatewayService;
+  serviceNoun: string;
+  env: NodeJS.ProcessEnv;
+  action: "start" | "restart";
+}): { message: string; hints: string[] } | null {
+  if (!shouldBlockSystemdRestartFromAgentExec(params)) {
+    return null;
+  }
+  return {
+    message: `${params.serviceNoun} ${params.action} is blocked from agent exec sessions on systemd to avoid SIGTERMing the active session and triggering restart loops.`,
+    hints: [
+      "Run this service command from a normal shell outside agent exec sessions.",
+      `Gateway-specific: ${formatCliCommand("openclaw gateway restart")}`,
+    ],
+  };
 }
 
 function createActionIO(params: { action: DaemonAction; json: boolean }) {
@@ -174,6 +208,16 @@ export async function runServiceStart(params: {
     });
     return;
   }
+  const agentExecBlock = resolveAgentExecSystemdRestartBlock({
+    service: params.service,
+    serviceNoun: params.serviceNoun,
+    env: process.env,
+    action: "start",
+  });
+  if (agentExecBlock) {
+    fail(agentExecBlock.message, agentExecBlock.hints);
+    return;
+  }
   try {
     await params.service.restart({ env: process.env, stdout });
   } catch (err) {
@@ -271,6 +315,17 @@ export async function runServiceRestart(params: {
       json,
       emit,
     });
+    return false;
+  }
+
+  const agentExecBlock = resolveAgentExecSystemdRestartBlock({
+    service: params.service,
+    serviceNoun: params.serviceNoun,
+    env: process.env,
+    action: "restart",
+  });
+  if (agentExecBlock) {
+    fail(agentExecBlock.message, agentExecBlock.hints);
     return false;
   }
 
