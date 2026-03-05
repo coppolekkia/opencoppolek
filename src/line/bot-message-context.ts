@@ -1,5 +1,6 @@
 import type { MessageEvent, StickerEventMessage, EventSource, PostbackEvent } from "@line/bot-sdk";
 import { formatInboundEnvelope } from "../auto-reply/envelope.js";
+import { type HistoryEntry } from "../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
@@ -23,6 +24,8 @@ interface BuildLineMessageContextParams {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  groupHistories?: Map<string, HistoryEntry[]>;
+  historyLimit?: number;
 }
 
 export type LineSourceInfo = {
@@ -239,6 +242,7 @@ async function finalizeLineInboundContext(params: {
   };
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
+  inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
 }) {
   const { fromAddress, toAddress, originatingTo } = resolveLineAddresses({
     isGroup: params.source.isGroup,
@@ -308,6 +312,7 @@ async function finalizeLineInboundContext(params: {
     GroupSystemPrompt: params.source.isGroup
       ? resolveLineGroupSystemPrompt(params.account.config.groups, params.source)
       : undefined,
+    InboundHistory: params.inboundHistory,
   });
 
   const pinnedMainDmOwner = !params.source.isGroup
@@ -362,7 +367,7 @@ async function finalizeLineInboundContext(params: {
 }
 
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
-  const { event, allMedia, cfg, account, commandAuthorized } = params;
+  const { event, allMedia, cfg, account, commandAuthorized, groupHistories, historyLimit } = params;
 
   const source = event.source;
   const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
@@ -399,6 +404,19 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     });
   }
 
+  // Build pending history for group chats: unmentioned messages accumulated in
+  // groupHistories are passed as InboundHistory so the agent has context about
+  // the conversation that preceded the mention.
+  const historyKey = isGroup ? peerId : undefined;
+  const inboundHistory =
+    historyKey && groupHistories && (historyLimit ?? 0) > 0
+      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
+      : undefined;
+
   const { ctxPayload } = await finalizeLineInboundContext({
     cfg,
     account,
@@ -420,6 +438,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     },
     locationContext,
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
+    inboundHistory,
   });
 
   return {
