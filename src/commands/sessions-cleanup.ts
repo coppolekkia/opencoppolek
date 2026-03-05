@@ -132,25 +132,55 @@ function buildActionRows(params: {
   }));
 }
 
+function isMissingTranscriptError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const code = "code" in error ? (error as { code?: unknown }).code : undefined;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+type TranscriptFileStatus = "present" | "missing" | "unknown";
+
+function classifyTranscriptFile(filePath: string): TranscriptFileStatus {
+  try {
+    return fs.statSync(filePath).isFile() ? "present" : "missing";
+  } catch (error) {
+    if (isMissingTranscriptError(error)) {
+      return "missing";
+    }
+    return "unknown";
+  }
+}
+
 function pruneMissingTranscriptEntries(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
+  agentId: string;
   onPruned?: (key: string) => void;
 }): number {
   const sessionPathOpts = resolveSessionFilePathOptions({
+    agentId: params.agentId,
     storePath: params.storePath,
   });
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
-    if (!entry?.sessionId) {
+    const sessionId = entry?.sessionId?.trim();
+    if (!sessionId) {
       continue;
     }
-    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
-    if (!fs.existsSync(transcriptPath)) {
-      delete params.store[key];
-      removed += 1;
-      params.onPruned?.(key);
+    let transcriptPath: string;
+    try {
+      transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
+    } catch {
+      continue;
     }
+    if (classifyTranscriptFile(transcriptPath) !== "missing") {
+      continue;
+    }
+    delete params.store[key];
+    removed += 1;
+    params.onPruned?.(key);
   }
   return removed;
 }
@@ -173,6 +203,7 @@ async function previewStoreCleanup(params: {
       ? pruneMissingTranscriptEntries({
           store: previewStore,
           storePath: params.target.storePath,
+          agentId: params.target.agentId,
           onPruned: (key) => {
             missingKeys.add(key);
           },
@@ -365,15 +396,17 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
     const appliedReportRef: { current: SessionMaintenanceApplyReport | null } = {
       current: null,
     };
-    const missingApplied = await updateSessionStore(
+    let missingApplied = 0;
+    await updateSessionStore(
       target.storePath,
       async (store) => {
         if (!opts.fixMissing) {
-          return 0;
+          return;
         }
-        return pruneMissingTranscriptEntries({
+        missingApplied = pruneMissingTranscriptEntries({
           store,
           storePath: target.storePath,
+          agentId: target.agentId,
         });
       },
       {
@@ -399,13 +432,14 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
               dryRun: false,
               beforeCount: 0,
               afterCount: 0,
-              missing: 0,
+              missing: missingApplied,
               pruned: 0,
               capped: 0,
               diskBudget: null,
               wouldMutate: false,
             }),
             dryRun: false,
+            missing: missingApplied,
             applied: true,
             appliedCount: Object.keys(afterStore).length,
           }
@@ -414,7 +448,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
             storePath: target.storePath,
             mode: appliedReport.mode,
             dryRun: false,
-            beforeCount: appliedReport.beforeCount,
+            beforeCount: appliedReport.beforeCount + missingApplied,
             afterCount: appliedReport.afterCount,
             missing: missingApplied,
             pruned: appliedReport.pruned,
