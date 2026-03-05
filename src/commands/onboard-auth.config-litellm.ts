@@ -36,30 +36,46 @@ function buildLitellmModelDefinition(): {
   };
 }
 
-export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyLitellmProviderConfig(
+  cfg: OpenClawConfig,
+  overrides?: { baseUrl?: string; modelId?: string },
+): OpenClawConfig {
+  const modelId = overrides?.modelId || LITELLM_DEFAULT_MODEL_ID;
+  const modelRef = `litellm/${modelId}`;
+
   const models = { ...cfg.agents?.defaults?.models };
-  models[LITELLM_DEFAULT_MODEL_REF] = {
-    ...models[LITELLM_DEFAULT_MODEL_REF],
-    alias: models[LITELLM_DEFAULT_MODEL_REF]?.alias ?? "LiteLLM",
+  models[modelRef] = {
+    ...models[modelRef],
+    alias: models[modelRef]?.alias ?? "LiteLLM",
   };
 
   const defaultModel = buildLitellmModelDefinition();
+  if (modelId !== LITELLM_DEFAULT_MODEL_ID) {
+    defaultModel.id = modelId;
+    defaultModel.name = modelId;
+  }
 
   const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
   const resolvedBaseUrl =
-    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+    overrides?.baseUrl ||
+    (typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "") ||
+    LITELLM_BASE_URL;
 
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
     providerId: "litellm",
     api: "openai-completions",
-    baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
+    baseUrl: resolvedBaseUrl,
     defaultModel,
-    defaultModelId: LITELLM_DEFAULT_MODEL_ID,
+    defaultModelId: modelId,
   });
 }
 
-export function applyLitellmConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyLitellmProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, LITELLM_DEFAULT_MODEL_REF);
+export function applyLitellmConfig(
+  cfg: OpenClawConfig,
+  overrides?: { baseUrl?: string; modelId?: string },
+): OpenClawConfig {
+  const modelId = overrides?.modelId || LITELLM_DEFAULT_MODEL_ID;
+  const next = applyLitellmProviderConfig(cfg, overrides);
+  return applyAgentDefaultModelPrimary(next, `litellm/${modelId}`);
 }

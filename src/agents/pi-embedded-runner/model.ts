@@ -5,6 +5,10 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
+
+// Sensible default for max output tokens when no model/provider config is available.
+// Distinct from DEFAULT_CONTEXT_TOKENS (200k) which is for input context window.
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 import { normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
@@ -105,13 +109,13 @@ export function resolveModel(
       const configuredModel = providerCfg?.models?.find((candidate) => candidate.id === modelId);
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
-        name: modelId,
-        api: providerCfg?.api ?? "openai-responses",
+        name: configuredModel?.name ?? modelId,
+        api: configuredModel?.api ?? providerCfg?.api ?? "openai-responses",
         provider,
         baseUrl: providerCfg?.baseUrl,
         reasoning: configuredModel?.reasoning ?? false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        input: configuredModel?.input ?? ["text"],
+        cost: configuredModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow:
           configuredModel?.contextWindow ??
           providerCfg?.models?.[0]?.contextWindow ??
@@ -124,6 +128,8 @@ export function resolveModel(
           providerCfg?.headers || configuredModel?.headers
             ? { ...providerCfg?.headers, ...configuredModel?.headers }
             : undefined,
+        // Preserve compat settings for provider-specific quirks (e.g., supportsStore for LiteLLM)
+        compat: configuredModel?.compat,
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
     }
