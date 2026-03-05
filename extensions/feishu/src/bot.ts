@@ -1340,17 +1340,7 @@ export async function handleFeishuMessage(params: {
     const replyTargetMessageId = ctx.rootId ?? ctx.messageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
     const groupReplyMode = isGroup
-      ? ((groupConfig as Record<string, unknown> | undefined)?.groupReplyMode as
-          | "reply"
-          | "create"
-          | "auto"
-          | undefined) ??
-        ((feishuCfg as Record<string, unknown> | undefined)?.groupReplyMode as
-          | "reply"
-          | "create"
-          | "auto"
-          | undefined) ??
-        "reply"
+      ? (groupConfig?.groupReplyMode ?? feishuCfg?.groupReplyMode ?? "reply")
       : "reply";
 
     if (broadcastAgents) {
