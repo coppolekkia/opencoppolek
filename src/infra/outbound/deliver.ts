@@ -155,7 +155,10 @@ function createPluginHandler(
   }
   const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound.sendText;
-  const sendMedia = outbound.sendMedia;
+  // Provide fallback for optional sendMedia to satisfy ChannelHandler type
+  const sendMedia = outbound.sendMedia ?? (async () => {
+    throw new Error(`sendMedia not supported by channel: ${params.channel}`);
+  });
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
   const resolveCtx = (overrides?: {
