@@ -27,6 +27,7 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
+      parentConversationId: "parent-1",
     });
     expect(isAcpCommandDiscordChannel(params)).toBe(true);
   });
@@ -44,8 +45,26 @@ describe("commands-acp context", () => {
       accountId: "default",
       threadId: undefined,
       conversationId: "123456789",
+      parentConversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
     expect(isAcpCommandDiscordChannel(params)).toBe(false);
+  });
+
+  it("resolves parentConversationId from OriginatingConversationId for Slack DMs", () => {
+    const params = buildCommandTestParams("/acp spawn claude --thread here", baseCfg, {
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U12345",
+      OriginatingConversationId: "D98765",
+      AccountId: "test",
+      MessageThreadId: "1709000000.000100",
+    });
+
+    const ctx = resolveAcpCommandBindingContext(params);
+    expect(ctx.channel).toBe("slack");
+    expect(ctx.threadId).toBe("1709000000.000100");
+    expect(ctx.parentConversationId).toBe("D98765");
   });
 });

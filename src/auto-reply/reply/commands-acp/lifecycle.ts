@@ -139,7 +139,13 @@ async function bindSpawnedAcpSessionToThread(params: {
       error: `Thread bindings do not support ${placement} placement for ${channel}.`,
     };
   }
-  const channelId = placement === "child" ? bindingContext.conversationId : undefined;
+  // For child placement, use parentConversationId (channel) as the target channel.
+  // For channels like Slack where conversationId may be the thread_ts (not the channel),
+  // parentConversationId provides the actual channel ID.
+  const channelId =
+    placement === "child"
+      ? bindingContext.parentConversationId || bindingContext.conversationId
+      : undefined;
 
   if (placement === "child" && !channelId) {
     return {
@@ -148,12 +154,17 @@ async function bindSpawnedAcpSessionToThread(params: {
     };
   }
 
+  // parentConversationId is the parent channel for thread-based channels (e.g., Slack channel ID).
+  // For Discord, threads are their own channels so parentConversationId may not be needed.
+  const parentConversationId = bindingContext.parentConversationId;
+
   const senderId = commandParams.command.senderId?.trim() || "";
   if (threadId) {
     const existingBinding = bindingService.resolveByConversation({
       channel: spawnPolicy.channel,
       accountId: spawnPolicy.accountId,
       conversationId: threadId,
+      parentConversationId,
     });
     const boundBy =
       typeof existingBinding?.metadata?.boundBy === "string"
@@ -184,6 +195,7 @@ async function bindSpawnedAcpSessionToThread(params: {
         channel: spawnPolicy.channel,
         accountId: spawnPolicy.accountId,
         conversationId,
+        parentConversationId,
       },
       placement,
       metadata: {

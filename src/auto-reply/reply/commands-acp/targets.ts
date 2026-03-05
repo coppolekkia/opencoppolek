@@ -36,13 +36,16 @@ async function resolveSessionKeyByToken(token: string): Promise<string | null> {
 
 export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): string | undefined {
   const bindingContext = resolveAcpCommandBindingContext(params);
-  if (!bindingContext.channel || !bindingContext.conversationId) {
+  // Use threadId (e.g. Slack thread_ts) when available, falling back to conversationId.
+  const conversationId = bindingContext.threadId || bindingContext.conversationId;
+  if (!bindingContext.channel || !conversationId) {
     return undefined;
   }
   const binding = getSessionBindingService().resolveByConversation({
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
-    conversationId: bindingContext.conversationId,
+    conversationId,
+    parentConversationId: bindingContext.parentConversationId,
   });
   if (!binding || binding.targetKind !== "session") {
     return undefined;

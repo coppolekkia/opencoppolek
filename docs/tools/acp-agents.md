@@ -78,11 +78,12 @@ Required feature flags for thread-bound ACP:
 - `acp.dispatch.enabled` is on by default (set `false` to pause ACP dispatch)
 - Channel-adapter ACP thread-spawn flag enabled (adapter-specific)
   - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
+  - Slack: `channels.slack.threadBindings.spawnAcpSessions=true`
 
 ### Thread supporting channels
 
 - Any channel adapter that exposes session/thread binding capability.
-- Current built-in support: Discord.
+- Current built-in support: Discord, Slack.
 - Plugin channels can add support through the same binding interface.
 
 ## Start ACP sessions (interfaces)
@@ -182,7 +183,7 @@ If no target resolves, OpenClaw returns a clear error (`Unable to resolve sessio
 Notes:
 
 - On non-thread binding surfaces, default behavior is effectively `off`.
-- Thread-bound spawn requires channel policy support (for Discord: `channels.discord.threadBindings.spawnAcpSessions=true`).
+- Thread-bound spawn requires channel policy support (Discord: `channels.discord.threadBindings.spawnAcpSessions=true`, Slack: `channels.slack.threadBindings.spawnAcpSessions=true`).
 
 ## ACP controls
 
@@ -304,9 +305,32 @@ Thread binding config is channel-adapter specific. Example for Discord:
 }
 ```
 
+Example for Slack:
+
+```json5
+{
+  session: {
+    threadBindings: {
+      enabled: true,
+      idleHours: 24,
+      maxAgeHours: 0,
+    },
+  },
+  channels: {
+    slack: {
+      threadBindings: {
+        enabled: true,
+        spawnAcpSessions: true,
+      },
+    },
+  },
+}
+```
+
 If thread-bound ACP spawn does not work, verify the adapter feature flag first:
 
 - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
+- Slack: `channels.slack.threadBindings.spawnAcpSessions=true`
 
 See [Configuration Reference](/gateway/configuration-reference).
 

@@ -1,5 +1,8 @@
 import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
-import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
+import {
+  resolveConversationIdFromTargets,
+  resolveParentConversationIdFromTargets,
+} from "../../../infra/outbound/conversation-id.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 
 function normalizeString(value: unknown): string {
@@ -39,6 +42,22 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
   });
 }
 
+export function resolveAcpCommandParentConversationId(
+  params: HandleCommandsParams,
+): string | undefined {
+  const fromTargets = resolveParentConversationIdFromTargets({
+    targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
+  });
+  if (fromTargets) {
+    return fromTargets;
+  }
+  // Fallback: use the raw platform conversation ID (e.g., Slack DM channel D...).
+  // This covers cases where OriginatingTo is user:<id> (DMs) and doesn't carry
+  // the platform channel ID needed for thread binding lookups.
+  const raw = params.ctx.OriginatingConversationId;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
 export function isAcpCommandDiscordChannel(params: HandleCommandsParams): boolean {
   return resolveAcpCommandChannel(params) === DISCORD_THREAD_BINDING_CHANNEL;
 }
@@ -48,11 +67,13 @@ export function resolveAcpCommandBindingContext(params: HandleCommandsParams): {
   accountId: string;
   threadId?: string;
   conversationId?: string;
+  parentConversationId?: string;
 } {
   return {
     channel: resolveAcpCommandChannel(params),
     accountId: resolveAcpCommandAccountId(params),
     threadId: resolveAcpCommandThreadId(params),
     conversationId: resolveAcpCommandConversationId(params),
+    parentConversationId: resolveAcpCommandParentConversationId(params),
   };
 }
