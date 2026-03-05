@@ -131,6 +131,7 @@ describe("CronService restart catch-up", () => {
     cron.stop();
     await store.cleanup();
   });
+
   it("replays the most recent missed cron slot after restart when nextRunAtMs already advanced", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     const store = await makeStorePath();
@@ -180,51 +181,6 @@ describe("CronService restart catch-up", () => {
     await store.cleanup();
   });
 
-  it("does not replay interrupted one-shot jobs on startup", async () => {
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-
-    const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
-    const staleRunningAt = Date.parse("2025-12-13T16:30:00.000Z");
-
-    await writeStoreJobs(store.storePath, [
-      {
-        id: "restart-stale-one-shot",
-        name: "one shot stale marker",
-        enabled: true,
-        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
-        updatedAtMs: Date.parse("2025-12-13T16:30:00.000Z"),
-        schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "one-shot stale marker" },
-        state: {
-          nextRunAtMs: dueAt,
-          runningAtMs: staleRunningAt,
-        },
-      },
-    ]);
-
-    const cron = createRestartCronService({
-      storePath: store.storePath,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-    });
-
-    await cron.start();
-
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeatNow).not.toHaveBeenCalled();
-
-    const jobs = await cron.list({ includeDisabled: true });
-    const updated = jobs.find((job) => job.id === "restart-stale-one-shot");
-    expect(updated?.state.runningAtMs).toBeUndefined();
-
-    cron.stop();
-    await store.cleanup();
-  });
-
   it("does not replay cron slot when the latest slot already ran before restart", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     const store = await makeStorePath();
@@ -260,93 +216,6 @@ describe("CronService restart catch-up", () => {
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
-    cron.stop();
-    await store.cleanup();
-  });
-
-  it("does not replay missed cron slots while error backoff is pending after restart", async () => {
-    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-
-    await writeStoreJobs(store.storePath, [
-      {
-        id: "restart-backoff-pending",
-        name: "backoff pending",
-        enabled: true,
-        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
-        updatedAtMs: Date.parse("2025-12-13T04:01:10.000Z"),
-        schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "do not run during backoff" },
-        state: {
-          // Next retry is intentionally delayed by backoff despite a newer cron slot.
-          nextRunAtMs: Date.parse("2025-12-13T04:10:00.000Z"),
-          lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
-          lastStatus: "error",
-          consecutiveErrors: 4,
-        },
-      },
-    ]);
-
-    const cron = createRestartCronService({
-      storePath: store.storePath,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-    });
-
-    await cron.start();
-
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeatNow).not.toHaveBeenCalled();
-
-    cron.stop();
-    await store.cleanup();
-  });
-
-  it("replays missed cron slot after restart when error backoff has already elapsed", async () => {
-    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-
-    await writeStoreJobs(store.storePath, [
-      {
-        id: "restart-backoff-elapsed-replay",
-        name: "backoff elapsed replay",
-        enabled: true,
-        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
-        updatedAtMs: Date.parse("2025-12-13T04:01:10.000Z"),
-        schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "replay after backoff elapsed" },
-        state: {
-          // Startup maintenance may already point to a future slot (04:11) even
-          // though 04:01 was missed and the 30s error backoff has elapsed.
-          nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
-          lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
-          lastStatus: "error",
-          consecutiveErrors: 1,
-        },
-      },
-    ]);
-
-    const cron = createRestartCronService({
-      storePath: store.storePath,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-    });
-
-    await cron.start();
-
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "replay after backoff elapsed",
-      expect.objectContaining({ agentId: undefined }),
-    );
-    expect(requestHeartbeatNow).toHaveBeenCalled();
 
     cron.stop();
     await store.cleanup();
