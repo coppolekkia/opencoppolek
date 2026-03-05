@@ -61,16 +61,30 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
         .map((att) => att.url)
         .filter((url): url is string => typeof url === "string" && url.length > 0);
       if (audioUrls.length > 0) {
-        transcript = await transcribeFirstAudio({
-          ctx: {
-            MediaUrls: audioUrls,
-            MediaTypes: audioAttachments
-              .map((att) => att.content_type)
-              .filter((contentType): contentType is string => Boolean(contentType)),
-          },
+        const transcriptCtx = {
+          MediaUrls: audioUrls,
+          MediaTypes: audioAttachments
+            .map((att) => att.content_type)
+            .filter((contentType): contentType is string => Boolean(contentType)),
+        };
+        const transcriptionPromise = transcribeFirstAudio({
+          ctx: transcriptCtx,
           cfg: params.cfg,
           agentDir: undefined,
         });
+        // Race against abort so a slow transcription does not hold up the
+        // channel queue when the listener has already timed out (issue #36017).
+        if (params.abortSignal && !params.abortSignal.aborted) {
+          let abortHandler!: () => void;
+          const abortPromise = new Promise<undefined>((resolve) => {
+            abortHandler = () => resolve(undefined);
+            params.abortSignal!.addEventListener("abort", abortHandler, { once: true });
+          });
+          transcript = await Promise.race([transcriptionPromise, abortPromise]);
+          params.abortSignal.removeEventListener("abort", abortHandler);
+        } else {
+          transcript = await transcriptionPromise;
+        }
         if (params.abortSignal?.aborted) {
           transcript = undefined;
         }
