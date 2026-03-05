@@ -1,7 +1,9 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  GATEWAY_SERVICE_KIND,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayServiceDescription,
   resolveGatewaySystemdServiceName,
@@ -30,21 +32,225 @@ import {
   parseSystemdExecStart,
 } from "./systemd-unit.js";
 
+const SYSTEMD_SERVICE_NAME_PATTERN = /^[A-Za-z0-9@:_.-]+$/;
+const OPENCLAW_GATEWAY_SYSTEMD_PREFIX = "openclaw-gateway";
+const OPENCLAW_NODE_SYSTEMD_PREFIX = "openclaw-node";
+const SYSTEMD_NOFOLLOW_OPEN_FLAGS =
+  fsConstants.O_WRONLY | fsConstants.O_CREAT | (fsConstants.O_NOFOLLOW ?? 0);
+
+function normalizeSystemdServiceName(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.endsWith(".service") ? trimmed.slice(0, -".service".length) : trimmed;
+}
+
+function assertValidSystemdServiceName(name: string): void {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error("Invalid systemd unit name: empty value.");
+  }
+  if (
+    trimmed.includes("/") ||
+    trimmed.includes("\\") ||
+    trimmed.includes("..") ||
+    !SYSTEMD_SERVICE_NAME_PATTERN.test(trimmed)
+  ) {
+    throw new Error(`Invalid systemd unit name: ${name}`);
+  }
+}
+
+function isGatewayServiceContext(env: GatewayServiceEnv): boolean {
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim().toLowerCase();
+  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+}
+
+function assertAllowedOpenClawSystemdServiceName(name: string, env: GatewayServiceEnv): void {
+  if (isGatewayServiceContext(env)) {
+    if (
+      name === resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE) ||
+      name.startsWith(`${OPENCLAW_GATEWAY_SYSTEMD_PREFIX}-`)
+    ) {
+      return;
+    }
+    throw new Error(`Refusing to manage non-OpenClaw gateway systemd unit: ${name}`);
+  }
+
+  if (
+    name === OPENCLAW_NODE_SYSTEMD_PREFIX ||
+    name.startsWith(`${OPENCLAW_NODE_SYSTEMD_PREFIX}-`)
+  ) {
+    return;
+  }
+  throw new Error(`Refusing to manage non-OpenClaw node systemd unit: ${name}`);
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error;
+}
+
+async function assertDirectoryResolvesWithoutSymlink(
+  env: GatewayServiceEnv,
+  directoryPath: string,
+  label: string,
+): Promise<void> {
+  const expected = path.posix.resolve(directoryPath);
+  const declaredHome = path.posix.resolve(toPosixPath(resolveHomeDir(env)));
+  let resolvedHome = declaredHome;
+  try {
+    resolvedHome = path.posix.resolve(await fs.realpath(declaredHome));
+  } catch (error) {
+    if (!(isErrnoException(error) && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
+  let resolved: string;
+  try {
+    resolved = path.posix.resolve(await fs.realpath(expected));
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  const insideHome = resolved === resolvedHome || resolved.startsWith(`${resolvedHome}/`);
+  if (!insideHome) {
+    throw new Error(
+      `${label} resolves outside the configured home boundary and is unsafe: ${expected} -> ${resolved}`,
+    );
+  }
+}
+
+async function readSafeSystemdUnitFileForBackup(
+  env: GatewayServiceEnv,
+  unitPath: string,
+): Promise<string | null> {
+  await assertDirectoryResolvesWithoutSymlink(
+    env,
+    path.dirname(unitPath),
+    "Systemd unit directory",
+  );
+  let stats: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stats = await fs.lstat(unitPath);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to manage symlinked systemd unit file: ${unitPath}`);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Refusing to manage non-regular systemd unit file: ${unitPath}`);
+  }
+  if (stats.nlink > 1) {
+    throw new Error(`Refusing to manage systemd unit file with hard links: ${unitPath}`);
+  }
+  return await fs.readFile(unitPath, "utf8");
+}
+
+async function writeSystemdUnitFileSafely(
+  env: GatewayServiceEnv,
+  unitPath: string,
+  content: string,
+): Promise<void> {
+  await assertDirectoryResolvesWithoutSymlink(
+    env,
+    path.dirname(unitPath),
+    "Systemd unit directory",
+  );
+  const handle = await fs.open(unitPath, SYSTEMD_NOFOLLOW_OPEN_FLAGS, 0o600);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw new Error(`Refusing to write non-regular systemd unit file: ${unitPath}`);
+    }
+    if (stats.nlink > 1) {
+      throw new Error(`Refusing to write systemd unit file with hard links: ${unitPath}`);
+    }
+    await handle.truncate(0);
+    await handle.writeFile(content, "utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function unlinkSystemdUnitFileSafely(
+  env: GatewayServiceEnv,
+  unitPath: string,
+): Promise<boolean> {
+  await assertDirectoryResolvesWithoutSymlink(
+    env,
+    path.dirname(unitPath),
+    "Systemd unit directory",
+  );
+  let stats: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stats = await fs.lstat(unitPath);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to remove symlinked systemd unit file: ${unitPath}`);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Refusing to remove non-regular systemd unit file: ${unitPath}`);
+  }
+  if (stats.nlink > 1) {
+    throw new Error(`Refusing to remove systemd unit file with hard links: ${unitPath}`);
+  }
+  await fs.unlink(unitPath);
+  return true;
+}
+
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
+  assertValidSystemdServiceName(name);
   const home = toPosixPath(resolveHomeDir(env));
-  return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
+  const baseDir = path.posix.join(home, ".config", "systemd", "user");
+  const resolved = path.posix.resolve(baseDir, `${name}.service`);
+  if (!resolved.startsWith(`${baseDir}/`)) {
+    throw new Error("Resolved unit path escapes systemd user directory.");
+  }
+  return resolved;
 }
 
 function resolveSystemdServiceName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
-  if (override) {
-    return override.endsWith(".service") ? override.slice(0, -".service".length) : override;
-  }
-  return resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const candidate = override
+    ? normalizeSystemdServiceName(override)
+    : resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  assertValidSystemdServiceName(candidate);
+  assertAllowedOpenClawSystemdServiceName(candidate, env);
+  return candidate;
 }
 
 function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
+}
+
+function resolvePreviousGatewayUnitNameForCleanup(
+  env: GatewayServiceEnv,
+  serviceName: string,
+): string | null {
+  if (!isGatewayServiceContext(env)) {
+    return null;
+  }
+  const defaultName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  if (serviceName === defaultName) {
+    return null;
+  }
+  return defaultName;
+}
+
+/** @internal Exported for testing only. */
+export function _resolvePreviousGatewayUnitNameForCleanupForTests(
+  env: GatewayServiceEnv,
+  serviceName: string,
+): string | null {
+  return resolvePreviousGatewayUnitNameForCleanup(env, serviceName);
 }
 
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
@@ -59,7 +265,8 @@ export type { SystemdUserLingerStatus };
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
-  const unitPath = resolveSystemdUnitPath(env);
+  const serviceName = resolveSystemdServiceName(env);
+  const unitPath = resolveSystemdUnitPathForName(env, serviceName);
   try {
     const content = await fs.readFile(unitPath, "utf8");
     let execStart = "";
@@ -297,21 +504,29 @@ export async function installSystemdService({
   workingDirectory,
   environment,
   description,
+  watchdog,
 }: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
   await assertSystemdAvailable(env);
 
-  const unitPath = resolveSystemdUnitPath(env);
+  // Derive the service name first so unitPath, enable, and restart all
+  // operate on the same resolved name (respects OPENCLAW_SYSTEMD_UNIT).
+  const serviceName = resolveSystemdServiceName(env);
+  const unitName = `${serviceName}.service`;
+  const unitPath = resolveSystemdUnitPathForName(env, serviceName);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  await assertDirectoryResolvesWithoutSymlink(
+    env,
+    path.dirname(unitPath),
+    "Systemd unit directory",
+  );
 
   // Preserve user customizations: back up existing unit file before overwriting.
   let backedUp = false;
-  try {
-    await fs.access(unitPath);
+  const existingUnit = await readSafeSystemdUnitFileForBackup(env, unitPath);
+  if (existingUnit !== null) {
     const backupPath = `${unitPath}.bak`;
-    await fs.copyFile(unitPath, backupPath);
+    await writeSystemdUnitFileSafely(env, backupPath, existingUnit);
     backedUp = true;
-  } catch {
-    // File does not exist yet — nothing to back up.
   }
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
@@ -320,11 +535,18 @@ export async function installSystemdService({
     programArguments,
     workingDirectory,
     environment,
+    watchdog,
   });
-  await fs.writeFile(unitPath, unit, "utf8");
+  await writeSystemdUnitFileSafely(env, unitPath, unit);
 
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-  const unitName = `${serviceName}.service`;
+  // Stop any previous default gateway unit before restart to avoid
+  // lock/port conflicts during OPENCLAW_SYSTEMD_UNIT rename migrations.
+  const previousGatewayUnit = resolvePreviousGatewayUnitNameForCleanup(env, serviceName);
+  if (previousGatewayUnit) {
+    const prevUnit = `${previousGatewayUnit}.service`;
+    await execSystemctlUser(env, ["disable", "--now", prevUnit]);
+  }
+
   const reload = await execSystemctlUser(env, ["daemon-reload"]);
   if (reload.code !== 0) {
     throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
@@ -338,6 +560,13 @@ export async function installSystemdService({
   const restart = await execSystemctlUser(env, ["restart", unitName]);
   if (restart.code !== 0) {
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+  }
+
+  // When OPENCLAW_SYSTEMD_UNIT overrides the name, remove the previous
+  // profile-based unit file after the new unit is active.
+  if (previousGatewayUnit) {
+    const prevPath = resolveSystemdUnitPathForName(env, previousGatewayUnit);
+    await unlinkSystemdUnitFileSafely(env, prevPath);
   }
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
@@ -367,16 +596,29 @@ export async function uninstallSystemdService({
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSystemdAvailable(env);
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   await execSystemctlUser(env, ["disable", "--now", unitName]);
 
-  const unitPath = resolveSystemdUnitPath(env);
-  try {
-    await fs.unlink(unitPath);
+  const unitPath = resolveSystemdUnitPathForName(env, serviceName);
+  const removedCurrent = await unlinkSystemdUnitFileSafely(env, unitPath);
+  if (removedCurrent) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
-  } catch {
+  } else {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
+  }
+
+  // When OPENCLAW_SYSTEMD_UNIT overrides the name, also disable the previous
+  // profile-based unit so it doesn't remain enabled as a dangling service.
+  const previousGatewayUnit = resolvePreviousGatewayUnitNameForCleanup(env, serviceName);
+  if (previousGatewayUnit) {
+    const prevUnit = `${previousGatewayUnit}.service`;
+    await execSystemctlUser(env, ["disable", "--now", prevUnit]);
+    const prevPath = resolveSystemdUnitPathForName(env, previousGatewayUnit);
+    const removedPrevious = await unlinkSystemdUnitFileSafely(env, prevPath);
+    if (removedPrevious) {
+      stdout.write(`${formatLine("Removed previous systemd service", prevPath)}\n`);
+    }
   }
 }
 

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -7,13 +10,16 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { parseSystemdExecStart } from "./systemd-unit.js";
+import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  _resolvePreviousGatewayUnitNameForCleanupForTests,
+  installSystemdService,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
+  uninstallSystemdService,
 } from "./systemd.js";
 
 describe("systemd availability", () => {
@@ -175,28 +181,205 @@ describe("resolveSystemdUserUnitPath", () => {
       env: {
         HOME: "/home/test",
         OPENCLAW_PROFILE: "jbphoenix",
-        OPENCLAW_SYSTEMD_UNIT: "custom-unit",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom",
       },
-      expected: "/home/test/.config/systemd/user/custom-unit.service",
+      expected: "/home/test/.config/systemd/user/openclaw-gateway-custom.service",
     },
     {
       name: "handles OPENCLAW_SYSTEMD_UNIT with .service suffix",
       env: {
         HOME: "/home/test",
-        OPENCLAW_SYSTEMD_UNIT: "custom-unit.service",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom.service",
       },
-      expected: "/home/test/.config/systemd/user/custom-unit.service",
+      expected: "/home/test/.config/systemd/user/openclaw-gateway-custom.service",
     },
     {
       name: "trims whitespace from OPENCLAW_SYSTEMD_UNIT",
       env: {
         HOME: "/home/test",
-        OPENCLAW_SYSTEMD_UNIT: "  custom-unit  ",
+        OPENCLAW_SYSTEMD_UNIT: "  openclaw-gateway-custom  ",
       },
-      expected: "/home/test/.config/systemd/user/custom-unit.service",
+      expected: "/home/test/.config/systemd/user/openclaw-gateway-custom.service",
+    },
+    {
+      name: "allows OpenClaw node override in node service context",
+      env: {
+        HOME: "/home/test",
+        OPENCLAW_SERVICE_KIND: "node",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-node-worker",
+      },
+      expected: "/home/test/.config/systemd/user/openclaw-node-worker.service",
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveSystemdUserUnitPath(env)).toBe(expected);
+  });
+
+  it.each([
+    { name: "rejects path traversal", unit: "../escape" },
+    { name: "rejects absolute path", unit: "/etc/systemd/system/sshd" },
+    { name: "rejects slash", unit: "custom/unit" },
+    { name: "rejects backslash", unit: "custom\\\\unit" },
+    { name: "rejects dot-dot token", unit: "custom..unit" },
+  ])("$name", ({ unit }) => {
+    expect(() =>
+      resolveSystemdUserUnitPath({
+        HOME: "/home/test",
+        OPENCLAW_SYSTEMD_UNIT: unit,
+      }),
+    ).toThrow("Invalid systemd unit name");
+  });
+
+  it("rejects non-OpenClaw unit names", () => {
+    expect(() =>
+      resolveSystemdUserUnitPath({
+        HOME: "/home/test",
+        OPENCLAW_SYSTEMD_UNIT: "pipewire",
+      }),
+    ).toThrow("Refusing to manage non-OpenClaw");
+  });
+});
+
+describe("resolvePreviousGatewayUnitNameForCleanup", () => {
+  it("returns previous gateway unit when gateway unit name is overridden", () => {
+    expect(
+      _resolvePreviousGatewayUnitNameForCleanupForTests(
+        { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom" },
+        "openclaw-gateway-custom",
+      ),
+    ).toBe("openclaw-gateway");
+  });
+
+  it("returns null when current unit matches default gateway unit", () => {
+    expect(_resolvePreviousGatewayUnitNameForCleanupForTests({}, "openclaw-gateway")).toBeNull();
+  });
+
+  it("returns null for non-gateway service kinds", () => {
+    expect(
+      _resolvePreviousGatewayUnitNameForCleanupForTests(
+        { OPENCLAW_SERVICE_KIND: "node", OPENCLAW_SYSTEMD_UNIT: "openclaw-node" },
+        "openclaw-node",
+      ),
+    ).toBeNull();
+  });
+
+  it("returns profile-specific previous gateway unit", () => {
+    expect(
+      _resolvePreviousGatewayUnitNameForCleanupForTests(
+        { OPENCLAW_PROFILE: "work", OPENCLAW_SYSTEMD_UNIT: "custom-work-gateway" },
+        "custom-work-gateway",
+      ),
+    ).toBe("openclaw-gateway-work");
+  });
+});
+
+describe("systemd unit file safety guards", () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+  });
+
+  it("rejects installing over a symlinked unit file", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-symlink-"));
+    try {
+      const unitDir = path.join(home, ".config", "systemd", "user");
+      await fs.mkdir(unitDir, { recursive: true });
+      const targetPath = path.join(home, "outside-target");
+      await fs.writeFile(targetPath, "outside", "utf8");
+      await fs.symlink(targetPath, path.join(unitDir, "openclaw-gateway.service"));
+
+      await expect(
+        installSystemdService({
+          env: { HOME: home },
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        }),
+      ).rejects.toThrow("symlinked systemd unit file");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects uninstalling a hard-linked unit file", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-hardlink-"));
+    try {
+      const unitDir = path.join(home, ".config", "systemd", "user");
+      await fs.mkdir(unitDir, { recursive: true });
+      const sensitivePath = path.join(home, "sensitive-file");
+      const unitPath = path.join(unitDir, "openclaw-gateway.service");
+      await fs.writeFile(sensitivePath, "do-not-delete", "utf8");
+      await fs.link(sensitivePath, unitPath);
+
+      await expect(
+        uninstallSystemdService({
+          env: { HOME: home },
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        }),
+      ).rejects.toThrow("hard links");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("systemd install migration behavior", () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+  });
+
+  it("disables previous gateway unit before restarting renamed unit", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-migrate-"));
+    try {
+      const calls: string[][] = [];
+      execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
+        calls.push(args);
+        cb(null, "", "");
+      });
+
+      await installSystemdService({
+        env: { HOME: home, OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom" },
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      });
+
+      const render = (args: string[]) => args.join(" ");
+      const disableIndex = calls.findIndex(
+        (args) => render(args) === "--user disable --now openclaw-gateway.service",
+      );
+      const restartIndex = calls.findIndex(
+        (args) => render(args) === "--user restart openclaw-gateway-custom.service",
+      );
+      expect(disableIndex).toBeGreaterThanOrEqual(0);
+      expect(restartIndex).toBeGreaterThanOrEqual(0);
+      expect(disableIndex).toBeLessThan(restartIndex);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("allows symlinked config path when resolved unit directory stays inside home", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-configlink-"));
+    try {
+      const realConfig = path.join(home, "real-config");
+      await fs.mkdir(realConfig, { recursive: true });
+      await fs.symlink(realConfig, path.join(home, ".config"));
+
+      await expect(
+        installSystemdService({
+          env: { HOME: home },
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        }),
+      ).resolves.toEqual({
+        unitPath: `${home}/.config/systemd/user/openclaw-gateway.service`,
+      });
+
+      await expect(
+        fs.access(path.join(realConfig, "systemd", "user", "openclaw-gateway.service")),
+      ).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -389,5 +572,58 @@ describe("systemd service control", () => {
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
+});
+
+describe("buildSystemdUnit", () => {
+  it("omits notify/watchdog directives by default", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+    });
+    expect(unit).not.toContain("Type=notify");
+    expect(unit).not.toContain("NotifyAccess=main");
+    expect(unit).not.toContain("WatchdogSec=90");
+  });
+
+  it("includes Type=notify when watchdog is enabled", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+      watchdog: true,
+    });
+    expect(unit).toContain("Type=notify");
+  });
+
+  it("includes NotifyAccess=main when watchdog is enabled", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+      watchdog: true,
+    });
+    expect(unit).toContain("NotifyAccess=main");
+  });
+
+  it("includes WatchdogSec=90 when watchdog is enabled", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+      watchdog: true,
+    });
+    expect(unit).toContain("WatchdogSec=90");
+  });
+
+  it("places watchdog directives in [Service] section", () => {
+    const unit = buildSystemdUnit({
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+      watchdog: true,
+    });
+    const serviceStart = unit.indexOf("[Service]");
+    const installStart = unit.indexOf("[Install]");
+    const typePos = unit.indexOf("Type=notify");
+    const notifyAccessPos = unit.indexOf("NotifyAccess=main");
+    const watchdogPos = unit.indexOf("WatchdogSec=90");
+    expect(typePos).toBeGreaterThan(serviceStart);
+    expect(typePos).toBeLessThan(installStart);
+    expect(notifyAccessPos).toBeGreaterThan(serviceStart);
+    expect(notifyAccessPos).toBeLessThan(installStart);
+    expect(watchdogPos).toBeGreaterThan(serviceStart);
+    expect(watchdogPos).toBeLessThan(installStart);
   });
 });
