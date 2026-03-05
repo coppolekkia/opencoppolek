@@ -45,7 +45,7 @@ function buildAgentCommandInput(params: {
   prompt: { message: string; extraSystemPrompt?: string };
   sessionKey: string;
   runId: string;
-  messageChannel: string;
+  messageChannel?: string;
 }) {
   return {
     message: params.prompt.message,
@@ -53,7 +53,7 @@ function buildAgentCommandInput(params: {
     sessionKey: params.sessionKey,
     runId: params.runId,
     deliver: false as const,
-    messageChannel: params.messageChannel,
+    messageChannel: params.messageChannel ?? "webchat",
     bestEffortDeliver: false as const,
     // HTTP API callers are authenticated operator clients for this gateway context.
     senderIsOwner: true as const,
