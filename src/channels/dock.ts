@@ -3,6 +3,7 @@ import {
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
+import { resolveLineAccount } from "../line/accounts.js";
 import {
   formatTrimmedAllowFromEntries,
   formatWhatsAppConfigAllowFromEntries,
@@ -277,6 +278,38 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           currentMessageId,
           hasRepliedRef,
         };
+      },
+    },
+  },
+  line: {
+    id: "line",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
+      blockStreaming: true,
+    },
+    outbound: { textChunkLimit: 5000 },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) =>
+        stringifyAllowFrom(
+          resolveLineAccount({ cfg, accountId: accountId ?? undefined }).config.allowFrom ?? [],
+        ),
+      formatAllowFrom: ({ allowFrom }) =>
+        trimAllowFromEntries(allowFrom).map((entry) =>
+          entry.replace(/^line:/i, "").replace(/^user:/i, ""),
+        ),
+    },
+    groups: {
+      resolveRequireMention: ({ cfg, accountId, groupId }) => {
+        if (!groupId) {
+          return true;
+        }
+        return resolveChannelGroupRequireMention({
+          cfg,
+          channel: "line",
+          groupId,
+          accountId,
+        });
       },
     },
   },
