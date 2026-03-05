@@ -59,6 +59,10 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import {
+  resolveContextInjection,
+  sessionHasAssistantMessages,
+} from "../../pi-embedded-helpers/bootstrap.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
@@ -705,7 +709,21 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
+
+    // Check context injection mode: when "first-message-only", skip workspace context
+    // only after a successful assistant turn exists in transcript state.
+    // This avoids false skips from stale/orphan user rows left by aborted runs.
+    const contextInjectionMode = resolveContextInjection(params.config);
+    // Only scan the transcript when "first-message-only" mode is active —
+    // avoids unnecessary O(n) I/O in the default "always" mode.
+    const hasAssistantMessages =
+      contextInjectionMode === "first-message-only"
+        ? await sessionHasAssistantMessages(params.sessionFile)
+        : false;
+    const skipContextInjection =
+      contextInjectionMode === "first-message-only" && hasAssistantMessages;
+
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles: rawContextFiles } =
       await resolveBootstrapContextForRun({
         workspaceDir: effectiveWorkspace,
         config: params.config,
@@ -715,6 +733,9 @@ export async function runEmbeddedAttempt(
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
       });
+    // When skipping context injection, clear context files but keep bootstrap metadata
+    // (needed for workspaceNotes and systemPromptReport).
+    const contextFiles = skipContextInjection ? [] : rawContextFiles;
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -725,7 +746,13 @@ export async function runEmbeddedAttempt(
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
     });
-    const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
+    const configuredBootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(
+      params.config,
+    );
+    const bootstrapPromptWarningMode =
+      skipContextInjection && contextInjectionMode === "first-message-only"
+        ? "off"
+        : configuredBootstrapPromptWarningMode;
     const bootstrapPromptWarning = buildBootstrapPromptWarning({
       analysis: bootstrapAnalysis,
       mode: bootstrapPromptWarningMode,

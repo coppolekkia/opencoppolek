@@ -104,6 +104,68 @@ export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
   return DEFAULT_BOOTSTRAP_MAX_CHARS;
 }
 
+export type ContextInjectionMode = "always" | "first-message-only";
+
+export function resolveContextInjection(cfg?: OpenClawConfig): ContextInjectionMode {
+  const raw = cfg?.agents?.defaults?.contextInjection;
+  if (raw === "first-message-only") {
+    return "first-message-only";
+  }
+  return "always";
+}
+
+async function sessionHasMessageRole(
+  sessionFile: string,
+  role: "user" | "assistant",
+): Promise<boolean> {
+  try {
+    const content = await fs.readFile(sessionFile, "utf-8");
+    // Each line is a JSONL record. We only treat a line as prior history
+    // when it parses and contains the target role with non-empty content.
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      if (!trimmed.includes(`"role":"${role}"`) && !trimmed.includes(`"role": "${role}"`)) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(trimmed) as {
+          role?: unknown;
+          content?: unknown;
+          message?: { role?: unknown; content?: unknown };
+        };
+        const parsedRole = parsed.role ?? parsed.message?.role;
+        const messageContent = parsed.content ?? parsed.message?.content;
+        if (parsedRole !== role) {
+          continue;
+        }
+        if (typeof messageContent === "string" && messageContent.trim().length > 0) {
+          return true;
+        }
+        if (Array.isArray(messageContent) && messageContent.length > 0) {
+          return true;
+        }
+      } catch {
+        // Ignore malformed lines; do not treat parse failures as prior history.
+        continue;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function sessionHasUserMessages(sessionFile: string): Promise<boolean> {
+  return sessionHasMessageRole(sessionFile, "user");
+}
+
+export async function sessionHasAssistantMessages(sessionFile: string): Promise<boolean> {
+  return sessionHasMessageRole(sessionFile, "assistant");
+}
+
 export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.bootstrapTotalMaxChars;
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {

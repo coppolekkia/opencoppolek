@@ -7,6 +7,9 @@ export {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
+  resolveContextInjection,
+  sessionHasAssistantMessages,
+  sessionHasUserMessages,
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
