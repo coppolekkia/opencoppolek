@@ -3,7 +3,11 @@
  * Used to identify bot's own messages for reaction filtering ("own" mode).
  */
 
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const SENT_MESSAGE_CACHE_MAX_PER_CHAT = 1_000;
+export const SENT_MESSAGE_CACHE_MAX_CHATS = 2_000;
 
 type CacheEntry = {
   timestamps: Map<number, number>;
@@ -24,6 +28,11 @@ function cleanupExpired(entry: CacheEntry): void {
   }
 }
 
+function touchChatEntry(chatKey: string, entry: CacheEntry): void {
+  sentMessages.delete(chatKey);
+  sentMessages.set(chatKey, entry);
+}
+
 /**
  * Record a message ID as sent by the bot.
  */
@@ -32,13 +41,19 @@ export function recordSentMessage(chatId: number | string, messageId: number): v
   let entry = sentMessages.get(key);
   if (!entry) {
     entry = { timestamps: new Map() };
-    sentMessages.set(key, entry);
   }
+
+  cleanupExpired(entry);
+
+  // Re-insert to refresh insertion order and keep active chats during global pruning.
+  touchChatEntry(key, entry);
+
+  // Re-insert to refresh message insertion order on duplicate message IDs.
+  entry.timestamps.delete(messageId);
   entry.timestamps.set(messageId, Date.now());
-  // Periodic cleanup
-  if (entry.timestamps.size > 100) {
-    cleanupExpired(entry);
-  }
+
+  pruneMapToMaxSize(entry.timestamps, SENT_MESSAGE_CACHE_MAX_PER_CHAT);
+  pruneMapToMaxSize(sentMessages, SENT_MESSAGE_CACHE_MAX_CHATS);
 }
 
 /**
@@ -50,8 +65,12 @@ export function wasSentByBot(chatId: number | string, messageId: number): boolea
   if (!entry) {
     return false;
   }
-  // Clean up expired entries on read
+  // Clean up expired entries on read.
   cleanupExpired(entry);
+  if (entry.timestamps.size === 0) {
+    sentMessages.delete(key);
+    return false;
+  }
   return entry.timestamps.has(messageId);
 }
 

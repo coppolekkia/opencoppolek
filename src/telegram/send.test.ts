@@ -5,7 +5,13 @@ import {
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
-import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
+import {
+  clearSentMessageCache,
+  recordSentMessage,
+  SENT_MESSAGE_CACHE_MAX_CHATS,
+  SENT_MESSAGE_CACHE_MAX_PER_CHAT,
+  wasSentByBot,
+} from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
 
@@ -86,6 +92,25 @@ describe("sent-message-cache", () => {
 
     clearSentMessageCache();
     expect(wasSentByBot(123, 1)).toBe(false);
+  });
+
+  it("caps tracked message IDs per chat", () => {
+    const chatId = 777;
+    for (let i = 1; i <= SENT_MESSAGE_CACHE_MAX_PER_CHAT + 5; i += 1) {
+      recordSentMessage(chatId, i);
+    }
+
+    expect(wasSentByBot(chatId, 1)).toBe(false);
+    expect(wasSentByBot(chatId, SENT_MESSAGE_CACHE_MAX_PER_CHAT + 5)).toBe(true);
+  });
+
+  it("caps tracked chats globally", () => {
+    for (let i = 1; i <= SENT_MESSAGE_CACHE_MAX_CHATS + 1; i += 1) {
+      recordSentMessage(i, 1);
+    }
+
+    expect(wasSentByBot(1, 1)).toBe(false);
+    expect(wasSentByBot(SENT_MESSAGE_CACHE_MAX_CHATS + 1, 1)).toBe(true);
   });
 });
 
