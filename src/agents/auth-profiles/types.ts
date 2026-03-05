@@ -6,6 +6,14 @@ export type ApiKeyCredential = {
   type: "api_key";
   provider: string;
   key?: string;
+  /**
+   * Legacy alias for `key`.  Some older onboarding paths and hand-edited
+   * auth-profiles.json files persist the API key under `apiKey` instead of
+   * `key`.  Both spellings are accepted at read time; the store normalises
+   * `apiKey → key` on load, but runtime-injected stores may still carry the
+   * legacy field.
+   */
+  apiKey?: string;
   keyRef?: SecretRef;
   email?: string;
   /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */

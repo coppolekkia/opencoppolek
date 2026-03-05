@@ -227,6 +227,57 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
   });
 });
 
+describe("resolveApiKeyForProfile api_key field compatibility", () => {
+  it("resolves api_key credentials using legacy apiKey field", async () => {
+    const profileId = "google:default";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider: "google",
+          apiKey: "AIzaSy-test-key",
+        },
+      },
+    };
+
+    const result = await resolveApiKeyForProfile({
+      store,
+      profileId,
+    });
+    expect(result).toEqual({
+      apiKey: "AIzaSy-test-key",
+      provider: "google",
+      email: undefined,
+    });
+  });
+
+  it("prefers key over apiKey when both are present", async () => {
+    const profileId = "google:default";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider: "google",
+          key: "primary-key",
+          apiKey: "legacy-key",
+        },
+      },
+    };
+
+    const result = await resolveApiKeyForProfile({
+      store,
+      profileId,
+    });
+    expect(result).toEqual({
+      apiKey: "primary-key",
+      provider: "google",
+      email: undefined,
+    });
+  });
+});
+
 describe("resolveApiKeyForProfile secret refs", () => {
   it("resolves api_key keyRef from env", async () => {
     const profileId = "openai:default";

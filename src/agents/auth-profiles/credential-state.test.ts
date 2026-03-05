@@ -46,6 +46,31 @@ describe("evaluateStoredCredentialEligibility", () => {
     expect(result).toEqual({ eligible: true, reasonCode: "ok" });
   });
 
+  it("marks api_key with legacy apiKey field as eligible", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "api_key",
+        provider: "google",
+        apiKey: "AIzaSy-test",
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: true, reasonCode: "ok" });
+  });
+
+  it("prefers key over apiKey when both are present", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "api_key",
+        provider: "google",
+        key: "primary-key",
+        apiKey: "legacy-key",
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: true, reasonCode: "ok" });
+  });
+
   it("marks tokenRef with missing expires as eligible", () => {
     const result = evaluateStoredCredentialEligibility({
       credential: {
