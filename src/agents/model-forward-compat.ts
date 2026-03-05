@@ -25,6 +25,14 @@ const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 
+// gemini-3.1-flash-lite-preview and similar gemini-3.1 flash variants are not in pi-ai's
+// built-in google (Generative AI API) catalog yet. Clone gemini-3-flash-preview as a
+// forward-compat template so users don't get "Unknown model" errors.
+const GOOGLE_GENERATIVE_AI_GEMINI_3_1_FLASH_TEMPLATE_IDS = [
+  "gemini-3-flash-preview",
+  "gemini-3.1-pro-preview",
+] as const;
+
 function cloneFirstTemplateModel(params: {
   normalizedProvider: string;
   trimmedModelId: string;
@@ -200,6 +208,32 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   });
 }
 
+// gemini-3.1-flash-lite-preview and similar gemini-3.1 flash variants may not be in
+// pi-ai's google (Generative AI API) catalog yet. Clone gemini-3-flash-preview as
+// a forward-compat template to avoid "Unknown model" errors.
+function resolveGoogleGenerativeAi31FlashForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "google") {
+    return undefined;
+  }
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+  if (!lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
+    return undefined;
+  }
+
+  return cloneFirstTemplateModel({
+    normalizedProvider: "google",
+    trimmedModelId: trimmed,
+    templateIds: [...GOOGLE_GENERATIVE_AI_GEMINI_3_1_FLASH_TEMPLATE_IDS],
+    modelRegistry,
+    patch: { reasoning: true },
+  });
+}
+
 // Z.ai's GLM-5 may not be present in pi-ai's built-in model catalog yet.
 // When a user configures zai/glm-5 without a models.json entry, clone glm-4.7 as a forward-compat fallback.
 function resolveZaiGlm5ForwardCompatModel(
@@ -252,6 +286,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveGoogleGenerativeAi31FlashForwardCompatModel(provider, modelId, modelRegistry)
   );
 }

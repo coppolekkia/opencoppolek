@@ -89,6 +89,27 @@ export function mockGoogleGeminiCliFlashTemplateModel(): void {
   });
 }
 
+export const GOOGLE_GENERATIVE_AI_FLASH_TEMPLATE_MODEL = {
+  id: "gemini-3-flash-preview",
+  name: "Gemini 3 Flash",
+  provider: "google",
+  api: "google-generative-ai",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  reasoning: true,
+  input: ["text", "image"] as const,
+  cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+  contextWindow: 1048576,
+  maxTokens: 65536,
+};
+
+export function mockGoogleGenerativeAiFlashTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "google",
+    modelId: "gemini-3-flash-preview",
+    templateModel: GOOGLE_GENERATIVE_AI_FLASH_TEMPLATE_MODEL,
+  });
+}
+
 export function resetMockDiscoverModels(): void {
   vi.mocked(discoverModels).mockReturnValue({
     find: vi.fn(() => null),
