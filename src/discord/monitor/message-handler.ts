@@ -1,4 +1,5 @@
 import type { Client } from "@buape/carbon";
+import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
@@ -221,6 +222,22 @@ export function createDiscordMessageHandler(
       });
   };
 
+  const resolveInboundDebounceSessionId = (entry: { data: DiscordMessageEvent }) => {
+    const message = entry.data.message;
+    const authorId = entry.data.author?.id;
+    if (!message || !authorId) {
+      return undefined;
+    }
+    const channelId = resolveDiscordMessageChannelId({
+      message,
+      eventChannelId: entry.data.channel_id,
+    });
+    if (!channelId) {
+      return undefined;
+    }
+    return `discord:${params.accountId}:${channelId}:${authorId}`;
+  };
+
   const { debouncer } = createChannelInboundDebouncer<{
     data: DiscordMessageEvent;
     client: Client;
@@ -228,20 +245,17 @@ export function createDiscordMessageHandler(
   }>({
     cfg: params.cfg,
     channel: "discord",
-    buildKey: (entry) => {
-      const message = entry.data.message;
-      const authorId = entry.data.author?.id;
-      if (!message || !authorId) {
-        return null;
+    buildKey: resolveInboundDebounceSessionId,
+    resolveDebounceMs: (entry) => {
+      const sessionId = resolveInboundDebounceSessionId(entry);
+      if (!sessionId) {
+        return undefined;
       }
-      const channelId = resolveDiscordMessageChannelId({
-        message,
-        eventChannelId: entry.data.channel_id,
+      return resolveInboundDebounceMs({
+        cfg: params.cfg,
+        channel: "discord",
+        sessionId,
       });
-      if (!channelId) {
-        return null;
-      }
-      return `discord:${params.accountId}:${channelId}:${authorId}`;
     },
     shouldDebounce: (entry) => {
       const message = entry.data.message;
