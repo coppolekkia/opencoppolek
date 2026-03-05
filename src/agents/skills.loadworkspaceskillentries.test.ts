@@ -155,4 +155,24 @@ describe("loadWorkspaceSkillEntries", () => {
 
     expect(entries.map((entry) => entry.skill.name)).not.toContain("diffs");
   });
+
+  it("coerces numeric YAML skill names to strings", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const numericSkillDir = path.join(workspaceDir, "skills", "numeric-name");
+    await fs.mkdir(numericSkillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(numericSkillDir, "SKILL.md"),
+      `---\nname: 123\ndescription: number name\n---\n`,
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("123");
+  });
 });

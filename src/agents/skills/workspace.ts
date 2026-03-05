@@ -206,16 +206,35 @@ function resolveNestedSkillsRoot(
 }
 
 function unwrapLoadedSkills(loaded: unknown): Skill[] {
-  if (Array.isArray(loaded)) {
-    return loaded as Skill[];
-  }
-  if (loaded && typeof loaded === "object" && "skills" in loaded) {
-    const skills = (loaded as { skills?: unknown }).skills;
-    if (Array.isArray(skills)) {
-      return skills as Skill[];
+  const rawSkills = (() => {
+    if (Array.isArray(loaded)) {
+      return loaded;
     }
+    if (loaded && typeof loaded === "object" && "skills" in loaded) {
+      const skills = (loaded as { skills?: unknown }).skills;
+      if (Array.isArray(skills)) {
+        return skills;
+      }
+    }
+    return [];
+  })();
+
+  const normalized: Skill[] = [];
+  for (const skill of rawSkills) {
+    if (!skill || typeof skill !== "object") {
+      continue;
+    }
+    const rawName = (skill as { name?: unknown }).name;
+    const name = String(rawName ?? "").trim();
+    if (!name) {
+      continue;
+    }
+    normalized.push({
+      ...(skill as Skill),
+      name,
+    });
   }
-  return [];
+  return normalized;
 }
 
 function loadSkillEntries(
