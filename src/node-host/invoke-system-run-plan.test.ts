@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatExecCommand } from "../infra/system-run-command.js";
 import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
@@ -19,9 +18,7 @@ type HardeningCase = {
   shellCommand?: string | null;
   withPathToken?: boolean;
   expectedArgv: (ctx: { pathToken: PathTokenSetup | null }) => string[];
-  expectedArgvChanged?: boolean;
   expectedCmdText?: string;
-  checkRawCommandMatchesArgv?: boolean;
 };
 
 describe("hardenApprovedExecutionPaths", () => {
@@ -39,7 +36,6 @@ describe("hardenApprovedExecutionPaths", () => {
       argv: ["env", "tr", "a", "b"],
       shellCommand: null,
       expectedArgv: () => ["env", "tr", "a", "b"],
-      expectedArgvChanged: false,
     },
     {
       name: "pins direct PATH-token executable during approval hardening",
@@ -48,7 +44,6 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: ({ pathToken }) => [pathToken!.expected, "SAFE"],
-      expectedArgvChanged: true,
     },
     {
       name: "preserves env-wrapper PATH-token argv during approval hardening",
@@ -57,15 +52,6 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: () => ["env", "poccmd", "SAFE"],
-      expectedArgvChanged: false,
-    },
-    {
-      name: "rawCommand matches hardened argv after executable path pinning",
-      mode: "build-plan",
-      argv: ["poccmd", "hello"],
-      withPathToken: true,
-      expectedArgv: ({ pathToken }) => [pathToken!.expected, "hello"],
-      checkRawCommandMatchesArgv: true,
     },
   ];
 
@@ -96,9 +82,6 @@ describe("hardenApprovedExecutionPaths", () => {
           if (testCase.expectedCmdText) {
             expect(prepared.cmdText).toBe(testCase.expectedCmdText);
           }
-          if (testCase.checkRawCommandMatchesArgv) {
-            expect(prepared.plan.rawCommand).toBe(formatExecCommand(prepared.plan.argv));
-          }
           return;
         }
 
@@ -113,9 +96,6 @@ describe("hardenApprovedExecutionPaths", () => {
           throw new Error("unreachable");
         }
         expect(hardened.argv).toEqual(testCase.expectedArgv({ pathToken }));
-        if (typeof testCase.expectedArgvChanged === "boolean") {
-          expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
-        }
       } finally {
         if (testCase.withPathToken) {
           if (oldPath === undefined) {
@@ -128,4 +108,53 @@ describe("hardenApprovedExecutionPaths", () => {
       }
     });
   }
+
+  it.runIf(process.platform !== "win32")(
+    "allows symlink cwd when approval hardening is disabled",
+    () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-prepare-symlink-"));
+      const real = path.join(tmp, "real");
+      const link = path.join(tmp, "cwd-link");
+      fs.mkdirSync(real, { recursive: true });
+      fs.symlinkSync(real, link, "dir");
+      try {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["echo", "SAFE"],
+          cwd: link,
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
+        }
+        expect(prepared.plan.cwd).toBe(link);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "still rejects non-canonical cwd when approval hardening is required",
+    () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-prepare-strict-"));
+      const real = path.join(tmp, "real");
+      const link = path.join(tmp, "cwd-link");
+      fs.mkdirSync(real, { recursive: true });
+      fs.symlinkSync(real, link, "dir");
+      try {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["echo", "SAFE"],
+          cwd: link,
+          approvedByAsk: true,
+        });
+        expect(prepared.ok).toBe(false);
+        if (prepared.ok) {
+          throw new Error("unreachable");
+        }
+        expect(prepared.message).toContain("canonical cwd");
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 });

@@ -498,7 +498,10 @@ export async function handleInvoke(
         agentId?: unknown;
         sessionKey?: unknown;
       }>(frame.paramsJSON);
-      const prepared = buildSystemRunApprovalPlan(params);
+      const prepared = buildSystemRunApprovalPlan({
+        ...params,
+        approvedByAsk: false,
+      });
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
         return;

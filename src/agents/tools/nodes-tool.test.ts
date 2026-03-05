@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -84,5 +85,40 @@ describe("createNodesTool screen_record duration guardrails", () => {
         }),
       }),
     );
+  });
+
+  it("normalizes system.run.prepare rawCommand for shell-wrapper argv", async () => {
+    nodeUtilsMocks.listNodes.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        name: "node-1",
+        commands: ["system.run"],
+      },
+    ]);
+    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params) => {
+      if (method !== "node.invoke") {
+        return { ok: true };
+      }
+      if (params?.command === "system.run.prepare") {
+        expect(params?.rawCommand).toBe("echo SAFE&&whoami");
+        return buildSystemRunPreparePayload({
+          command: params.command,
+          rawCommand: params.rawCommand,
+          cwd: params.cwd,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        });
+      }
+      if (params?.command === "system.run") {
+        return { payload: { ok: true } };
+      }
+      return { ok: true };
+    });
+    const tool = createNodesTool();
+    await tool.execute("run-1", {
+      action: "run",
+      node: "node-1",
+      command: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
+    });
   });
 });

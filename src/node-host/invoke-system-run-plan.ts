@@ -3,7 +3,7 @@ import path from "node:path";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import { sameFileIdentity } from "../infra/file-identity.js";
-import { formatExecCommand, resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 
 export type ApprovedCwdSnapshot = {
   cwd: string;
@@ -144,7 +144,6 @@ export function hardenApprovedExecutionPaths(params: {
   | {
       ok: true;
       argv: string[];
-      argvChanged: boolean;
       cwd: string | undefined;
       approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
     }
@@ -153,7 +152,6 @@ export function hardenApprovedExecutionPaths(params: {
     return {
       ok: true,
       argv: params.argv,
-      argvChanged: false,
       cwd: params.cwd,
       approvedCwdSnapshot: undefined,
     };
@@ -174,7 +172,6 @@ export function hardenApprovedExecutionPaths(params: {
     return {
       ok: true,
       argv: params.argv,
-      argvChanged: false,
       cwd: hardenedCwd,
       approvedCwdSnapshot,
     };
@@ -193,7 +190,6 @@ export function hardenApprovedExecutionPaths(params: {
     return {
       ok: true,
       argv: params.argv,
-      argvChanged: false,
       cwd: hardenedCwd,
       approvedCwdSnapshot,
     };
@@ -207,22 +203,11 @@ export function hardenApprovedExecutionPaths(params: {
     };
   }
 
-  if (pinnedExecutable === params.argv[0]) {
-    return {
-      ok: true,
-      argv: params.argv,
-      argvChanged: false,
-      cwd: hardenedCwd,
-      approvedCwdSnapshot,
-    };
-  }
-
   const argv = [...params.argv];
   argv[0] = pinnedExecutable;
   return {
     ok: true,
     argv,
-    argvChanged: true,
     cwd: hardenedCwd,
     approvedCwdSnapshot,
   };
@@ -234,6 +219,7 @@ export function buildSystemRunApprovalPlan(params: {
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
+  approvedByAsk?: boolean;
 }): { ok: true; plan: SystemRunApprovalPlan; cmdText: string } | { ok: false; message: string } {
   const command = resolveSystemRunCommand({
     command: params.command,
@@ -246,7 +232,7 @@ export function buildSystemRunApprovalPlan(params: {
     return { ok: false, message: "command required" };
   }
   const hardening = hardenApprovedExecutionPaths({
-    approvedByAsk: true,
+    approvedByAsk: params.approvedByAsk ?? false,
     argv: command.argv,
     shellCommand: command.shellCommand,
     cwd: normalizeString(params.cwd) ?? undefined,
@@ -254,15 +240,12 @@ export function buildSystemRunApprovalPlan(params: {
   if (!hardening.ok) {
     return { ok: false, message: hardening.message };
   }
-  const rawCommand = hardening.argvChanged
-    ? formatExecCommand(hardening.argv) || null
-    : command.cmdText.trim() || null;
   return {
     ok: true,
     plan: {
       argv: hardening.argv,
       cwd: hardening.cwd ?? null,
-      rawCommand,
+      rawCommand: command.cmdText.trim() || null,
       agentId: normalizeString(params.agentId),
       sessionKey: normalizeString(params.sessionKey),
     },
