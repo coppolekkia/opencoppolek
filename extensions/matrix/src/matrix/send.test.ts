@@ -101,6 +101,11 @@ describe("sendMessageMatrix media", () => {
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
       mediaUrl: "file:///tmp/photo.png",
+      mediaLocalRoots: ["/tmp/workspace"],
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", undefined, {
+      localRoots: ["/tmp/workspace"],
     });
 
     const uploadArg = uploadContent.mock.calls[0]?.[0];

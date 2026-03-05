@@ -403,6 +403,41 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("passes mediaLocalRoots to matrix plugin outbound sendMedia", async () => {
+    const sendMedia = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-txt" }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "caption", mediaUrl: "file:///tmp/p.png" }],
+      session: { agentId: "work" },
+    });
+
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "file:///tmp/p.png",
+        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
+      }),
+    );
+  });
+
   it("uses signal media maxBytes from config", async () => {
     const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
     const cfg: OpenClawConfig = { channels: { signal: { mediaMaxMb: 2 } } };

@@ -19,12 +19,14 @@ export async function sendMatrixMessage(
     mediaUrl?: string;
     replyToId?: string;
     threadId?: string;
+    mediaLocalRoots?: readonly string[];
   } = {},
 ) {
   return await sendMessageMatrix(to, content, {
     mediaUrl: opts.mediaUrl,
     replyToId: opts.replyToId,
     threadId: opts.threadId,
+    mediaLocalRoots: opts.mediaLocalRoots,
     client: opts.client,
     timeoutMs: opts.timeoutMs,
   });

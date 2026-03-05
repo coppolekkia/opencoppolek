@@ -83,7 +83,9 @@ export async function sendMessageMatrix(
       let lastMessageId = "";
       if (opts.mediaUrl) {
         const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
-        const media = await getCore().media.loadWebMedia(opts.mediaUrl, maxBytes);
+        const media = await getCore().media.loadWebMedia(opts.mediaUrl, maxBytes, {
+          localRoots: opts.mediaLocalRoots?.length ? opts.mediaLocalRoots : undefined,
+        });
         const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
           contentType: media.contentType,
           filename: media.fileName,
