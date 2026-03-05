@@ -136,9 +136,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
+  const cardFormat = account.config?.cardFormat ?? "streaming";
   // Card streaming may miss thread affinity in topic contexts; use direct replies there.
+  // Legacy card format also disables streaming to produce quotable/forwardable cards.
   const streamingEnabled =
-    !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
+    !threadReplyMode &&
+    account.config?.streaming !== false &&
+    renderMode !== "raw" &&
+    cardFormat !== "legacy";
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -262,7 +267,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (hasText) {
-          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+          const useCard =
+            renderMode === "card" ||
+            cardFormat === "legacy" ||
+            (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
