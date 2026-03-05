@@ -172,6 +172,65 @@ describe("gateway server chat", () => {
     expect(ctx?.BodyForCommands).toBe("Café\tline");
   });
 
+  test("chat.send honors explicit turn source routing metadata", async () => {
+    const spy = vi.mocked(getReplyFromConfig);
+    spy.mockClear();
+    const spyCalls = spy.mock.calls as unknown[][];
+    const callsBefore = spyCalls.length;
+
+    const res = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "hello",
+      idempotencyKey: "idem-turn-source-1",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:777",
+      turnSourceAccountId: "bot-a",
+      turnSourceThreadId: 42,
+    });
+    expect(res.ok).toBe(true);
+
+    await waitFor(() => spyCalls.length > callsBefore);
+    const ctx = spyCalls.at(-1)?.[0] as
+      | {
+          OriginatingChannel?: string;
+          OriginatingTo?: string;
+          AccountId?: string;
+          MessageThreadId?: string | number;
+        }
+      | undefined;
+    expect(ctx?.OriginatingChannel).toBe("telegram");
+    expect(ctx?.OriginatingTo).toBe("telegram:777");
+    expect(ctx?.AccountId).toBe("bot-a");
+    expect(ctx?.MessageThreadId).toBe(42);
+  });
+
+  test("chat.send rejects explicit turn source routing metadata for non-admin scopes", async () => {
+    const limitedWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
+    trackConnectChallengeNonce(limitedWs);
+    await new Promise<void>((resolve) => limitedWs.once("open", resolve));
+    await connectOk(limitedWs, { scopes: ["operator.write"] });
+
+    try {
+      const res = await rpcReq(limitedWs, "chat.send", {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-turn-source-non-admin",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:777",
+        turnSourceAccountId: "bot-a",
+        turnSourceThreadId: 42,
+      });
+      expect(res.ok).toBe(false);
+      expect((res.error as { message?: string } | undefined)?.message ?? "").toContain(
+        "operator.admin scope",
+      );
+    } finally {
+      limitedWs.close();
+    }
+  });
+
   test("handles chat send and history flows", async () => {
     const tempDirs: string[] = [];
     let webchatWs: WebSocket | undefined;
