@@ -82,6 +82,8 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
+// Track last-logged warning details per config path to suppress repeated identical warnings.
+const loggedConfigWarnings = new Map<string, string>();
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
 
@@ -729,7 +731,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         const details = validated.warnings
           .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
           .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
+        // Only log if the warnings have changed since the last load for this config path
+        // (prevents spamming repeated identical warnings on every config poll cycle).
+        if (loggedConfigWarnings.get(configPath) !== details) {
+          loggedConfigWarnings.set(configPath, details);
+          deps.logger.warn(`Config warnings:\\n${details}`);
+        }
+      } else {
+        // Clear suppression state when warnings are resolved so they re-appear if they return.
+        loggedConfigWarnings.delete(configPath);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = applyTalkConfigNormalization(
