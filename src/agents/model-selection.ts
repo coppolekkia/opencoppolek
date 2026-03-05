@@ -33,6 +33,78 @@ function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function normalizeShorthandToken(value: string): string {
+  return normalizeAliasKey(value).replace(/[^a-z0-9]/g, "");
+}
+
+function resolveProviderScopedModelShorthand(params: {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  provider: string;
+  shorthandModel: string;
+  defaultProvider: string;
+  defaultModel?: string;
+}): { ref: ModelRef } | { error: string } | null {
+  const shorthandToken = normalizeShorthandToken(params.shorthandModel);
+  if (!shorthandToken || shorthandToken.length < 2) {
+    return null;
+  }
+
+  const allowed = buildAllowedModelSet({
+    cfg: params.cfg,
+    catalog: params.catalog,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+  });
+  const providerPrefix = `${params.provider}/`;
+  const exactMatches = new Set<string>();
+  const prefixMatches = new Set<string>();
+
+  for (const key of allowed.allowedKeys) {
+    if (!key.startsWith(providerPrefix)) {
+      continue;
+    }
+    const candidateModel = key.slice(providerPrefix.length);
+    if (!candidateModel) {
+      continue;
+    }
+    const candidateModelToken = normalizeShorthandToken(candidateModel);
+    const candidateBaseToken = normalizeShorthandToken(
+      candidateModel.split("/").pop() ?? candidateModel,
+    );
+    const isExactMatch =
+      candidateModelToken === shorthandToken || candidateBaseToken === shorthandToken;
+    if (isExactMatch) {
+      exactMatches.add(candidateModel);
+      continue;
+    }
+
+    const isPrefixMatch =
+      candidateModelToken.startsWith(shorthandToken) ||
+      candidateBaseToken.startsWith(shorthandToken);
+    if (isPrefixMatch) {
+      prefixMatches.add(candidateModel);
+    }
+  }
+  const matches = exactMatches.size > 0 ? exactMatches : prefixMatches;
+
+  if (matches.size === 0) {
+    return null;
+  }
+  if (matches.size > 1) {
+    const candidates = [...matches].toSorted().slice(0, 5).join(", ");
+    return {
+      error: `model shorthand ambiguous: ${params.provider}/${params.shorthandModel} (matches: ${candidates})`,
+    };
+  }
+
+  const resolvedMatch = matches.values().next();
+  if (resolvedMatch.done) {
+    return null;
+  }
+  return { ref: normalizeModelRef(params.provider, resolvedMatch.value) };
+}
+
 export function modelKey(provider: string, model: string) {
   return `${provider}/${model}`;
 }
@@ -526,6 +598,24 @@ export function resolveAllowedModelRef(params: {
     defaultModel: params.defaultModel,
   });
   if (!status.allowed) {
+    const shouldTryProviderScopedShorthand =
+      trimmed.includes("/") && !resolved.ref.model.includes("/");
+    if (shouldTryProviderScopedShorthand) {
+      const shorthand = resolveProviderScopedModelShorthand({
+        cfg: params.cfg,
+        catalog: params.catalog,
+        provider: resolved.ref.provider,
+        shorthandModel: resolved.ref.model,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+      });
+      if (shorthand && "error" in shorthand) {
+        return { error: shorthand.error };
+      }
+      if (shorthand && "ref" in shorthand) {
+        return { ref: shorthand.ref, key: modelKey(shorthand.ref.provider, shorthand.ref.model) };
+      }
+    }
     return { error: `model not allowed: ${status.key}` };
   }
 
