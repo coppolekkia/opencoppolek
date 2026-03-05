@@ -8,6 +8,7 @@ export type ChannelHealthSnapshot = {
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
+  lastDisconnectAt?: number | null;
   reconnectAttempts?: number;
 };
 
@@ -18,6 +19,7 @@ export type ChannelHealthEvaluationReason =
   | "busy"
   | "stuck"
   | "startup-connect-grace"
+  | "reconnect-grace"
   | "disconnected"
   | "stale-socket";
 
@@ -90,6 +92,16 @@ export function evaluateChannelHealth(
     }
   }
   if (snapshot.connected === false) {
+    // Allow a grace period for WebSocket reconnection cycles.
+    // Without this, normal reconnect attempts (where connected briefly flips
+    // to false) would be flagged as unhealthy, causing unnecessary provider
+    // restarts that leak event listeners and duplicate messages (#31710).
+    if (snapshot.lastDisconnectAt != null) {
+      const disconnectAge = policy.now - snapshot.lastDisconnectAt;
+      if (disconnectAge < policy.channelConnectGraceMs) {
+        return { healthy: true, reason: "reconnect-grace" };
+      }
+    }
     return { healthy: false, reason: "disconnected" };
   }
   if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
@@ -117,4 +129,17 @@ export function resolveChannelRestartReason(
     return snapshot.reconnectAttempts && snapshot.reconnectAttempts >= 10 ? "gave-up" : "stopped";
   }
   return "stuck";
+}
+
+/**
+ * Extract `lastDisconnectAt` from a channel account snapshot's `lastDisconnect`
+ * field, which can be a string, an object with `at`, or null.
+ */
+export function extractLastDisconnectAt(
+  lastDisconnect: string | { at: number; [key: string]: unknown } | null | undefined,
+): number | undefined {
+  if (lastDisconnect != null && typeof lastDisconnect === "object") {
+    return lastDisconnect.at;
+  }
+  return undefined;
 }

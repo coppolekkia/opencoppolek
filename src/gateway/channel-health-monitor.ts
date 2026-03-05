@@ -2,6 +2,7 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   evaluateChannelHealth,
+  extractLastDisconnectAt,
   resolveChannelRestartReason,
   type ChannelHealthPolicy,
 } from "./channel-health-policy.js";
@@ -127,7 +128,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
           };
-          const health = evaluateChannelHealth(status, healthPolicy);
+          const lastDisconnectAt = extractLastDisconnectAt(status.lastDisconnect);
+          const health = evaluateChannelHealth({ ...status, lastDisconnectAt }, healthPolicy);
           if (health.healthy) {
             continue;
           }
