@@ -3,6 +3,8 @@ import path from "node:path";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
+  NODE_LAUNCH_AGENT_LABEL,
+  NODE_SERVICE_KIND,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -23,6 +25,7 @@ export type FindExtraGatewayServicesOptions = {
 };
 
 const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
+const MAC_APP_LAUNCH_AGENT_LABEL = "ai.openclaw.mac";
 
 export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -85,17 +88,6 @@ function hasGatewayServiceMarker(content: string): boolean {
   );
 }
 
-function isOpenClawGatewayLaunchdService(label: string, contents: string): boolean {
-  if (hasGatewayServiceMarker(contents)) {
-    return true;
-  }
-  const lowerContents = contents.toLowerCase();
-  if (!lowerContents.includes("gateway")) {
-    return false;
-  }
-  return label.startsWith("ai.openclaw.");
-}
-
 function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
   if (hasGatewayServiceMarker(contents)) {
     return true;
@@ -123,8 +115,46 @@ function tryExtractPlistLabel(contents: string): string | null {
   return match[1]?.trim() || null;
 }
 
-function isIgnoredLaunchdLabel(label: string): boolean {
-  return label === resolveGatewayLaunchAgentLabel();
+function tryExtractLaunchdEnvironmentValue(contents: string, key: string): string | null {
+  const envMatch = contents.match(/<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/i);
+  if (!envMatch) {
+    return null;
+  }
+  const entryPattern = new RegExp(
+    `<key>${key.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")}<\\/key>\\s*<string>([\\s\\S]*?)<\\/string>`,
+    "i",
+  );
+  const entry = envMatch[1].match(entryPattern);
+  return entry?.[1]?.trim() || null;
+}
+
+function isGatewayLaunchdLabel(label: string, profile?: string): boolean {
+  return label === resolveGatewayLaunchAgentLabel(profile);
+}
+
+function isOpenClawAppLaunchAgent(label: string, contents: string): boolean {
+  if (label !== MAC_APP_LAUNCH_AGENT_LABEL) {
+    return false;
+  }
+  if (
+    tryExtractLaunchdEnvironmentValue(contents, "OPENCLAW_SERVICE_KIND") === GATEWAY_SERVICE_KIND
+  ) {
+    return false;
+  }
+  return /<key>ProgramArguments<\/key>\s*<array>[\s\S]*?(?:OpenClaw\.app|\/Contents\/MacOS\/OpenClaw)<\/string>/i.test(
+    contents,
+  );
+}
+
+function isOpenClawNodeLaunchAgent(label: string, contents: string): boolean {
+  return (
+    label === NODE_LAUNCH_AGENT_LABEL &&
+    tryExtractLaunchdEnvironmentValue(contents, "OPENCLAW_SERVICE_KIND") === NODE_SERVICE_KIND
+  );
+}
+
+function isIgnoredNonGatewayLaunchdService(label: string, contents: string): boolean {
+  return isOpenClawAppLaunchAgent(label, contents) || isOpenClawNodeLaunchAgent(label, contents);
 }
 
 function isIgnoredSystemdName(name: string): boolean {
@@ -187,12 +217,13 @@ async function collectServiceFiles(params: {
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
+  profile?: string;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
     dir: params.dir,
     extension: ".plist",
-    isIgnoredName: isIgnoredLaunchdLabel,
+    isIgnoredName: () => false,
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
@@ -213,10 +244,10 @@ async function scanLaunchdDir(params: {
       });
       continue;
     }
-    if (isIgnoredLaunchdLabel(label)) {
+    if (isGatewayLaunchdLabel(label, params.profile)) {
       continue;
     }
-    if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {
+    if (marker === "openclaw" && isIgnoredNonGatewayLaunchdService(label, contents)) {
       continue;
     }
     results.push({
@@ -334,6 +365,7 @@ export async function findExtraGatewayServices(
       for (const svc of await scanLaunchdDir({
         dir: userDir,
         scope: "user",
+        profile: env.OPENCLAW_PROFILE,
       })) {
         push(svc);
       }
@@ -341,12 +373,14 @@ export async function findExtraGatewayServices(
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchAgents"),
           scope: "system",
+          profile: env.OPENCLAW_PROFILE,
         })) {
           push(svc);
         }
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchDaemons"),
           scope: "system",
+          profile: env.OPENCLAW_PROFILE,
         })) {
           push(svc);
         }
