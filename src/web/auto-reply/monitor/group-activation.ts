@@ -10,7 +10,11 @@ import {
   resolveStorePath,
 } from "../../../config/sessions.js";
 
-export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conversationId: string) {
+export function resolveGroupPolicyFor(
+  cfg: ReturnType<typeof loadConfig>,
+  conversationId: string,
+  accountId?: string,
+) {
   const groupId = resolveGroupSessionKey({
     From: conversationId,
     ChatType: "group",
@@ -27,12 +31,14 @@ export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conver
     channel: "whatsapp",
     groupId: groupId ?? conversationId,
     hasGroupAllowFrom,
+    accountId,
   });
 }
 
 export function resolveGroupRequireMentionFor(
   cfg: ReturnType<typeof loadConfig>,
   conversationId: string,
+  accountId?: string,
 ) {
   const groupId = resolveGroupSessionKey({
     From: conversationId,
@@ -43,6 +49,7 @@ export function resolveGroupRequireMentionFor(
     cfg,
     channel: "whatsapp",
     groupId: groupId ?? conversationId,
+    accountId,
   });
 }
 
@@ -51,13 +58,18 @@ export function resolveGroupActivationFor(params: {
   agentId: string;
   sessionKey: string;
   conversationId: string;
+  accountId?: string;
 }) {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.agentId,
   });
   const store = loadSessionStore(storePath);
   const entry = store[params.sessionKey];
-  const requireMention = resolveGroupRequireMentionFor(params.cfg, params.conversationId);
+  const requireMention = resolveGroupRequireMentionFor(
+    params.cfg,
+    params.conversationId,
+    params.accountId,
+  );
   const defaultActivation = !requireMention ? "always" : "mention";
   return normalizeGroupActivation(entry?.groupActivation) ?? defaultActivation;
 }
