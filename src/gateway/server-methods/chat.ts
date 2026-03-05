@@ -593,7 +593,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -609,7 +609,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       limit?: number;
     };
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+
+    const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+
+    // Track canonical session key for session-scoped chat event delivery.
+    if (client && canonicalKey) {
+      if (!client.chatSessionKeys) {
+        client.chatSessionKeys = new Set();
+      }
+      client.chatSessionKeys.add(canonicalKey);
+    }
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
@@ -673,13 +682,18 @@ export const chatHandlers: GatewayRequestHandlers = {
       runId?: string;
     };
 
+    // Resolve canonical key so abort operations use the same key form
+    // stored by chat.send in chatAbortControllers.
+    const { canonicalKey } = loadSessionEntry(rawSessionKey);
+    const sessionKey = canonicalKey ?? rawSessionKey;
+
     const ops = createChatAbortOps(context);
 
     if (!runId) {
       const res = abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
-        sessionKey: rawSessionKey,
+        sessionKey,
         abortOrigin: "rpc",
         stopReason: "rpc",
       });
@@ -692,7 +706,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, aborted: false, runIds: [] });
       return;
     }
-    if (active.sessionKey !== rawSessionKey) {
+    if (active.sessionKey !== sessionKey) {
       respond(
         false,
         undefined,
@@ -704,13 +718,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const partialText = context.chatRunBuffers.get(runId);
     const res = abortChatRunById(ops, {
       runId,
-      sessionKey: rawSessionKey,
+      sessionKey,
       stopReason: "rpc",
     });
     if (res.aborted && partialText && partialText.trim()) {
       persistAbortedPartials({
         context,
-        sessionKey: rawSessionKey,
+        sessionKey,
         snapshots: [
           {
             runId,
@@ -791,6 +805,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+
+    // Track canonical session key for session-scoped chat event delivery.
+    if (client && sessionKey) {
+      if (!client.chatSessionKeys) {
+        client.chatSessionKeys = new Set();
+      }
+      client.chatSessionKeys.add(sessionKey);
+    }
+
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -818,7 +841,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const res = abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
-        sessionKey: rawSessionKey,
+        sessionKey,
         abortOrigin: "stop-command",
         stopReason: "stop",
       });
@@ -848,7 +871,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       context.chatAbortControllers.set(clientRunId, {
         controller: abortController,
         sessionId: entry?.sessionId ?? clientRunId,
-        sessionKey: rawSessionKey,
+        sessionKey,
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
       });
@@ -995,7 +1018,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               // late-joining clients (e.g. page refresh mid-response) receive
               // in-progress tool events without leaking cross-session data.
               for (const [activeRunId, active] of context.chatAbortControllers) {
-                if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
+                if (activeRunId !== runId && active.sessionKey === sessionKey) {
                   context.registerToolEventRecipient(activeRunId, connId);
                 }
               }
@@ -1045,7 +1068,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             broadcastChatFinal({
               context,
               runId: clientRunId,
-              sessionKey: rawSessionKey,
+              sessionKey,
               message,
             });
           }
@@ -1078,7 +1101,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           broadcastChatError({
             context,
             runId: clientRunId,
-            sessionKey: rawSessionKey,
+            sessionKey,
             errorMessage: String(err),
           });
         })
@@ -1128,7 +1151,8 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
-    const { cfg, storePath, entry } = loadSessionEntry(rawSessionKey);
+    const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(rawSessionKey);
+    const sessionKey = canonicalKey ?? rawSessionKey;
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
@@ -1141,7 +1165,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
-      agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
+      agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
       createIfMissing: false,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
@@ -1156,10 +1180,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Broadcast to webchat for immediate UI update
+    // Broadcast to webchat for immediate UI update — use canonical key
+    // so shouldReceiveChatEvent matches against chatSessionKeys correctly.
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
-      sessionKey: rawSessionKey,
+      sessionKey,
       seq: 0,
       state: "final" as const,
       message: stripInlineDirectiveTagsFromMessageForDisplay(
@@ -1167,6 +1192,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       ),
     };
     context.broadcast("chat", chatPayload);
+    // Use the raw key for node fanout — node subscriptions are stored by
+    // the exact key text the node used when subscribing, not the canonical
+    // form.  sendToSession does an exact map lookup.
     context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
 
     respond(true, { ok: true, messageId: appended.messageId });
