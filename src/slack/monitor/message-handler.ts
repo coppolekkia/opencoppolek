@@ -165,7 +165,7 @@ export function createSlackMessageHandler(params: {
     ) {
       return;
     }
-    if (ctx.markMessageSeen(message.channel, message.ts)) {
+    if (opts.source !== "app_mention" && ctx.markMessageSeen(message.channel, message.ts)) {
       return;
     }
     trackEvent?.();
