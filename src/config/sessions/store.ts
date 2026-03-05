@@ -751,6 +751,7 @@ export async function recordSessionMetaFromInbound(params: {
         sessionKey: resolved.normalizedKey,
         existing,
         groupResolution: params.groupResolution,
+        allSessions: store,
       });
       if (!patch) {
         if (existing && resolved.legacyKeys.length > 0) {
@@ -838,6 +839,7 @@ export async function updateLastRoute(params: {
           sessionKey: resolved.normalizedKey,
           existing,
           groupResolution: params.groupResolution,
+          allSessions: store,
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
