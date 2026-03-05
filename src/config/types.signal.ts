@@ -34,6 +34,8 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   actions?: {
     /** Enable/disable sending reactions via message tool (default: true). */
     reactions?: boolean;
+    /** Enable/disable group management actions (renameGroup, addParticipant, removeParticipant, leaveGroup, member-info). Default: true. */
+    groupManagement?: boolean;
   };
   /**
    * Controls agent reaction behavior:

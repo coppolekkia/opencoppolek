@@ -1,5 +1,12 @@
 import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "../../../signal/accounts.js";
+import {
+  updateGroupSignal,
+  addGroupMemberSignal,
+  removeGroupMemberSignal,
+  quitGroupSignal,
+  listGroupMembersSignal,
+} from "../../../signal/groups.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { sendReactionSignal, removeReactionSignal } from "../../../signal/send-reactions.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
@@ -69,6 +76,29 @@ async function mutateSignalReaction(params: {
   return jsonResult({ ok: true, added: params.emoji });
 }
 
+function readSignalGroupIdParam(params: Record<string, unknown>): string {
+  const raw =
+    readStringParam(params, "groupId") ??
+    readStringParam(params, "to", { required: true, label: "groupId (Signal group ID)" });
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("Signal group management requires groupId.");
+  }
+  // Strip signal:group: / group: prefix for convenience
+  return trimmed
+    .replace(/^signal:group:/i, "")
+    .replace(/^group:/i, "")
+    .trim();
+}
+
+const GROUP_MANAGEMENT_ACTIONS: ChannelMessageActionName[] = [
+  "renameGroup",
+  "addParticipant",
+  "removeParticipant",
+  "leaveGroup",
+  "member-info",
+];
+
 export const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
     const accounts = listEnabledSignalAccounts(cfg);
@@ -89,9 +119,26 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       actions.add("react");
     }
 
+    const groupManagementEnabled = configuredAccounts.some((account) =>
+      createActionGate(account.config.actions)("groupManagement"),
+    );
+    if (groupManagementEnabled) {
+      for (const action of GROUP_MANAGEMENT_ACTIONS) {
+        actions.add(action);
+      }
+    }
+
     return Array.from(actions);
   },
-  supportsAction: ({ action }) => action !== "send",
+  supportsAction: ({ action }) => {
+    if (action === "send") {
+      return false;
+    }
+    if (action === "react") {
+      return true;
+    }
+    return GROUP_MANAGEMENT_ACTIONS.includes(action);
+  },
 
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "send") {
@@ -179,6 +226,65 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         targetAuthor,
         targetAuthorUuid,
       });
+    }
+
+    const resolvedAccountId = accountId ?? undefined;
+
+    const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+    if (!createActionGate(actionConfig)("groupManagement")) {
+      throw new Error("Signal group management is disabled via actions.groupManagement.");
+    }
+
+    if (action === "renameGroup") {
+      const groupId = readSignalGroupIdParam(params);
+      const name = readStringParam(params, "name") ?? readStringParam(params, "displayName");
+      if (!name?.trim()) {
+        throw new Error("Signal renameGroup requires name parameter.");
+      }
+      await updateGroupSignal(groupId, { name: name.trim() }, { accountId: resolvedAccountId });
+      return jsonResult({ ok: true, renamed: groupId, name: name.trim() });
+    }
+
+    if (action === "addParticipant") {
+      const groupId = readSignalGroupIdParam(params);
+      const member =
+        readStringParam(params, "participant") ??
+        readStringParam(params, "member") ??
+        readStringParam(params, "address");
+      if (!member?.trim()) {
+        throw new Error(
+          "Signal addParticipant requires participant parameter (phone number or UUID).",
+        );
+      }
+      await addGroupMemberSignal(groupId, member.trim(), { accountId: resolvedAccountId });
+      return jsonResult({ ok: true, added: member.trim(), groupId });
+    }
+
+    if (action === "removeParticipant") {
+      const groupId = readSignalGroupIdParam(params);
+      const member =
+        readStringParam(params, "participant") ??
+        readStringParam(params, "member") ??
+        readStringParam(params, "address");
+      if (!member?.trim()) {
+        throw new Error(
+          "Signal removeParticipant requires participant parameter (phone number or UUID).",
+        );
+      }
+      await removeGroupMemberSignal(groupId, member.trim(), { accountId: resolvedAccountId });
+      return jsonResult({ ok: true, removed: member.trim(), groupId });
+    }
+
+    if (action === "leaveGroup") {
+      const groupId = readSignalGroupIdParam(params);
+      await quitGroupSignal(groupId, { accountId: resolvedAccountId });
+      return jsonResult({ ok: true, left: groupId });
+    }
+
+    if (action === "member-info") {
+      const groupId = readSignalGroupIdParam(params);
+      const members = await listGroupMembersSignal(groupId, { accountId: resolvedAccountId });
+      return jsonResult({ ok: true, groupId, members });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

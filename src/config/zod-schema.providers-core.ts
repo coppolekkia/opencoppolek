@@ -955,6 +955,7 @@ export const SignalAccountSchemaBase = z
     actions: z
       .object({
         reactions: z.boolean().optional(),
+        groupManagement: z.boolean().optional(),
       })
       .strict()
       .optional(),
