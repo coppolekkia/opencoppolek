@@ -638,11 +638,9 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
-      return;
-    }
+    // FTS-only mode: index files without embeddings (vector table will be empty)
+    // Previously we skipped entirely, but FTS still needs the content indexed
+    const providerModel = this.provider?.model ?? "fts-only";
 
     const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
     const fileEntries = (
@@ -709,7 +707,7 @@ export abstract class MemoryManagerSyncOps {
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "memory", this.provider.model);
+            .run(stale.path, "memory", providerModel);
         } catch {}
       }
     }
@@ -719,11 +717,9 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
-      return;
-    }
+    // FTS-only mode: index files without embeddings (vector table will be empty)
+    // Previously we skipped entirely, but FTS still needs the content indexed
+    const providerModel = this.provider?.model ?? "fts-only";
 
     const files = await listSessionFilesForAgent(this.agentId);
     const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
@@ -816,7 +812,7 @@ export abstract class MemoryManagerSyncOps {
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "sessions", this.provider.model);
+            .run(stale.path, "sessions", providerModel);
         } catch {}
       }
     }

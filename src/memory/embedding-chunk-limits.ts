@@ -4,7 +4,7 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import { hashText, type MemoryChunk } from "./internal.js";
 
 export function enforceEmbeddingMaxInputTokens(
-  provider: EmbeddingProvider,
+  provider: EmbeddingProvider | null | undefined,
   chunks: MemoryChunk[],
   hardMaxInputTokens?: number,
 ): MemoryChunk[] {
