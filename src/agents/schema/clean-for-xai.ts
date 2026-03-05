@@ -57,5 +57,9 @@ export function isXaiProvider(modelProvider?: string, modelId?: string): boolean
   if (provider === "venice" && lowerModelId.includes("grok")) {
     return true;
   }
+  // Venice proxies xAI/Grok models; model IDs start with "grok-"
+  if (provider === "venice" && modelId?.toLowerCase().startsWith("grok-")) {
+    return true;
+  }
   return false;
 }
