@@ -21,6 +21,8 @@ export function guardSessionManager(
     agentId?: string;
     sessionKey?: string;
     inputProvenance?: InputProvenance;
+    /** Extra fields from the original user message to merge at persistence time. */
+    userMessageExtras?: Record<string, unknown>;
     allowSyntheticToolResults?: boolean;
     allowedToolNames?: Iterable<string>;
   },
@@ -61,8 +63,16 @@ export function guardSessionManager(
     : undefined;
 
   const guard = installSessionToolResultGuard(sessionManager, {
-    transformMessageForPersistence: (message) =>
-      applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
+    transformMessageForPersistence: (message) => {
+      let result = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
+      if (opts?.userMessageExtras && (result as { role?: unknown }).role === "user") {
+        result = {
+          ...(result as unknown as Record<string, unknown>),
+          ...opts.userMessageExtras,
+        } as unknown as import("@mariozechner/pi-agent-core").AgentMessage;
+      }
+      return result;
+    },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     allowedToolNames: opts?.allowedToolNames,

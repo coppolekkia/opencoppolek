@@ -887,6 +887,7 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         inputProvenance: params.inputProvenance,
+        userMessageExtras: params.userMessageExtras,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         allowedToolNames,
       });
