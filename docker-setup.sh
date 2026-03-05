@@ -330,6 +330,7 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
 done
 
 ENV_FILE="$ROOT_DIR/.env"
+
 upsert_env() {
   local file="$1"
   shift
