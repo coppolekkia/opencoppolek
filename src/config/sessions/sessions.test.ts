@@ -141,7 +141,71 @@ describe("resolveSessionResetPolicy", () => {
         resetType: "group",
       });
 
+      // Group sessions default to idle (not daily), but dm config does not bleed into group.
+      expect(groupPolicy.mode).toBe("idle");
+    });
+  });
+
+  describe("type-aware defaults", () => {
+    it("defaults direct sessions to daily reset", () => {
+      const policy = resolveSessionResetPolicy({ resetType: "direct" });
+      expect(policy.mode).toBe("daily");
+      expect(policy.atHour).toBe(4);
+    });
+
+    it("defaults group sessions to idle reset", () => {
+      const policy = resolveSessionResetPolicy({ resetType: "group" });
+      expect(policy.mode).toBe("idle");
+      expect(policy.idleMinutes).toBe(60);
+    });
+
+    it("defaults thread sessions to idle reset", () => {
+      const policy = resolveSessionResetPolicy({ resetType: "thread" });
+      expect(policy.mode).toBe("idle");
+      expect(policy.idleMinutes).toBe(60);
+    });
+
+    it("respects explicit daily mode for group sessions", () => {
+      const sessionCfg = {
+        resetByType: {
+          group: { mode: "daily" as const },
+        },
+      } as unknown as SessionConfig;
+
+      const policy = resolveSessionResetPolicy({
+        sessionCfg,
+        resetType: "group",
+      });
+      expect(policy.mode).toBe("daily");
+    });
+
+    it("respects explicit base reset mode for all types", () => {
+      const sessionCfg = {
+        reset: { mode: "daily" as const },
+      } as unknown as SessionConfig;
+
+      const groupPolicy = resolveSessionResetPolicy({
+        sessionCfg,
+        resetType: "group",
+      });
       expect(groupPolicy.mode).toBe("daily");
+    });
+
+    it("preserves global daily mode when channel override omits mode", () => {
+      // session.reset.mode: "daily" + resetByChannel.discord: { atHour: 8 }
+      // The channel override provides only atHour; the global mode should
+      // still be honored instead of falling through to the type default.
+      const sessionCfg = {
+        reset: { mode: "daily" as const },
+      } as unknown as SessionConfig;
+
+      const policy = resolveSessionResetPolicy({
+        sessionCfg,
+        resetType: "group",
+        resetOverride: { atHour: 8 },
+      });
+      expect(policy.mode).toBe("daily");
+      expect(policy.atHour).toBe(8);
     });
   });
 });
