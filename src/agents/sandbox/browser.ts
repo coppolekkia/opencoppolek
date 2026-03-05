@@ -61,7 +61,8 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
   return false;
 }
 
-function buildSandboxBrowserResolvedConfig(params: {
+/** @internal Exported for testing. */
+export function buildSandboxBrowserResolvedConfig(params: {
   controlPort: number;
   cdpPort: number;
   headless: boolean;
@@ -93,6 +94,12 @@ function buildSandboxBrowserResolvedConfig(params: {
         color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       },
     },
+    // Unconditionally match the normal browser's trusted-network default.
+    // Without this, the SSRF guard blocks localhost/private-IP at the bridge server
+    // layer regardless of shareNetworkNamespace. This is independent of namespace
+    // sharing -- even without it, failing at the SSRF layer instead of the network
+    // layer just produces a confusing error for the same outcome.
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
   };
 }
 
@@ -119,6 +126,10 @@ async function ensureDockerNetwork(
   if (!normalized || normalized === "bridge" || normalized === "none") {
     return;
   }
+  // container:<id> is a namespace join, not a Docker network name.
+  if (normalized.startsWith("container:")) {
+    return;
+  }
   const inspect = await execDocker(["network", "inspect", network], { allowFailure: true });
   if (inspect.code === 0) {
     return;
@@ -133,6 +144,7 @@ export async function ensureSandboxBrowser(params: {
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
+  sandboxContainerName?: string;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
@@ -147,10 +159,18 @@ export async function ensureSandboxBrowser(params: {
   const state = await dockerContainerState(containerName);
   const browserImage = params.cfg.browser.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE;
   const cdpSourceRange = params.cfg.browser.cdpSourceRange?.trim() || undefined;
+  // When shareNetworkNamespace is enabled, the browser container joins the sandbox
+  // container's network namespace so that localhost refers to the sandbox's loopback.
+  const useNamespaceJoin =
+    params.cfg.browser.shareNetworkNamespace && !!params.sandboxContainerName;
   const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
     docker: params.cfg.docker,
     browser: { ...params.cfg.browser, image: browserImage },
   });
+  if (useNamespaceJoin) {
+    browserDockerCfg.network = `container:${params.sandboxContainerName}`;
+    browserDockerCfg.dangerouslyAllowContainerNamespaceJoin = true;
+  }
   const expectedHash = computeSandboxBrowserConfigHash({
     docker: browserDockerCfg,
     browser: {
@@ -246,9 +266,13 @@ export async function ensureSandboxBrowser(params: {
         args.push("-v", bind);
       }
     }
-    args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
-    if (noVncEnabled) {
-      args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
+    // When using namespace join, ports are published on the sandbox container instead.
+    // Docker does not allow -p with --network container:<id>.
+    if (!useNamespaceJoin) {
+      args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
+      if (noVncEnabled) {
+        args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
+      }
     }
     args.push("-e", `OPENCLAW_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`);
     args.push("-e", `OPENCLAW_BROWSER_ENABLE_NOVNC=${params.cfg.browser.enableNoVnc ? "1" : "0"}`);
@@ -272,13 +296,30 @@ export async function ensureSandboxBrowser(params: {
     await execDocker(["start", containerName]);
   }
 
-  const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
+  // When using namespace join, browser ports live on the sandbox container's network
+  // namespace and are published via the sandbox container's port mappings.
+  // Fall back to the other container if the desired source has no mapping -- this
+  // handles the "hot" reuse path where config changed but the old container was kept.
+  // The fallback is bidirectional: sandbox→browser (namespace sharing turned off) and
+  // browser→sandbox (namespace sharing turned on with a pre-existing container).
+  const portSourceContainer =
+    useNamespaceJoin && params.sandboxContainerName ? params.sandboxContainerName : containerName;
+  const fallbackContainer =
+    portSourceContainer !== containerName ? containerName : (params.sandboxContainerName ?? null);
+  const mappedCdp =
+    (await readDockerPort(portSourceContainer, params.cfg.browser.cdpPort)) ??
+    (fallbackContainer
+      ? await readDockerPort(fallbackContainer, params.cfg.browser.cdpPort)
+      : null);
   if (!mappedCdp) {
-    throw new Error(`Failed to resolve CDP port mapping for ${containerName}.`);
+    throw new Error(`Failed to resolve CDP port mapping for ${portSourceContainer}.`);
   }
 
   const mappedNoVnc = noVncEnabled
-    ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
+    ? ((await readDockerPort(portSourceContainer, params.cfg.browser.noVncPort)) ??
+      (fallbackContainer
+        ? await readDockerPort(fallbackContainer, params.cfg.browser.noVncPort)
+        : null))
     : null;
   if (noVncEnabled && !noVncPassword) {
     noVncPassword =
