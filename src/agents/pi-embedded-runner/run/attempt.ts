@@ -465,6 +465,9 @@ export async function resolvePromptBuildHookResult(params: {
     prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
       .filter((value): value is string => Boolean(value))
       .join("\n\n"),
+    truncateBefore:
+      Math.max(promptBuildResult?.truncateBefore ?? 0, legacyResult?.truncateBefore ?? 0) ||
+      undefined,
   };
 }
 
@@ -1411,6 +1414,19 @@ export async function runEmbeddedAttempt(
             systemPromptText = legacySystemPrompt;
             log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
           }
+        }
+        const truncateBefore = hookResult?.truncateBefore;
+        if (truncateBefore) {
+          const originalMessageCount = activeSession.messages.length;
+          const truncatedMessages = activeSession.messages.filter((msg) => {
+            const timestamp = (msg as { timestamp?: unknown }).timestamp;
+            return typeof timestamp === "number" && timestamp >= truncateBefore;
+          });
+          const removedCount = originalMessageCount - truncatedMessages.length;
+          activeSession.messages.splice(0, activeSession.messages.length, ...truncatedMessages);
+          log.debug(
+            `hooks: truncated prompt history before ${truncateBefore} (removed ${removedCount} messages)`,
+          );
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
