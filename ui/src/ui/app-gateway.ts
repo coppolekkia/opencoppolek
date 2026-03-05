@@ -204,8 +204,9 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
-      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
-      host.lastErrorCode = null;
+      console.warn(
+        `[gateway] event gap detected (expected seq ${expected}, got ${received}), reconnecting...`,
+      );
     },
   });
   host.client = client;

@@ -301,6 +301,9 @@ export class GatewayBrowserClient {
       if (seq !== null) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
           this.opts.onGap?.({ expected: this.lastSeq + 1, received: seq });
+          this.lastSeq = null;
+          this.ws?.close(4000, "event gap detected, reconnecting");
+          return;
         }
         this.lastSeq = seq;
       }
