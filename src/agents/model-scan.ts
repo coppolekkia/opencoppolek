@@ -326,12 +326,15 @@ async function probeImage(
 }
 
 function ensureImageInput(model: OpenAIModel): OpenAIModel {
-  if (model.input.includes("image")) {
+  const inputModes: Array<"text" | "image"> = Array.isArray(model.input)
+    ? model.input.filter((mode): mode is "text" | "image" => mode === "text" || mode === "image")
+    : ["text"];
+  if (inputModes.includes("image")) {
     return model;
   }
   return {
     ...model,
-    input: Array.from(new Set([...model.input, "image"])),
+    input: Array.from(new Set([...inputModes, "image"])),
   };
 }
 
@@ -472,7 +475,8 @@ export async function scanOpenRouterModels(
       };
 
       const toolResult = await probeTool(model, apiKey, timeoutMs);
-      const imageResult = model.input.includes("image")
+      const imageInputModes = Array.isArray(model.input) ? model.input : [];
+      const imageResult = imageInputModes.includes("image")
         ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
         : { ok: false, latencyMs: null, skipped: true };
 
