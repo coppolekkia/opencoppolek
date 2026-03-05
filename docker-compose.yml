@@ -1,4 +1,5 @@
 services:
+
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     environment:
@@ -9,20 +10,15 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-      ## Uncomment the lines below to enable sandbox isolation
-      ## (agents.defaults.sandbox). Requires Docker CLI in the image
-      ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
-      ## docker-setup.sh with OPENCLAW_SANDBOX=1 for automated setup.
-      ## Set DOCKER_GID to the host's docker group GID (run: stat -c '%g' /var/run/docker.sock).
-      # - /var/run/docker.sock:/var/run/docker.sock
-    # group_add:
-    #   - "${DOCKER_GID:-999}"
+
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+
     init: true
     restart: unless-stopped
     command:
@@ -35,6 +31,7 @@ services:
         "--port",
         "18789",
       ]
+
     healthcheck:
       test:
         [
@@ -48,6 +45,7 @@ services:
       retries: 5
       start_period: 20s
 
+
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     network_mode: "service:openclaw-gateway"
@@ -56,24 +54,25 @@ services:
       - NET_ADMIN
     security_opt:
       - no-new-privileges:true
+
     environment:
-  HOME: /home/node
-  TERM: xterm-256color
-  OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
-  BROWSER: echo
-  CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
-  CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
-  CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      BROWSER: echo
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["node", "dist/index.js"]
+
+    depends_on:
+      - openclaw-gateway
+
 
 volumes:
-  - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-  - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-
-stdin_open: true
-tty: true
-init: true
-entrypoint: ["node", "dist/index.js"]
-
-depends_on:
-  - openclaw-gateway
+  openclaw-data:
