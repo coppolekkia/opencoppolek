@@ -421,6 +421,27 @@ describe("removePluginFromConfig", () => {
     expect((result.channels as Record<string, unknown>)?.googlechat).toEqual({ enabled: true });
     expect(actions.channelConfig).toBe(true);
   });
+
+  it("does not remove shared channel config keys like defaults or modelByChannel", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          defaults: { enabled: true },
+        },
+      },
+      channels: {
+        defaults: { groupPolicy: "reject" },
+        telegram: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "defaults");
+
+    expect((result.channels as Record<string, unknown>)?.defaults).toEqual({
+      groupPolicy: "reject",
+    });
+    expect(actions.channelConfig).toBe(false);
+  });
 });
 
 describe("uninstallPlugin", () => {

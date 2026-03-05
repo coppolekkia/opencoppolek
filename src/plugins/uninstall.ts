@@ -160,8 +160,10 @@ export function removePluginFromConfig(
   // Remove channel config entry matching the plugin id.
   // Only remove channels[pluginId] by exact match to avoid alias collisions
   // (e.g. uninstalling a plugin named "gchat" must not delete channels.googlechat).
+  // Skip shared config keys that are not channel ids.
+  const CHANNELS_SHARED_KEYS = new Set(["defaults", "modelByChannel"]);
   let channels = cfg.channels as Record<string, unknown> | undefined;
-  if (channels && pluginId in channels) {
+  if (channels && pluginId in channels && !CHANNELS_SHARED_KEYS.has(pluginId)) {
     const { [pluginId]: _, ...rest } = channels;
     channels = Object.keys(rest).length > 0 ? rest : undefined;
     actions.channelConfig = true;
