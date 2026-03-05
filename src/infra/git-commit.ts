@@ -98,3 +98,25 @@ export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessE
     return cachedCommit;
   }
 };
+
+export const resolveLocalCommitHash = (options: { cwd?: string } = {}) => {
+  try {
+    const headPath = resolveGitHeadPath(options.cwd ?? process.cwd());
+    if (!headPath) {
+      return null;
+    }
+    const head = fs.readFileSync(headPath, "utf-8").trim();
+    if (!head) {
+      return null;
+    }
+    if (head.startsWith("ref:")) {
+      const ref = head.replace(/^ref:\s*/i, "").trim();
+      const refPath = path.resolve(path.dirname(headPath), ref);
+      const refHash = fs.readFileSync(refPath, "utf-8").trim();
+      return formatCommit(refHash);
+    }
+    return formatCommit(head);
+  } catch {
+    return null;
+  }
+};
