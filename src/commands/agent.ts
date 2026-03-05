@@ -38,12 +38,14 @@ import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { resolveSystemElevatedDefaults } from "../auto-reply/reply/reply-elevated.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   supportsXHighThinking,
+  type ElevatedLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
@@ -169,6 +171,7 @@ function runAgentAttempt(params: {
   messageChannel: ReturnType<typeof resolveMessageChannel>;
   skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
+  bashElevated?: { enabled: boolean; allowed: boolean; defaultLevel: ElevatedLevel };
   agentDir: string;
   onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
   primaryProvider: string;
@@ -316,6 +319,7 @@ function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     verboseLevel: params.resolvedVerboseLevel,
+    bashElevated: params.bashElevated,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,
@@ -429,6 +433,7 @@ async function agentCommandInternal(
     isNewSession,
     persistedThinking,
     persistedVerbose,
+    persistedElevated,
   } = sessionResolution;
   const sessionAgentId =
     agentIdOverride ??
@@ -821,6 +826,19 @@ async function agentCommandInternal(
         opts.replyChannel ?? opts.channel,
       );
       const spawnedBy = opts.spawnedBy ?? sessionEntry?.spawnedBy;
+
+      // Resolve elevated exec permissions so agent command runs (including
+      // sessions_send nested runs) can use elevated tools when configured.
+      // Agent commands are system-initiated (no sender), so only enablement applies.
+      // Persisted session elevated level takes priority over config default
+      // (honours /elevated off set during the session).
+      const bashElevated = resolveSystemElevatedDefaults({
+        cfg,
+        agentId: sessionAgentId,
+        elevatedDefault:
+          persistedElevated ?? (agentCfg?.elevatedDefault as ElevatedLevel | undefined),
+      });
+
       // Keep fallback candidate resolution centralized so session model overrides,
       // per-agent overrides, and default fallbacks stay consistent across callers.
       const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
@@ -862,6 +880,7 @@ async function agentCommandInternal(
             messageChannel,
             skillsSnapshot,
             resolvedVerboseLevel,
+            bashElevated,
             agentDir,
             primaryProvider: provider,
             sessionStore,
