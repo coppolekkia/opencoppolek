@@ -188,7 +188,7 @@ export const dispatchTelegramMessage = async ({
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
-  const archivedReasoningPreviewIds: number[] = [];
+  const archivedReasoningPreviews: ArchivedPreview[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const useMessagePreviewTransportForDmReasoning =
       laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft;
@@ -206,8 +206,11 @@ export const dispatchTelegramMessage = async ({
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {
                   if (laneName === "reasoning") {
-                    if (!archivedReasoningPreviewIds.includes(preview.messageId)) {
-                      archivedReasoningPreviewIds.push(preview.messageId);
+                    if (!archivedReasoningPreviews.some((p) => p.messageId === preview.messageId)) {
+                      archivedReasoningPreviews.push({
+                        messageId: preview.messageId,
+                        textSnapshot: preview.textSnapshot ?? reasoningLane.lastPartialText ?? "",
+                      });
                     }
                     return;
                   }
@@ -730,12 +733,25 @@ export const dispatchTelegramMessage = async ({
         );
       }
     }
-    for (const messageId of archivedReasoningPreviewIds) {
+    // Finalize reasoning previews (edit to spoiler format instead of deleting)
+    for (const { messageId, textSnapshot } of archivedReasoningPreviews) {
       try {
-        await bot.api.deleteMessage(chatId, messageId);
+        // Use the snapshot if available, otherwise fall back to last partial text
+        const finalReasoningText =
+          textSnapshot.trim().length > 0 ? textSnapshot : reasoningLane.lastPartialText || "";
+        if (finalReasoningText.trim().length > 0) {
+          // Wrap in spoiler tags so users can still view it if interested
+          const spoilerText = `<tg-spoiler>${renderTelegramHtmlText(finalReasoningText, { tableMode })}</tg-spoiler>`;
+          await bot.api.editMessageText(chatId, messageId, spoilerText, {
+            parse_mode: "HTML",
+          });
+        } else {
+          // If no reasoning text available, fall back to deletion
+          await bot.api.deleteMessage(chatId, messageId);
+        }
       } catch (err) {
         logVerbose(
-          `telegram: archived reasoning preview cleanup failed (${messageId}): ${String(err)}`,
+          `telegram: reasoning preview finalization failed (${messageId}): ${String(err)}`,
         );
       }
     }
