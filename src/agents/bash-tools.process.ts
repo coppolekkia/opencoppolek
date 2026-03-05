@@ -335,6 +335,23 @@ export function createProcessTool(
               );
             }
           }
+
+          // Active liveness check: if the session's exited flag is still false
+          // but the OS process no longer exists, mark it exited now. This
+          // closes a race where the child exits but the Node "close" event
+          // hasn't fired yet (common on Linux with shell wrappers).
+          if (!scopedSession.exited && scopedSession.pid) {
+            let processAlive = true;
+            try {
+              process.kill(scopedSession.pid, 0);
+            } catch {
+              processAlive = false;
+            }
+            if (!processAlive) {
+              markExited(scopedSession, null, null, "completed");
+            }
+          }
+
           const { stdout, stderr } = drainSession(scopedSession);
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? 0;
