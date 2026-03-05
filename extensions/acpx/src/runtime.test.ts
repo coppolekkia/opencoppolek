@@ -268,7 +268,7 @@ async function createMockRuntime(params?: {
     cwd: dir,
     permissionMode: params?.permissionMode ?? "approve-all",
     nonInteractivePermissions: "fail",
-    queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
+    queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 5,
   };
 
   return {
@@ -415,7 +415,7 @@ describe("AcpxRuntime", () => {
     const promptArgs = (prompt?.args as string[]) ?? [];
     const ttlFlagIndex = promptArgs.indexOf("--ttl");
     expect(ttlFlagIndex).toBeGreaterThanOrEqual(0);
-    expect(promptArgs[ttlFlagIndex + 1]).toBe("0.1");
+    expect(promptArgs[ttlFlagIndex + 1]).toBe("5");
   });
 
   it("preserves leading spaces across streamed text deltas", async () => {
@@ -584,7 +584,7 @@ describe("AcpxRuntime", () => {
         cwd: process.cwd(),
         permissionMode: "approve-reads",
         nonInteractivePermissions: "fail",
-        queueOwnerTtlSeconds: 0.1,
+        queueOwnerTtlSeconds: 5,
       },
       { logger: NOOP_LOGGER },
     );
@@ -606,7 +606,7 @@ describe("AcpxRuntime", () => {
         cwd: process.cwd(),
         permissionMode: "approve-reads",
         nonInteractivePermissions: "fail",
-        queueOwnerTtlSeconds: 0.1,
+        queueOwnerTtlSeconds: 5,
       },
       { logger: NOOP_LOGGER },
     );
