@@ -1,5 +1,10 @@
 import { formatInboundEnvelope } from "../../../auto-reply/envelope.js";
 import { readSessionUpdatedAt } from "../../../config/sessions.js";
+import {
+  evaluateSessionFreshness,
+  resolveChannelResetConfig,
+  resolveSessionResetPolicy,
+} from "../../../config/sessions/reset.js";
 import { logVerbose } from "../../../globals.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
@@ -17,7 +22,50 @@ export type SlackThreadContextData = {
   threadSessionPreviousTimestamp: number | undefined;
   threadLabel: string | undefined;
   threadStarterMedia: SlackMediaResult[] | null;
+  isEffectivelyNewSession: boolean;
 };
+
+/**
+ * Check if a thread session is fresh enough to allow implicit mentions.
+ * Used to determine whether the bot should auto-reply to thread messages
+ * without an explicit @mention, based on the configured session timeout.
+ *
+ * Returns true if the session is fresh (within timeout), false if stale.
+ */
+export function checkThreadSessionFreshness(params: {
+  storePath: string;
+  sessionKey: string;
+  ctx: SlackMonitorContext;
+}): boolean {
+  const threadSessionPreviousTimestamp = readSessionUpdatedAt({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    skipCache: true,
+  });
+
+  // No previous timestamp = truly new session, not stale
+  if (!threadSessionPreviousTimestamp) {
+    return true;
+  }
+
+  // Check if the existing session is stale
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg: params.ctx.cfg.session,
+    channel: "slack",
+  });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg: params.ctx.cfg.session,
+    resetType: "thread",
+    resetOverride: channelReset,
+  });
+  const freshness = evaluateSessionFreshness({
+    updatedAt: threadSessionPreviousTimestamp,
+    now: Date.now(),
+    policy: resetPolicy,
+  });
+
+  return freshness.fresh;
+}
 
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
@@ -39,6 +87,8 @@ export async function resolveSlackThreadContextData(params: {
   let threadSessionPreviousTimestamp: number | undefined;
   let threadLabel: string | undefined;
   let threadStarterMedia: SlackMediaResult[] | null = null;
+  // Track if this is effectively a new session (truly new or stale) for thread context loading
+  let isEffectivelyNewSession = false;
 
   if (!params.isThreadReply || !params.threadTs) {
     return {
@@ -47,6 +97,7 @@ export async function resolveSlackThreadContextData(params: {
       threadSessionPreviousTimestamp,
       threadLabel,
       threadStarterMedia,
+      isEffectivelyNewSession,
     };
   }
 
@@ -71,12 +122,43 @@ export async function resolveSlackThreadContextData(params: {
   }
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
+  // CRITICAL: Skip cache for session freshness check to match initSessionState behavior
+  // and avoid incorrect thread context loading decisions (stale cache could cause
+  // loading history when session is actually fresh, or vice versa)
   threadSessionPreviousTimestamp = readSessionUpdatedAt({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
+    skipCache: true,
   });
 
-  if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+  // Determine if this is effectively a new session (either truly new or stale):
+  // - No previous timestamp = truly new session
+  // - Previous timestamp exists but session is stale (will be reset by initSessionState)
+  isEffectivelyNewSession = !threadSessionPreviousTimestamp;
+  if (threadSessionPreviousTimestamp) {
+    // Session exists - check if it's stale (will be reset)
+    // NOTE: Must use provider name (not room ID) to match what initSessionState does
+    // via ctx.OriginatingChannel, so both use the same reset policy lookup
+    const channelReset = resolveChannelResetConfig({
+      sessionCfg: params.ctx.cfg.session,
+      channel: "slack",
+    });
+    const resetPolicy = resolveSessionResetPolicy({
+      sessionCfg: params.ctx.cfg.session,
+      resetType: "thread",
+      resetOverride: channelReset,
+    });
+    const freshness = evaluateSessionFreshness({
+      updatedAt: threadSessionPreviousTimestamp,
+      now: Date.now(),
+      policy: resetPolicy,
+    });
+    // If session is stale, initSessionState will create a new session
+    isEffectivelyNewSession = !freshness.fresh;
+  }
+
+  // Only fetch thread history for NEW or STALE sessions (fresh sessions already have this context in their transcript)
+  if (threadInitialHistoryLimit > 0 && isEffectivelyNewSession) {
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,
@@ -122,7 +204,7 @@ export async function resolveSlackThreadContextData(params: {
       }
       threadHistoryBody = historyParts.join("\n\n");
       logVerbose(
-        `slack: populated thread history with ${threadHistory.length} messages for new session`,
+        `slack: populated thread history with ${threadHistory.length} messages for new or stale session`,
       );
     }
   }
@@ -133,5 +215,6 @@ export async function resolveSlackThreadContextData(params: {
     threadSessionPreviousTimestamp,
     threadLabel,
     threadStarterMedia,
+    isEffectivelyNewSession,
   };
 }
