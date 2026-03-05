@@ -2,12 +2,31 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import type { FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
+const SUPPORTED_WS_PROXY_PROTOCOLS = new Set(["http:", "https:"]);
+
+function parseHttpProxyUrl(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (!SUPPORTED_WS_PROXY_PROTOCOLS.has(parsed.protocol)) {
+      return undefined;
+    }
+    return trimmed;
+  } catch {
+    return undefined;
+  }
+}
+
 function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
-  const proxyUrl =
+  const proxyUrl = parseHttpProxyUrl(
     process.env.https_proxy ||
-    process.env.HTTPS_PROXY ||
-    process.env.http_proxy ||
-    process.env.HTTP_PROXY;
+      process.env.HTTPS_PROXY ||
+      process.env.http_proxy ||
+      process.env.HTTP_PROXY,
+  );
   if (!proxyUrl) return undefined;
   return new HttpsProxyAgent(proxyUrl);
 }

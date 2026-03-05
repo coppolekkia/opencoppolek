@@ -133,4 +133,24 @@ describe("createFeishuWSClient proxy handling", () => {
     const options = firstWsClientOptions();
     expect(options.agent).toEqual({ proxyUrl: "http://upper-http:8999" });
   });
+
+  it("ignores non-http proxy protocols to avoid invalid ws proxy handshakes", () => {
+    process.env.HTTPS_PROXY = "ws://127.0.0.1:18789/ws";
+
+    createFeishuWSClient(baseAccount);
+
+    expect(httpsProxyAgentCtorMock).not.toHaveBeenCalled();
+    const options = firstWsClientOptions();
+    expect(options?.agent).toBeUndefined();
+  });
+
+  it("ignores malformed proxy values", () => {
+    process.env.HTTPS_PROXY = "://not-a-url";
+
+    createFeishuWSClient(baseAccount);
+
+    expect(httpsProxyAgentCtorMock).not.toHaveBeenCalled();
+    const options = firstWsClientOptions();
+    expect(options?.agent).toBeUndefined();
+  });
 });
