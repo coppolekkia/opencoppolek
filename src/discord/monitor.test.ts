@@ -5,6 +5,7 @@ import {
   allowListMatches,
   buildDiscordMediaPayload,
   type DiscordGuildEntryResolved,
+  isDiscordChannelAllowlistConfigured,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
@@ -16,6 +17,7 @@ import {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   sanitizeDiscordThreadName,
+  shouldDenyDiscordChannelByAllowFlag,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
 import { DiscordMessageListener, DiscordReactionListener } from "./monitor/listeners.js";
@@ -607,6 +609,76 @@ describe("discord groupPolicy gating", () => {
     for (const testCase of cases) {
       expect(isDiscordGroupAllowedByPolicy(testCase.input), testCase.name).toBe(testCase.expected);
     }
+  });
+
+  it("keeps guild open when channel entries only add prompts", () => {
+    const channelAllowlistConfigured = isDiscordChannelAllowlistConfigured({
+      coder: { systemPrompt: "Use short answers." },
+    });
+    expect(channelAllowlistConfigured).toBe(false);
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "allowlist",
+        guildAllowlisted: true,
+        channelAllowlistConfigured,
+        channelAllowed: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats explicit allow flags as channel allowlist entries", () => {
+    const channelAllowlistConfigured = isDiscordChannelAllowlistConfigured({
+      coder: { allow: true },
+    });
+    expect(channelAllowlistConfigured).toBe(true);
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "allowlist",
+        guildAllowlisted: true,
+        channelAllowlistConfigured,
+        channelAllowed: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores allow keys with undefined values", () => {
+    const channelAllowlistConfigured = isDiscordChannelAllowlistConfigured({
+      coder: { allow: undefined } as unknown as { allow?: boolean },
+    });
+    expect(channelAllowlistConfigured).toBe(false);
+  });
+
+  it("does not deny fallback channels when access groups are enabled without explicit allow flags", () => {
+    expect(
+      shouldDenyDiscordChannelByAllowFlag({
+        isGuildMessage: true,
+        channelAllowed: false,
+        useAccessGroups: true,
+        channelAllowlistConfigured: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("denies fallback channels when explicit allow flags are configured", () => {
+    expect(
+      shouldDenyDiscordChannelByAllowFlag({
+        isGuildMessage: true,
+        channelAllowed: false,
+        useAccessGroups: true,
+        channelAllowlistConfigured: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("denies channel when access groups are disabled and channel is not allowed", () => {
+    expect(
+      shouldDenyDiscordChannelByAllowFlag({
+        isGuildMessage: true,
+        channelAllowed: false,
+        useAccessGroups: false,
+        channelAllowlistConfigured: false,
+      }),
+    ).toBe(true);
   });
 });
 

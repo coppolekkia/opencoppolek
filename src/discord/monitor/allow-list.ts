@@ -386,6 +386,21 @@ function hasConfiguredDiscordChannels(
   return Boolean(channels && Object.keys(channels).length > 0);
 }
 
+function hasExplicitAllowFlag(entry: DiscordChannelEntry | undefined): boolean {
+  return Boolean(
+    entry && Object.prototype.hasOwnProperty.call(entry, "allow") && entry.allow !== undefined,
+  );
+}
+
+export function isDiscordChannelAllowlistConfigured(
+  channels: DiscordGuildEntryResolved["channels"] | undefined,
+): boolean {
+  if (!hasConfiguredDiscordChannels(channels)) {
+    return false;
+  }
+  return Object.values(channels).some((entry) => hasExplicitAllowFlag(entry));
+}
+
 function resolveDiscordChannelConfigEntry(
   entry: DiscordChannelEntry,
 ): DiscordChannelConfigResolved {
@@ -526,6 +541,21 @@ export function isDiscordGroupAllowedByPolicy(params: {
     return true;
   }
   return channelAllowed;
+}
+
+export function shouldDenyDiscordChannelByAllowFlag(params: {
+  isGuildMessage: boolean;
+  channelAllowed: boolean;
+  useAccessGroups: boolean;
+  channelAllowlistConfigured: boolean;
+}): boolean {
+  if (!params.isGuildMessage || params.channelAllowed) {
+    return false;
+  }
+  if (!params.useAccessGroups) {
+    return true;
+  }
+  return params.channelAllowlistConfigured;
 }
 
 export function resolveGroupDmAllow(params: {

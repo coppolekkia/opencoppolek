@@ -5,6 +5,7 @@ export type {
 } from "./monitor/allow-list.js";
 export {
   allowListMatches,
+  isDiscordChannelAllowlistConfigured,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
@@ -14,6 +15,7 @@ export {
   resolveDiscordGuildEntry,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
+  shouldDenyDiscordChannelByAllowFlag,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
 export type { DiscordMessageEvent, DiscordMessageHandler } from "./monitor/listeners.js";

@@ -55,6 +55,7 @@ import { withTimeout } from "../../utils/with-timeout.js";
 import { loadWebMedia } from "../../web/media.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
+  isDiscordChannelAllowlistConfigured,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
@@ -62,6 +63,7 @@ import {
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
   resolveDiscordOwnerAllowFrom,
+  shouldDenyDiscordChannelByAllowFlag,
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
@@ -1333,14 +1335,20 @@ async function dispatchDiscordCommandInteraction(params: {
     await respond("This channel is disabled.");
     return;
   }
-  if (interaction.guild && channelConfig?.allowed === false) {
+  const channelAllowlistConfigured = isDiscordChannelAllowlistConfigured(guildInfo?.channels);
+  const channelAllowed = channelConfig?.allowed !== false;
+  if (
+    shouldDenyDiscordChannelByAllowFlag({
+      isGuildMessage: Boolean(interaction.guild),
+      channelAllowed,
+      useAccessGroups,
+      channelAllowlistConfigured,
+    })
+  ) {
     await respond("This channel is not allowed.");
     return;
   }
   if (useAccessGroups && interaction.guild) {
-    const channelAllowlistConfigured =
-      Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-    const channelAllowed = channelConfig?.allowed !== false;
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
