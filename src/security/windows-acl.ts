@@ -33,14 +33,15 @@ const TRUSTED_BASE = new Set([
   "system",
   "builtin\\administrators",
   "creator owner",
-  // Localized SYSTEM account names (French, German, Spanish, Portuguese)
+  // Localized SYSTEM account names (French, German, Spanish, Portuguese, Russian)
   "autorite nt\\système",
   "nt-autorität\\system",
   "autoridad nt\\system",
   "autoridade nt\\system",
+  "nt authority\\система",
 ]);
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
-const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système"];
+const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système", "\\система"];
 
 const SID_RE = /^s-\d+-\d+(-\d+)+$/i;
 const TRUSTED_SIDS = new Set([
@@ -243,14 +244,43 @@ export function summarizeWindowsAcl(
   return { trusted, untrustedWorld, untrustedGroup };
 }
 
+/**
+ * Run `icacls` and return its combined output.
+ *
+ * On Windows production runs (real exec, not a mock) we prepend `chcp 65001`
+ * via cmd.exe to force UTF-8 output so localized account names (e.g. Russian
+ * СИСТЕМА) are returned as Unicode instead of OEM code-page bytes that would
+ * appear garbled.  When a custom exec function is injected (tests/mocks) we
+ * always call `icacls` directly so the mock signature stays stable across
+ * platforms.
+ */
+async function runIcacls(
+  targetPath: string,
+  exec: ExecFn,
+  opts?: { useRealExec?: boolean },
+): Promise<string> {
+  if (process.platform === "win32" && opts?.useRealExec) {
+    // Double any embedded quotes in the path before embedding in the cmd string.
+    const escaped = targetPath.replace(/"/g, '""');
+    const { stdout, stderr } = await exec("cmd", [
+      "/c",
+      `chcp 65001 > nul 2>&1 & icacls "${escaped}"`,
+    ]);
+    return `${stdout}\n${stderr}`.trim();
+  }
+  const { stdout, stderr } = await exec("icacls", [targetPath]);
+  return `${stdout}\n${stderr}`.trim();
+}
+
 export async function inspectWindowsAcl(
   targetPath: string,
   opts?: { env?: NodeJS.ProcessEnv; exec?: ExecFn },
 ): Promise<WindowsAclSummary> {
+  // Use the real exec only when no custom exec is injected (i.e. not in tests).
+  const isCustomExec = opts?.exec != null;
   const exec = opts?.exec ?? runExec;
   try {
-    const { stdout, stderr } = await exec("icacls", [targetPath]);
-    const output = `${stdout}\n${stderr}`.trim();
+    const output = await runIcacls(targetPath, exec, { useRealExec: !isCustomExec });
     const entries = parseIcaclsOutput(output, targetPath);
     const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, opts?.env);
     return { ok: true, entries, trusted, untrustedWorld, untrustedGroup };

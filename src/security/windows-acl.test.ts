@@ -492,6 +492,22 @@ Successfully processed 1 files`;
       expectTrustedOnly([aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })]);
     });
 
+    it("classifies Russian SYSTEM (NT AUTHORITY\\СИСТЕМА) as trusted", () => {
+      expectTrustedOnly([aclEntry({ principal: "NT AUTHORITY\\СИСТЕМА" })]);
+    });
+
+    it("Russian Windows full scenario: user + СИСТЕМА only → no untrusted", () => {
+      const entries: WindowsAclEntry[] = [
+        aclEntry({ principal: "MYPC\\Иван" }),
+        aclEntry({ principal: "NT AUTHORITY\\СИСТЕМА" }),
+      ];
+      const env = { USERNAME: "Иван", USERDOMAIN: "MYPC" };
+      const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, env);
+      expect(trusted).toHaveLength(2);
+      expect(untrustedWorld).toHaveLength(0);
+      expect(untrustedGroup).toHaveLength(0);
+    });
+
     it("French Windows full scenario: user + Système only → no untrusted", () => {
       const entries: WindowsAclEntry[] = [
         aclEntry({ principal: "MYPC\\Pierre" }),
