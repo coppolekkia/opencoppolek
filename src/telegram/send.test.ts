@@ -87,6 +87,43 @@ describe("sent-message-cache", () => {
     clearSentMessageCache();
     expect(wasSentByBot(123, 1)).toBe(false);
   });
+
+  it("evicts oldest chats when chat cache grows beyond cap", () => {
+    for (let i = 0; i < 1100; i += 1) {
+      recordSentMessage(`chat-${i}`, 1);
+    }
+
+    expect(wasSentByBot("chat-0", 1)).toBe(false);
+    expect(wasSentByBot("chat-1099", 1)).toBe(true);
+  });
+
+  it("evicts oldest message ids per chat when chat history exceeds cap", () => {
+    for (let i = 1; i <= 1100; i += 1) {
+      recordSentMessage(123, i);
+    }
+
+    expect(wasSentByBot(123, 1)).toBe(false);
+    expect(wasSentByBot(123, 1100)).toBe(true);
+  });
+
+  it("removes expired chat buckets after ttl and still accepts new writes", () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date("2026-01-01T00:00:00.000Z");
+      vi.setSystemTime(now);
+
+      recordSentMessage(999, 1);
+      expect(wasSentByBot(999, 1)).toBe(true);
+
+      vi.setSystemTime(new Date(now.getTime() + 24 * 60 * 60 * 1000 + 1));
+      expect(wasSentByBot(999, 1)).toBe(false);
+
+      recordSentMessage(999, 2);
+      expect(wasSentByBot(999, 2)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("buildInlineKeyboard", () => {
