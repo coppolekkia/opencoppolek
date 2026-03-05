@@ -133,6 +133,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             sessionKey?: string;
             message?: string;
             extraSystemPrompt?: string;
+            images?: Array<{ type: string; data: string; mimeType: string }>;
           }
         | undefined;
     const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
@@ -249,6 +250,223 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         expect((opts as { message?: string } | undefined)?.message).toBe("hello\nworld");
         await res.text();
+      }
+
+      {
+        const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA";
+        mockAgentOnce([{ text: "looks good" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "describe this" },
+                {
+                  type: "image_url",
+                  image_url: { url: `data:image/png;base64,${imageData}` },
+                },
+              ],
+            },
+          ],
+        });
+        expect(res.status).toBe(200);
+
+        const firstCall = getFirstAgentCall();
+        expect(firstCall?.message).toBe("describe this");
+        expect(firstCall?.images).toEqual([
+          { type: "image", data: imageData, mimeType: "image/png" },
+        ]);
+        await res.text();
+      }
+
+      {
+        const imageData = "QUJDRA==";
+        mockAgentOnce([{ text: "supports data-uri params" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "with metadata params" },
+                {
+                  type: "image_url",
+                  image_url: { url: `data:image/png;charset=utf-8;base64,${imageData}` },
+                },
+              ],
+            },
+          ],
+        });
+        expect(res.status).toBe(200);
+
+        const firstCall = getFirstAgentCall();
+        expect(firstCall?.images).toEqual([
+          { type: "image", data: imageData, mimeType: "image/png" },
+        ]);
+        await res.text();
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: { url: "https://example.com/image.png" },
+                },
+              ],
+            },
+          ],
+        });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as Record<string, unknown>;
+        expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
+          "invalid_request_error",
+        );
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        mockAgentOnce([{ text: "I can see the image" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: { url: "data:image/jpeg;base64,QUJDRA==" },
+                },
+              ],
+            },
+          ],
+        });
+        expect(res.status).toBe(200);
+
+        const firstCall = getFirstAgentCall();
+        expect(firstCall?.message).toContain("User sent image(s) with no text.");
+        expect(firstCall?.images).toEqual([
+          { type: "image", data: "QUJDRA==", mimeType: "image/jpeg" },
+        ]);
+        await res.text();
+      }
+
+      {
+        mockAgentOnce([{ text: "follow up answer" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "image_url", image_url: { url: "data:image/png;base64,QUJDRA==" } },
+              ],
+            },
+            { role: "assistant", content: "I can see it." },
+            { role: "user", content: "What color was it?" },
+          ],
+        });
+        expect(res.status).toBe(200);
+
+        const firstCall = getFirstAgentCall();
+        expect(firstCall?.images).toBeUndefined();
+        expect(firstCall?.message ?? "").not.toContain("User sent image(s) with no text.");
+        await res.text();
+      }
+
+      {
+        mockAgentOnce([{ text: "latest image only" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "first" },
+                { type: "image_url", image_url: { url: "data:image/png;base64,QUFBQQ==" } },
+              ],
+            },
+            { role: "assistant", content: "noted" },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "second" },
+                { type: "image_url", image_url: { url: "data:image/png;base64,QkJCQg==" } },
+              ],
+            },
+          ],
+        });
+        expect(res.status).toBe(200);
+
+        const firstCall = getFirstAgentCall();
+        expect(firstCall?.images).toEqual([
+          { type: "image", data: "QkJCQg==", mimeType: "image/png" },
+        ]);
+        await res.text();
+      }
+
+      {
+        const largeMessage = "x".repeat(1_200_000);
+        mockAgentOnce([{ text: "accepted" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [{ role: "user", content: largeMessage }],
+        });
+        expect(res.status).toBe(200);
+        await res.text();
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: { url: "data:application/pdf;base64,QUJDRA==" },
+                },
+              ],
+            },
+          ],
+        });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as Record<string, unknown>;
+        expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
+          "invalid_request_error",
+        );
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        agentCommand.mockClear();
+        const manyImageParts = Array.from({ length: 9 }).map(() => ({
+          type: "image_url",
+          image_url: { url: "data:image/png;base64,QUJDRA==" },
+        }));
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: manyImageParts,
+            },
+          ],
+        });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as Record<string, unknown>;
+        expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
+          "invalid_request_error",
+        );
+        expect(agentCommand).toHaveBeenCalledTimes(0);
       }
 
       {
