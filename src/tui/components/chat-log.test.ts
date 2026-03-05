@@ -41,4 +41,17 @@ describe("ChatLog", () => {
 
     expect(chatLog.children.length).toBe(20);
   });
+
+  it("does not duplicate streaming assistant components for the same run", () => {
+    const chatLog = new ChatLog(20);
+    chatLog.startAssistant("first", "run-1");
+    const initialChildCount = chatLog.children.length;
+
+    chatLog.startAssistant("updated", "run-1");
+
+    expect(chatLog.children.length).toBe(initialChildCount);
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("updated");
+    expect(rendered).not.toContain("first");
+  });
 });
