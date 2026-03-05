@@ -6,10 +6,31 @@ type ChannelRegistryValueResolver<TValue> = (
   entry: PluginChannelRegistration,
 ) => TValue | undefined;
 
+const CHANNEL_REGISTRY_CACHE_MAX = 128;
+const CHANNEL_REGISTRY_MISS = Symbol("channel-registry-miss");
+
+function setCacheValue<TValue>(
+  cache: Map<ChannelId, TValue | typeof CHANNEL_REGISTRY_MISS>,
+  id: ChannelId,
+  value: TValue | typeof CHANNEL_REGISTRY_MISS,
+): void {
+  if (cache.has(id)) {
+    cache.set(id, value);
+    return;
+  }
+  if (cache.size >= CHANNEL_REGISTRY_CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) {
+      cache.delete(oldest);
+    }
+  }
+  cache.set(id, value);
+}
+
 export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
 ): (id: ChannelId) => Promise<TValue | undefined> {
-  const cache = new Map<ChannelId, TValue>();
+  const cache = new Map<ChannelId, TValue | typeof CHANNEL_REGISTRY_MISS>();
   let lastRegistry: PluginRegistry | null = null;
 
   return async (id: ChannelId): Promise<TValue | undefined> => {
@@ -18,18 +39,18 @@ export function createChannelRegistryLoader<TValue>(
       cache.clear();
       lastRegistry = registry;
     }
-    const cached = cache.get(id);
-    if (cached) {
-      return cached;
+    if (cache.has(id)) {
+      const cached = cache.get(id);
+      return cached === CHANNEL_REGISTRY_MISS ? undefined : cached;
     }
+
     const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
-    if (!pluginEntry) {
-      return undefined;
-    }
-    const resolved = resolveValue(pluginEntry);
-    if (resolved) {
-      cache.set(id, resolved);
-    }
+    const resolved = pluginEntry ? resolveValue(pluginEntry) : undefined;
+    setCacheValue(cache, id, resolved === undefined ? CHANNEL_REGISTRY_MISS : resolved);
     return resolved;
   };
+}
+
+export function __getChannelRegistryCacheMaxForTest(): number {
+  return CHANNEL_REGISTRY_CACHE_MAX;
 }
