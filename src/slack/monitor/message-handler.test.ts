@@ -97,6 +97,24 @@ describe("createSlackMessageHandler", () => {
     expect(enqueueMock).not.toHaveBeenCalled();
   });
 
+  it("does not dedupe app_mention events through markMessageSeen", async () => {
+    const { handler, trackEvent } = createHandlerWithTracker({ markMessageSeen: () => true });
+
+    await handler(
+      {
+        type: "app_mention",
+        channel: "C1",
+        ts: "123.456",
+        text: "<@U_BOT> hello",
+      } as never,
+      { source: "app_mention", wasMentioned: true },
+    );
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+    expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+  });
+
   it("tracks accepted non-duplicate messages", async () => {
     const { handler, trackEvent } = createHandlerWithTracker();
 
