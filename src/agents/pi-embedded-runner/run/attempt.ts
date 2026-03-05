@@ -29,6 +29,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { runAutoRecall } from "../../auto-recall.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -1521,6 +1522,23 @@ export async function runEmbeddedAttempt(
             applySystemPromptOverrideToSession(activeSession, legacySystemPrompt);
             systemPromptText = legacySystemPrompt;
             log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
+          }
+        }
+
+        // Auto-recall: inject memory search results before prompt for regular turns.
+        if (
+          params.bootstrapContextRunKind !== "heartbeat" &&
+          params.bootstrapContextRunKind !== "cron"
+        ) {
+          const recallContext = await runAutoRecall({
+            prompt: effectivePrompt,
+            cfg: params.config!,
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+          });
+          if (recallContext) {
+            effectivePrompt = `${recallContext}\n\n${effectivePrompt}`;
+            log.debug(`auto-recall: prepended ${recallContext.length} chars of memory context`);
           }
         }
 
