@@ -1177,6 +1177,92 @@ describe("BlueBubbles webhook monitor", () => {
         vi.useRealTimers();
       }
     });
+
+    it("does not crash when a coalesced entry has null text", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      const runtime = { log: vi.fn(), error: vi.fn() };
+
+      // oxlint-disable-next-line typescript/no-explicit-any
+      let debounceParams: any;
+      core.channel.debounce.createInboundDebouncer = vi.fn(
+        // oxlint-disable-next-line typescript/no-explicit-any
+        (params: any) => {
+          debounceParams = params;
+          return {
+            enqueue: vi.fn(async () => {}),
+            flushKey: vi.fn(async () => {}),
+          };
+        },
+      ) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime,
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const target = {
+        account,
+        config,
+        runtime,
+        core,
+        path: "/bluebubbles-webhook",
+      };
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "new-message",
+          data: {
+            text: "warmup",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: false,
+            guid: "warmup-msg",
+            chatGuid: "iMessage;-;+15551234567",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      const flushEntries = [
+        {
+          message: {
+            text: null,
+            senderId: "+15551234567",
+            messageId: "msg-null",
+            isGroup: false,
+            chatGuid: "iMessage;-;+15551234567",
+            fromMe: false,
+          },
+          target,
+        },
+        {
+          message: {
+            text: "hello",
+            senderId: "+15551234567",
+            messageId: "msg-hello",
+            isGroup: false,
+            chatGuid: "iMessage;-;+15551234567",
+            fromMe: false,
+          },
+          target,
+        },
+      ];
+
+      await expect(debounceParams.onFlush(flushEntries)).resolves.toBeUndefined();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.Body).toContain("hello");
+      expect(runtime.error).not.toHaveBeenCalled();
+    });
   });
 
   describe("reply metadata", () => {
