@@ -207,6 +207,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses tool error warnings for group chats", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: false });
+    const context = createContext({
+      isGroup: true,
+      msg: { chat: { id: -100123, type: "supergroup" } } as TelegramMessageContext["msg"],
+      chatId: -100123,
+      threadSpec: { id: 99, scope: "forum" },
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          suppressToolErrorWarnings: true,
+        }),
+      }),
+    );
+  });
+
+  it("keeps tool error warnings enabled for direct chats", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: false });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          suppressToolErrorWarnings: false,
+        }),
+      }),
+    );
+  });
+
   it("uses 30-char preview debounce for legacy block stream mode", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);

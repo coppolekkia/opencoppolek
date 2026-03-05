@@ -622,6 +622,7 @@ export const dispatchTelegramMessage = async ({
       },
       replyOptions: {
         skillFilter,
+        suppressToolErrorWarnings: isGroup,
         disableBlockStreaming,
         onPartialReply:
           answerLane.stream || reasoningLane.stream
