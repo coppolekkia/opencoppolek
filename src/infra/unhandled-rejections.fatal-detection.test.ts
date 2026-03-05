@@ -152,5 +152,23 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expect.stringContaining("This operation was aborted"),
       );
     });
+
+    it("does not exit on transient SQLite errors", () => {
+      const sqliteCases = [
+        Object.assign(new Error("unable to open database file"), { code: "SQLITE_CANTOPEN" }),
+        Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }),
+        Object.assign(new Error("database table is locked"), { code: "SQLITE_LOCKED" }),
+        Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
+      ];
+
+      for (const sqliteErr of sqliteCases) {
+        expectExitCodeFromUnhandled(sqliteErr, []);
+      }
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal SQLite error (continuing):",
+        expect.stringContaining("unable to open database file"),
+      );
+    });
   });
 });

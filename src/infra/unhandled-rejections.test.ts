@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isTransientNetworkError,
+  isTransientSqliteError,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -156,4 +160,40 @@ describe("isTransientNetworkError", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
   });
+});
+
+describe("isTransientSqliteError", () => {
+  it("returns true for errors with transient SQLite codes", () => {
+    const codes = ["SQLITE_CANTOPEN", "SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_IOERR"];
+
+    for (const code of codes) {
+      const error = Object.assign(new Error("database error"), { code });
+      expect(isTransientSqliteError(error), `code: ${code}`).toBe(true);
+    }
+  });
+
+  it("returns true for SQLite error nested in cause chain", () => {
+    const inner = Object.assign(new Error("unable to open database file"), {
+      code: "SQLITE_CANTOPEN",
+    });
+    const outer = Object.assign(new Error("wrapper"), { cause: inner });
+    expect(isTransientSqliteError(outer)).toBe(true);
+  });
+
+  it("returns false for regular errors without SQLite codes", () => {
+    expect(isTransientSqliteError(new Error("Something went wrong"))).toBe(false);
+    expect(isTransientSqliteError(new TypeError("Cannot read property"))).toBe(false);
+  });
+
+  it("returns false for errors with non-SQLite codes", () => {
+    const error = Object.assign(new Error("test"), { code: "ECONNRESET" });
+    expect(isTransientSqliteError(error)).toBe(false);
+  });
+
+  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+    "returns false for non-SQLite input %#",
+    (value) => {
+      expect(isTransientSqliteError(value)).toBe(false);
+    },
+  );
 });
