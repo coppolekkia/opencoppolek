@@ -171,6 +171,22 @@ function registerAndResolveCommandHandler(params: {
   return { handler: handler as TelegramCommandHandler, sendMessage };
 }
 
+function buildForumGroupStatusCommandContext(messageThreadId: number) {
+  return {
+    match: "",
+    message: {
+      message_id: 1,
+      date: Math.floor(Date.now() / 1000),
+      chat: {
+        id: 100,
+        type: "supergroup",
+      },
+      message_thread_id: messageThreadId,
+      from: { id: 200, username: "bob" },
+    },
+  };
+}
+
 describe("registerTelegramNativeCommands — session metadata", () => {
   beforeEach(() => {
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockClear();
@@ -382,5 +398,23 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       "You are not authorized to use this command.",
       expect.objectContaining({ message_thread_id: 42 }),
     );
+  });
+
+  it("passes forum topic MessageThreadId to native command session metadata when is_forum is absent", async () => {
+    const cfg: OpenClawConfig = {};
+    const { handler } = registerAndResolveStatusHandler({ cfg });
+    await handler(buildForumGroupStatusCommandContext(158));
+
+    const call = sessionMocks.recordSessionMetaFromInbound.mock.calls[0]?.[0] as {
+      sessionKey?: string;
+      ctx?: {
+        From?: string;
+        MessageThreadId?: number | string;
+        CommandTargetSessionKey?: string;
+      };
+    };
+    expect(call?.ctx?.From).toBe("telegram:group:100:topic:158");
+    expect(call?.ctx?.MessageThreadId).toBe(158);
+    expect(call?.ctx?.CommandTargetSessionKey).toContain("topic:158");
   });
 });
