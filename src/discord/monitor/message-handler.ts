@@ -1,9 +1,9 @@
 import type { Client } from "@buape/carbon";
+import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "../../channels/inbound-debounce-policy.js";
-import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
 import { createRunStateMachine } from "../../channels/run-state-machine.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
@@ -222,6 +222,22 @@ export function createDiscordMessageHandler(
       });
   };
 
+  const resolveInboundDebounceSessionId = (entry: { data: DiscordMessageEvent }) => {
+    const message = entry.data.message;
+    const authorId = entry.data.author?.id;
+    if (!message || !authorId) {
+      return undefined;
+    }
+    const channelId = resolveDiscordMessageChannelId({
+      message,
+      eventChannelId: entry.data.channel_id,
+    });
+    if (!channelId) {
+      return undefined;
+    }
+    return `discord:${params.accountId}:${channelId}:${authorId}`;
+  };
+
   const { debouncer } = createChannelInboundDebouncer<{
     data: DiscordMessageEvent;
     client: Client;
@@ -229,39 +245,17 @@ export function createDiscordMessageHandler(
   }>({
     cfg: params.cfg,
     channel: "discord",
-    buildKey: (entry) => {
-      const message = entry.data.message;
-      const authorId = entry.data.author?.id;
-      if (!message || !authorId) {
-        return null;
-      }
-      const channelId = resolveDiscordMessageChannelId({
-        message,
-        eventChannelId: entry.data.channel_id,
-      });
-      if (!channelId) {
-        return null;
-      }
-      return `discord:${params.accountId}:${channelId}:${authorId}`;
-    },
+    buildKey: resolveInboundDebounceSessionId,
     resolveDebounceMs: (entry) => {
-      const message = entry.data.message;
-      if (!message) {
+      const sessionId = resolveInboundDebounceSessionId(entry);
+      if (!sessionId) {
         return undefined;
       }
-      const channelId = resolveDiscordMessageChannelId({
-        message,
-        eventChannelId: entry.data.channel_id,
-      });
-      if (!channelId) {
-        return undefined;
-      }
-      const sessionId = `discord:${params.accountId}:${channelId}`;
       return resolveInboundDebounceMs({
         cfg: params.cfg,
         channel: "discord",
         sessionId,
-      }) || undefined;
+      });
     },
     shouldDebounce: (entry) => {
       const message = entry.data.message;

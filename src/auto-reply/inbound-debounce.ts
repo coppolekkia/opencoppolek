@@ -34,6 +34,9 @@ const resolveSessionIdOverride = (params: {
   let best: number | undefined;
   let bestLen = 0;
   for (const [prefix, ms] of Object.entries(params.bySessionId)) {
+    if (!prefix) {
+      continue;
+    }
     if (params.sessionId.startsWith(prefix) && prefix.length > bestLen) {
       const resolved = resolveMs(ms);
       if (resolved !== undefined) {
