@@ -18,6 +18,8 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  /** When true, sends with noUrgent=true so the recipient's device won't trigger a push notification. */
+  silent?: boolean;
 };
 
 export type SignalSendResult = {
@@ -169,6 +171,9 @@ export async function sendMessageSignal(
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
+  }
+  if (opts.silent) {
+    params.noUrgent = true;
   }
 
   const targetParams = buildTargetParams(target, {
