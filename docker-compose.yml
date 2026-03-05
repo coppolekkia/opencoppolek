@@ -1,9 +1,7 @@
-version: "3.8"
-
 services:
 
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build: .
     container_name: openclaw-gateway
 
     environment:
@@ -37,22 +35,9 @@ services:
         "18789"
       ]
 
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:18789/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
 
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build: .
     container_name: openclaw-cli
 
     network_mode: "service:openclaw-gateway"
@@ -84,7 +69,3 @@ services:
 
     depends_on:
       - openclaw-gateway
-
-
-volumes:
-  openclaw-data:
