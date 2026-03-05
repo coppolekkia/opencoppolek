@@ -5,6 +5,7 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
@@ -44,6 +45,7 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
+const COST_USAGE_CACHE_MAX_ENTRIES = 256;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
@@ -58,6 +60,11 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
+
+function setCostUsageCacheEntry(cacheKey: string, entry: CostUsageCacheEntry): void {
+  costUsageCache.set(cacheKey, entry);
+  pruneMapToMaxSize(costUsageCache, COST_USAGE_CACHE_MAX_ENTRIES);
+}
 
 function resolveSessionUsageFileOrRespond(
   key: string,
@@ -305,7 +312,7 @@ async function loadCostUsageSummaryCached(params: {
     config: params.config,
   })
     .then((summary) => {
-      costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
+      setCostUsageCacheEntry(cacheKey, { summary, updatedAt: Date.now() });
       return summary;
     })
     .catch((err) => {
@@ -318,12 +325,12 @@ async function loadCostUsageSummaryCached(params: {
       const current = costUsageCache.get(cacheKey);
       if (current?.inFlight === inFlight) {
         current.inFlight = undefined;
-        costUsageCache.set(cacheKey, current);
+        setCostUsageCacheEntry(cacheKey, current);
       }
     });
 
   entry.inFlight = inFlight;
-  costUsageCache.set(cacheKey, entry);
+  setCostUsageCacheEntry(cacheKey, entry);
 
   if (entry.summary) {
     return entry.summary;
@@ -342,6 +349,8 @@ export const __test = {
   parseDateRange,
   discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
+  COST_USAGE_CACHE_TTL_MS,
+  COST_USAGE_CACHE_MAX_ENTRIES,
   costUsageCache,
 };
 

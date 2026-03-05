@@ -158,4 +158,44 @@ describe("gateway usage helpers", () => {
     expect(b.totals.totalTokens).toBe(1);
     expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(1);
   });
+
+  it("loadCostUsageSummaryCached refreshes after TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+
+    const config = {} as OpenClawConfig;
+    await __test.loadCostUsageSummaryCached({ startMs: 10, endMs: 20, config });
+    vi.advanceTimersByTime(__test.COST_USAGE_CACHE_TTL_MS - 1);
+    await __test.loadCostUsageSummaryCached({ startMs: 10, endMs: 20, config });
+    vi.advanceTimersByTime(2);
+    await __test.loadCostUsageSummaryCached({ startMs: 10, endMs: 20, config });
+
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(2);
+  });
+
+  it("loadCostUsageSummaryCached evicts oldest entries when cache exceeds max size", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+
+    const config = {} as OpenClawConfig;
+    const maxEntries = __test.COST_USAGE_CACHE_MAX_ENTRIES;
+
+    for (let i = 0; i < maxEntries; i += 1) {
+      await __test.loadCostUsageSummaryCached({ startMs: i, endMs: i + 1, config });
+    }
+
+    expect(__test.costUsageCache.size).toBe(maxEntries);
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(maxEntries);
+
+    await __test.loadCostUsageSummaryCached({
+      startMs: maxEntries,
+      endMs: maxEntries + 1,
+      config,
+    });
+    expect(__test.costUsageCache.size).toBe(maxEntries);
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(maxEntries + 1);
+
+    await __test.loadCostUsageSummaryCached({ startMs: 0, endMs: 1, config });
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(maxEntries + 2);
+  });
 });
