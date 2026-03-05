@@ -213,6 +213,7 @@ export async function initSessionState(params: {
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
 
+  let dailyResetSessionEntry: SessionEntry | undefined;
   if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;
     systemSent = entry.systemSent ?? false;
@@ -240,6 +241,11 @@ export async function initSessionState(params: {
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
       persistedLabel = entry.label;
+    }
+    // Daily/idle reset: preserve old session entry for archiving.
+    // Manual resets are handled separately via previousSessionEntry.
+    if (!resetTriggered && entry) {
+      dailyResetSessionEntry = { ...entry };
     }
   }
 
@@ -412,12 +418,14 @@ export async function initSessionState(params: {
     },
   );
 
-  // Archive old transcript so it doesn't accumulate on disk (#14869).
-  if (previousSessionEntry?.sessionId) {
+  // Archive old transcript so it doesn't accumulate on disk (#14869, #35481).
+  // Handle both manual resets (/new, /reset) and automatic daily/idle resets.
+  const sessionToArchive = previousSessionEntry ?? dailyResetSessionEntry;
+  if (sessionToArchive?.sessionId) {
     archiveSessionTranscripts({
-      sessionId: previousSessionEntry.sessionId,
+      sessionId: sessionToArchive.sessionId,
       storePath,
-      sessionFile: previousSessionEntry.sessionFile,
+      sessionFile: sessionToArchive.sessionFile,
       agentId,
       reason: "reset",
     });
