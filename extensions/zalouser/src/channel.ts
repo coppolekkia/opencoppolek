@@ -61,6 +61,81 @@ const meta = {
   quickstartAllowFrom: true,
 };
 
+function stripZalouserTargetPrefix(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^(zalouser|zlu):/i, "")
+    .trim();
+}
+
+function normalizePrefixedTarget(raw: string): string | undefined {
+  const trimmed = stripZalouserTargetPrefix(raw);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const groupAlias = trimmed.match(/^(group:|g:|g-)(.+)$/i);
+  if (groupAlias) {
+    const id = groupAlias[2]?.trim() ?? "";
+    return id ? `group:${id}` : undefined;
+  }
+
+  const userAlias = trimmed.match(/^(user:|dm:|u:|u-)(.+)$/i);
+  if (userAlias) {
+    const id = userAlias[2]?.trim() ?? "";
+    return id ? `user:${id}` : undefined;
+  }
+
+  return trimmed;
+}
+
+function parseZalouserOutboundTarget(raw: string): {
+  threadId: string;
+  isGroup: boolean;
+} {
+  const normalized = normalizePrefixedTarget(raw);
+  if (!normalized) {
+    throw new Error("Zalouser target is required");
+  }
+  const lowered = normalized.toLowerCase();
+  if (lowered.startsWith("group:")) {
+    const threadId = normalized.slice("group:".length).trim();
+    if (!threadId) {
+      throw new Error("Zalouser group target is missing group id");
+    }
+    return { threadId, isGroup: true };
+  }
+  if (lowered.startsWith("user:")) {
+    const threadId = normalized.slice("user:".length).trim();
+    if (!threadId) {
+      throw new Error("Zalouser user target is missing user id");
+    }
+    return { threadId, isGroup: false };
+  }
+  // Backward-compatible fallback for bare IDs.
+  // Group sends should use explicit `group:<id>` targets.
+  return { threadId: normalized, isGroup: false };
+}
+
+function parseZalouserDirectoryGroupId(raw: string): string {
+  const normalized = normalizePrefixedTarget(raw);
+  if (!normalized) {
+    throw new Error("Zalouser group target is required");
+  }
+  const lowered = normalized.toLowerCase();
+  if (lowered.startsWith("group:")) {
+    const groupId = normalized.slice("group:".length).trim();
+    if (!groupId) {
+      throw new Error("Zalouser group target is missing group id");
+    }
+    return groupId;
+  }
+  if (lowered.startsWith("user:")) {
+    throw new Error("Zalouser group members lookup requires a group target (group:<id>)");
+  }
+  return normalized;
+}
+
 function resolveZalouserQrProfile(accountId?: string | null): string {
   const normalized = normalizeAccountId(accountId);
   if (!normalized || normalized === DEFAULT_ACCOUNT_ID) {
@@ -286,6 +361,8 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
           "name",
           "dmPolicy",
           "allowFrom",
+          "historyLimit",
+          "groupAllowFrom",
           "groupPolicy",
           "groups",
           "messagePrefix",
@@ -387,22 +464,19 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     },
   },
   messaging: {
-    normalizeTarget: (raw) => {
-      const trimmed = raw?.trim();
-      if (!trimmed) {
-        return undefined;
-      }
-      return trimmed.replace(/^(zalouser|zlu):/i, "");
-    },
+    normalizeTarget: (raw) => normalizePrefixedTarget(raw),
     targetResolver: {
       looksLikeId: (raw) => {
-        const trimmed = raw.trim();
-        if (!trimmed) {
+        const normalized = normalizePrefixedTarget(raw);
+        if (!normalized) {
           return false;
         }
-        return /^\d{3,}$/.test(trimmed);
+        if (/^group:[^\s]+$/i.test(normalized) || /^user:[^\s]+$/i.test(normalized)) {
+          return true;
+        }
+        return /^\d{3,}$/.test(normalized);
       },
-      hint: "<threadId>",
+      hint: "<user:id|group:id>",
     },
   },
   directory: {
@@ -437,7 +511,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       const groups = await listZaloGroupsMatching(account.profile, query);
       const rows = groups.map((group) =>
         mapGroup({
-          id: String(group.groupId),
+          id: `group:${String(group.groupId)}`,
           name: group.name ?? null,
           raw: group,
         }),
@@ -446,7 +520,8 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     },
     listGroupMembers: async ({ cfg, accountId, groupId, limit }) => {
       const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
-      const members = await listZaloGroupMembers(account.profile, groupId);
+      const normalizedGroupId = parseZalouserDirectoryGroupId(groupId);
+      const members = await listZaloGroupMembers(account.profile, normalizedGroupId);
       const rows = members.map((member) =>
         mapUser({
           id: member.userId,
@@ -596,7 +671,11 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     },
     sendText: async ({ to, text, accountId, cfg }) => {
       const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
-      const result = await sendMessageZalouser(to, text, { profile: account.profile });
+      const target = parseZalouserOutboundTarget(to);
+      const result = await sendMessageZalouser(target.threadId, text, {
+        profile: account.profile,
+        isGroup: target.isGroup,
+      });
       return {
         channel: "zalouser",
         ok: result.ok,
@@ -606,8 +685,10 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, cfg, mediaLocalRoots }) => {
       const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
-      const result = await sendMessageZalouser(to, text, {
+      const target = parseZalouserOutboundTarget(to);
+      const result = await sendMessageZalouser(target.threadId, text, {
         profile: account.profile,
+        isGroup: target.isGroup,
         mediaUrl,
         mediaLocalRoots,
       });

@@ -138,7 +138,7 @@ export type API = {
       cookies: unknown[];
     };
   };
-  fetchAccountInfo(): Promise<{ profile: User } | User>;
+  fetchAccountInfo(): Promise<User | { profile: User }>;
   getAllFriends(): Promise<User[]>;
   getOwnId(): string;
   getAllGroups(): Promise<{
@@ -163,9 +163,53 @@ export type API = {
     threadId: string,
     type?: number,
   ): Promise<{
+    msgId?: string | number;
     message?: { msgId?: string | number } | null;
     attachment?: Array<{ msgId?: string | number }>;
   }>;
+  uploadAttachment(
+    sources:
+      | string
+      | {
+          data: Buffer;
+          filename: `${string}.${string}`;
+          metadata: {
+            totalSize: number;
+            width?: number;
+            height?: number;
+          };
+        }
+      | Array<
+          | string
+          | {
+              data: Buffer;
+              filename: `${string}.${string}`;
+              metadata: {
+                totalSize: number;
+                width?: number;
+                height?: number;
+              };
+            }
+        >,
+    threadId: string,
+    type?: number,
+  ): Promise<
+    Array<{
+      fileType: "image" | "video" | "others";
+      fileUrl?: string;
+      msgId?: string | number;
+      fileId?: string;
+      fileName?: string;
+    }>
+  >;
+  sendVoice(
+    options: {
+      voiceUrl: string;
+      ttl?: number;
+    },
+    threadId: string,
+    type?: number,
+  ): Promise<{ msgId?: string | number }>;
   sendLink(
     payload: { link: string; msg?: string },
     threadId: string,
