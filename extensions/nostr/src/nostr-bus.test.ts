@@ -1,3 +1,4 @@
+import * as nip19 from "nostr-tools/nip19";
 import { describe, expect, it } from "vitest";
 import {
   validatePrivateKey,
@@ -9,7 +10,6 @@ import {
 
 // Test private key (DO NOT use in production - this is a known test key)
 const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const TEST_NSEC = "nsec1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
 
 describe("validatePrivateKey", () => {
   describe("hex format", () => {
@@ -84,7 +84,7 @@ describe("validatePrivateKey", () => {
     });
 
     it("rejects npub (wrong type)", () => {
-      const npub = "npub1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8s5epk55";
+      const npub = nip19.npubEncode(TEST_HEX_KEY);
       expect(() => validatePrivateKey(npub)).toThrow();
     });
   });
@@ -124,7 +124,9 @@ describe("isValidPubkey", () => {
     });
 
     it("rejects nsec (wrong type)", () => {
-      expect(isValidPubkey(TEST_NSEC)).toBe(false);
+      // Use pre-encoded nsec (nsecEncode expects Uint8Array in nostr-tools 2.23+)
+      const nsec = nip19.nsecEncode(validatePrivateKey(TEST_HEX_KEY));
+      expect(isValidPubkey(nsec)).toBe(false);
     });
   });
 
@@ -155,6 +157,39 @@ describe("normalizePubkey", () => {
 
     it("rejects invalid hex", () => {
       expect(() => normalizePubkey("invalid")).toThrow("Pubkey must be 64 hex characters");
+    });
+  });
+
+  describe("npub format", () => {
+    it("decodes npub to hex (handles string return in nostr-tools 2.23+)", () => {
+      const testHex = "1234567890abcdef".repeat(4);
+      const npub = nip19.npubEncode(testHex);
+
+      const result = normalizePubkey(npub);
+      expect(result).toBe(testHex);
+      expect(result).toHaveLength(64);
+      expect(/^[0-9a-f]{64}$/.test(result)).toBe(true);
+    });
+
+    it("round-trip conversion: hex -> npub -> hex", () => {
+      const originalHex = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+      const npub = nip19.npubEncode(originalHex);
+      const normalizedHex = normalizePubkey(npub);
+      expect(normalizedHex).toBe(originalHex);
+    });
+
+    it("handles multiple npub keys correctly", () => {
+      const testCases = [
+        "0000000000000000000000000000000000000000000000000000000000000001",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      ];
+
+      for (const hex of testCases) {
+        const npub = nip19.npubEncode(hex);
+        const result = normalizePubkey(npub);
+        expect(result).toBe(hex);
+      }
     });
   });
 });
