@@ -25,9 +25,14 @@ export function buildMentionConfig(
 export function resolveMentionTargets(msg: WebInboundMsg, authDir?: string): MentionTargets {
   const jidOptions = authDir ? { authDir } : undefined;
   const normalizedMentions = msg.mentionedJids?.length
-    ? msg.mentionedJids.map((jid) => jidToE164(jid, jidOptions) ?? jid).filter(Boolean)
+    ? msg.mentionedJids
+        .map((jid) => jidToE164(jid, jidOptions) ?? jid)
+        .filter(Boolean)
+        .map((e164) => normalizeE164(e164))
+        .filter(Boolean)
     : [];
-  const selfE164 = msg.selfE164 ?? (msg.selfJid ? jidToE164(msg.selfJid, jidOptions) : null);
+  const rawSelfE164 = msg.selfE164 ?? (msg.selfJid ? jidToE164(msg.selfJid, jidOptions) : null);
+  const selfE164 = rawSelfE164 ? normalizeE164(rawSelfE164) : null;
   const selfJid = msg.selfJid ? msg.selfJid.replace(/:\\d+/, "") : null;
   return { normalizedMentions, selfE164, selfJid };
 }
