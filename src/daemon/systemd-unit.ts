@@ -61,7 +61,7 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
-    watchdog ? "NotifyAccess=all" : null,
+    watchdog ? "NotifyAccess=main" : null,
     watchdog ? "WatchdogSec=90" : null,
     // Keep service children in the same lifecycle so restarts do not leave
     // orphan ACP/runtime workers behind.
