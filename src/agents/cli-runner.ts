@@ -110,6 +110,7 @@ export async function runCliAgent(params: {
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
+    resolvedModel: params.model ? { provider: params.provider, model: params.model } : undefined,
     warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
   });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
