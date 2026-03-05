@@ -8,6 +8,8 @@ import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import * as sessionsModule from "../config/sessions.js";
@@ -652,6 +654,54 @@ describe("agentCommand", () => {
       seedKey: "agent:main:telegram:group:123:topic:456",
       sessionId: "sess-topic",
       expectedPathFragment: "sess-topic-topic-456.jsonl",
+    });
+  });
+
+  it("refreshes skills snapshot when workspace snapshot version changes", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:skills-refresh": {
+          sessionId: "sess-skills",
+          updatedAt: Date.now(),
+          skillsSnapshot: {
+            prompt: "old snapshot",
+            skills: [],
+            version: 1,
+          },
+        },
+      });
+      mockConfig(home, store);
+
+      vi.mocked(getSkillsSnapshotVersion).mockReturnValueOnce(2);
+      vi.mocked(buildWorkspaceSkillSnapshot).mockReturnValueOnce({
+        prompt: "new snapshot",
+        skills: [{ name: "github" }],
+        version: 2,
+      });
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:skills-refresh",
+        },
+        runtime,
+      );
+
+      expect(vi.mocked(buildWorkspaceSkillSnapshot)).toHaveBeenCalledTimes(1);
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        {
+          skillsSnapshot?: {
+            prompt?: string;
+            version?: number;
+          };
+        }
+      >;
+      const entry = saved["agent:main:subagent:skills-refresh"];
+      expect(entry?.skillsSnapshot?.version).toBe(2);
+      expect(entry?.skillsSnapshot?.prompt).toBe("new snapshot");
     });
   });
 
