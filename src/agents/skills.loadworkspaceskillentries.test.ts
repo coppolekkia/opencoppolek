@@ -140,6 +140,25 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).toContain("diffs");
   });
 
+  it("coerces unquoted numeric frontmatter skill names to strings", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    await fs.mkdir(path.join(workspaceDir, "skills", "numeric-name"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "skills", "numeric-name", "SKILL.md"),
+      "---\nname: 12306\ndescription: Numeric name\n---\n",
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+    const numeric = entries.find((entry) => entry.skill.description === "Numeric name");
+
+    expect(numeric?.skill.name).toBe("12306");
+  });
+
   it("excludes diffs plugin skill when the plugin is disabled", async () => {
     const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithDiffsPlugin();
 

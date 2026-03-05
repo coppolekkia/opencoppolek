@@ -18,6 +18,7 @@ import {
   resolveOpenClawMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
+import { normalizeLoadedSkills } from "./normalize.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import type {
@@ -207,15 +208,55 @@ function resolveNestedSkillsRoot(
 
 function unwrapLoadedSkills(loaded: unknown): Skill[] {
   if (Array.isArray(loaded)) {
-    return loaded as Skill[];
+    return normalizeLoadedSkills(loaded as Skill[]);
   }
   if (loaded && typeof loaded === "object" && "skills" in loaded) {
     const skills = (loaded as { skills?: unknown }).skills;
     if (Array.isArray(skills)) {
-      return skills as Skill[];
+      return normalizeLoadedSkills(skills as Skill[]);
     }
   }
   return [];
+}
+
+function normalizeSkillFrontmatterString(value: unknown): string {
+  return (typeof value === "string" ? value : String(value ?? "")).trim();
+}
+
+function loadSkillFromSkillMd(params: { skillDir: string; source: string }): Skill | null {
+  const skillMdPath = path.join(params.skillDir, "SKILL.md");
+  if (!fs.existsSync(skillMdPath)) {
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync(skillMdPath, "utf-8");
+    const frontmatter = parseFrontmatter(raw);
+    const parentDirName = path.basename(params.skillDir).trim();
+    const name = normalizeSkillFrontmatterString(frontmatter.name) || parentDirName;
+    const description = normalizeSkillFrontmatterString(frontmatter.description);
+    if (!description) {
+      return null;
+    }
+    return {
+      name,
+      description,
+      filePath: skillMdPath,
+      baseDir: params.skillDir,
+      source: params.source,
+      disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function loadSkillsFromDirWithFallback(params: { dir: string; source: string }): Skill[] {
+  const loaded = unwrapLoadedSkills(loadSkillsFromDir(params));
+  if (loaded.length > 0) {
+    return loaded;
+  }
+  const fallback = loadSkillFromSkillMd({ skillDir: params.dir, source: params.source });
+  return fallback ? [fallback] : [];
 }
 
 function loadSkillEntries(
@@ -252,8 +293,7 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
-      return unwrapLoadedSkills(loaded);
+      return loadSkillsFromDirWithFallback({ dir: baseDir, source: params.source });
     }
 
     const childDirs = listChildDirectories(baseDir);
@@ -303,8 +343,7 @@ function loadSkillEntries(
         continue;
       }
 
-      const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
-      loadedSkills.push(...unwrapLoadedSkills(loaded));
+      loadedSkills.push(...loadSkillsFromDirWithFallback({ dir: skillDir, source: params.source }));
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;

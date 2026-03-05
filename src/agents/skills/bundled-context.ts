@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { loadSkillsFromDir } from "@mariozechner/pi-coding-agent";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveBundledSkillsDir, type BundledSkillsResolveOptions } from "./bundled-dir.js";
+import { parseFrontmatter } from "./frontmatter.js";
+import { normalizeLoadedSkills } from "./normalize.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 let hasWarnedMissingBundledDir = false;
@@ -30,9 +34,37 @@ export function resolveBundledSkillsContext(
     return { dir, names: new Set(cachedBundledContext.names) };
   }
   const result = loadSkillsFromDir({ dir, source: "openclaw-bundled" });
-  for (const skill of result.skills) {
+  for (const skill of normalizeLoadedSkills(result.skills)) {
     if (skill.name.trim()) {
       names.add(skill.name);
+    }
+  }
+  const dirEntries = (() => {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+  })();
+  for (const entry of dirEntries) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules" || !entry.isDirectory()) {
+      continue;
+    }
+    const skillMdPath = path.join(dir, entry.name, "SKILL.md");
+    if (!fs.existsSync(skillMdPath)) {
+      continue;
+    }
+    try {
+      const raw = fs.readFileSync(skillMdPath, "utf-8");
+      const frontmatter = parseFrontmatter(raw);
+      const name = (
+        typeof frontmatter.name === "string" ? frontmatter.name : String(frontmatter.name ?? "")
+      ).trim();
+      if (name) {
+        names.add(name);
+      }
+    } catch {
+      // Ignore malformed bundled skill files.
     }
   }
   cachedBundledContext = { dir, names: new Set(names) };
