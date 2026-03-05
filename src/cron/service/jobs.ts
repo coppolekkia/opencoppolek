@@ -399,20 +399,33 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
 
 /**
  * Maintenance-only version of recomputeNextRuns that handles disabled jobs
- * and stuck markers, but does NOT recompute nextRunAtMs for enabled jobs
- * with existing values. Used during timer ticks when no due jobs were found
- * to prevent silently advancing past-due nextRunAtMs values without execution
- * (see #13992).
+ * and stuck markers, but is conservative about advancing nextRunAtMs to
+ * prevent silently skipping past-due jobs that haven't run yet (#13992).
+ *
+ * Safe to advance when:
+ *  - nextRunAtMs is missing (undefined / non-finite)
+ *  - nextRunAtMs is past-due AND lastRunAtMs >= nextRunAtMs, meaning the
+ *    job already executed for this time slot but nextRunAtMs was not
+ *    advanced (e.g. after a gateway restart). Without this, the past-due
+ *    value persists and the job never fires again (#34432).
  */
 export function recomputeNextRunsForMaintenance(state: CronServiceState): boolean {
   return walkSchedulableJobs(state, ({ job, nowMs: now }) => {
     let changed = false;
-    // Only compute missing nextRunAtMs, do NOT recompute existing ones.
-    // If a job was past-due but not found by findDueJobs, recomputing would
-    // cause it to be silently skipped.
-    if (!isFiniteTimestamp(job.state.nextRunAtMs)) {
+    const nextRun = job.state.nextRunAtMs;
+    if (!isFiniteTimestamp(nextRun)) {
+      // Missing: compute from scratch.
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
+      }
+    } else if (now >= nextRun) {
+      // Past-due: only advance if the job already ran for this time slot.
+      // Advancing a job that hasn't executed yet would silently skip it (#13992).
+      const lastRun = job.state.lastRunAtMs;
+      if (isFiniteTimestamp(lastRun) && lastRun >= nextRun) {
+        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+          changed = true;
+        }
       }
     }
     return changed;

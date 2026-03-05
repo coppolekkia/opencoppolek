@@ -96,6 +96,51 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     expect(job.state.nextRunAtMs).toBe(futureTime);
   });
 
+  it("should advance past-due nextRunAtMs when job already executed (#34432)", () => {
+    const now = Date.now();
+    const pastDue = now - 60_000; // 1 minute ago
+    // lastRunAtMs is at or after nextRunAtMs — the job already ran for this slot.
+    const lastRun = pastDue + 500;
+
+    const job = createCronSystemEventJob(now, {
+      createdAtMs: now - 86400_000,
+      updatedAtMs: now - 86400_000,
+      state: {
+        nextRunAtMs: pastDue,
+        lastRunAtMs: lastRun,
+      },
+    });
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state);
+
+    // Should have advanced nextRunAtMs to a future time
+    expect(job.state.nextRunAtMs).not.toBe(pastDue);
+    expect(job.state.nextRunAtMs).toBeGreaterThan(now);
+  });
+
+  it("should NOT advance past-due nextRunAtMs when job has not executed yet (#34432 vs #13992)", () => {
+    const now = Date.now();
+    const pastDue = now - 60_000;
+    // lastRunAtMs is from a PREVIOUS time slot (before nextRunAtMs).
+    const lastRun = pastDue - 86400_000; // 1 day before
+
+    const job = createCronSystemEventJob(now, {
+      createdAtMs: now - 86400_000 * 2,
+      updatedAtMs: now - 86400_000 * 2,
+      state: {
+        nextRunAtMs: pastDue,
+        lastRunAtMs: lastRun,
+      },
+    });
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state);
+
+    // Should NOT have changed — the job hasn't executed for this time slot
+    expect(job.state.nextRunAtMs).toBe(pastDue);
+  });
+
   it("isolates schedule errors while filling missing nextRunAtMs", () => {
     const now = Date.now();
     const pastDue = now - 1_000;
