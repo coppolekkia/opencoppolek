@@ -162,6 +162,22 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
 - `OPENCLAW_NO_ONBOARD=1`
 - `SHARP_IGNORE_GLOBAL_LIBVIPS=0|1`（默认：`1`；避免 `sharp` 针对系统 libvips 构建）
 
+## Shell 补全（zsh）
+
+如果你手动使用 zsh 动态补全：
+
+```bash
+source <(openclaw completion --shell zsh)
+```
+
+OpenClaw 现在会在需要时自动初始化 `compinit`，即使你的 `~/.zshrc` 里还没提前初始化也不会报错。
+
+为了更快启动和更少 shell hook，推荐使用缓存补全：
+
+```bash
+openclaw completion --install
+```
+
 ## 故障排除：找不到 `openclaw`（PATH）
 
 快速诊断：

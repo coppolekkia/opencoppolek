@@ -178,6 +178,23 @@ If you need custom runtime paths, use:
 
 See [Environment vars](/help/environment) for precedence and full details.
 
+## Shell completion (zsh)
+
+If you use dynamic zsh completion manually:
+
+```bash
+source <(openclaw completion --shell zsh)
+```
+
+OpenClaw now auto-initializes `compinit` when needed, so this works even if
+`compinit` wasn't initialized earlier in your `~/.zshrc`.
+
+For fastest startup and fewer shell hooks, prefer cached completion:
+
+```bash
+openclaw completion --install
+```
+
 ## Troubleshooting: `openclaw` not found
 
 <Accordion title="PATH diagnosis and fix">

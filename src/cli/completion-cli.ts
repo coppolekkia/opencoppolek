@@ -69,7 +69,7 @@ export async function completionCacheExists(
   return pathExists(cachePath);
 }
 
-function getCompletionScript(shell: CompletionShell, program: Command): string {
+export function getCompletionScript(shell: CompletionShell, program: Command): string {
   if (shell === "zsh") {
     return generateZshCompletion(program);
   }
@@ -379,6 +379,11 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 function generateZshCompletion(program: Command): string {
   const rootCmd = program.name();
   const script = `
+if ! (( $+functions[compdef] )); then
+  autoload -Uz compinit
+  compinit
+fi
+
 #compdef ${rootCmd}
 
 _${rootCmd}_root_completion() {
