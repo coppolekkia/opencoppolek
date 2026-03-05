@@ -702,6 +702,7 @@ function buildSyntheticProvider(): ProviderConfig {
   return {
     baseUrl: SYNTHETIC_BASE_URL,
     api: "anthropic-messages",
+    authHeader: true,
     models: SYNTHETIC_MODEL_CATALOG.map(buildSyntheticModelDefinition),
   };
 }
@@ -742,6 +743,7 @@ export function buildXiaomiProvider(): ProviderConfig {
   return {
     baseUrl: XIAOMI_BASE_URL,
     api: "anthropic-messages",
+    authHeader: true,
     models: [
       {
         id: XIAOMI_DEFAULT_MODEL_ID,
@@ -1031,6 +1033,7 @@ export async function resolveImplicitProviders(params: {
     providers["cloudflare-ai-gateway"] = {
       baseUrl,
       api: "anthropic-messages",
+      authHeader: true,
       apiKey,
       models: [buildCloudflareAiGatewayModelDefinition()],
     };
