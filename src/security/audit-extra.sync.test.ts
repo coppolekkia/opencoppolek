@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectAttackSurfaceSummaryFindings } from "./audit-extra.sync.js";
+import {
+  collectAttackSurfaceSummaryFindings,
+  collectSmallModelRiskFindings,
+} from "./audit-extra.sync.js";
 import { safeEqualSecret } from "./secret-equal.js";
 
 describe("collectAttackSurfaceSummaryFindings", () => {
@@ -51,5 +54,59 @@ describe("safeEqualSecret", () => {
     expect(safeEqualSecret(undefined, "secret")).toBe(false);
     expect(safeEqualSecret("secret", undefined)).toBe(false);
     expect(safeEqualSecret(null, "secret")).toBe(false);
+  });
+});
+
+describe("collectSmallModelRiskFindings", () => {
+  it.each([
+    {
+      name: "gemini config key",
+      cfgSearch: { gemini: { apiKey: "gemini-key" } },
+      env: {},
+    },
+    {
+      name: "grok config key",
+      cfgSearch: { grok: { apiKey: "xai-key" } },
+      env: {},
+    },
+    {
+      name: "kimi config key",
+      cfgSearch: { kimi: { apiKey: "kimi-key" } },
+      env: {},
+    },
+    {
+      name: "GEMINI_API_KEY env var",
+      cfgSearch: {},
+      env: { GEMINI_API_KEY: "gemini-key" },
+    },
+    {
+      name: "XAI_API_KEY env var",
+      cfgSearch: {},
+      env: { XAI_API_KEY: "xai-key" },
+    },
+    {
+      name: "KIMI_API_KEY env var",
+      cfgSearch: {},
+      env: { KIMI_API_KEY: "kimi-key" },
+    },
+    {
+      name: "MOONSHOT_API_KEY env var",
+      cfgSearch: {},
+      env: { MOONSHOT_API_KEY: "moonshot-key" },
+    },
+  ])("treats web search as enabled when $name is set", ({ cfgSearch, env }) => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+      tools: { web: { search: cfgSearch, fetch: { enabled: false } } },
+      browser: { enabled: false },
+    };
+
+    const finding = collectSmallModelRiskFindings({
+      cfg,
+      env: env as NodeJS.ProcessEnv,
+    }).find((entry) => entry.checkId === "models.small_params");
+
+    expect(finding?.severity).toBe("critical");
+    expect(finding?.detail).toContain("web_search");
   });
 });
