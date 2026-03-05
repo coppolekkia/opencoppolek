@@ -2,12 +2,23 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 
 const SYSTEMD_NOTIFY_CANDIDATES = ["/usr/bin/systemd-notify", "/bin/systemd-notify"];
+const MIN_WATCHDOG_INTERVAL_MS = 500;
+const MAX_WATCHDOG_INTERVAL_MS = 2_147_483_647;
 let resolvedSystemdNotifyPath: string | null | undefined;
 let warnedSystemdNotifyMissing = false;
+let warnedWatchdogIntervalInvalid = false;
 
 function warnNotify(message: string, error: Error): void {
   try {
     process.stderr.write(`sd-notify: ${message}: ${error.message}\n`);
+  } catch {
+    // stderr may be closed (EPIPE) when the service runs with stdio detached.
+  }
+}
+
+function warnNotifyText(message: string): void {
+  try {
+    process.stderr.write(`sd-notify: ${message}\n`);
   } catch {
     // stderr may be closed (EPIPE) when the service runs with stdio detached.
   }
@@ -95,6 +106,7 @@ let watchdogInFlight = false;
 export function _resetWatchdogWarned(): void {
   watchdogWarnedOnce = false;
   watchdogInFlight = false;
+  warnedWatchdogIntervalInvalid = false;
 }
 
 /**
@@ -152,7 +164,17 @@ export function startWatchdogHeartbeat(): (() => void) | undefined {
     return undefined;
   }
   const intervalMs = Math.floor(usec / 1000 / 2);
-  if (intervalMs <= 0) {
+  if (
+    !Number.isFinite(intervalMs) ||
+    intervalMs < MIN_WATCHDOG_INTERVAL_MS ||
+    intervalMs > MAX_WATCHDOG_INTERVAL_MS
+  ) {
+    if (!warnedWatchdogIntervalInvalid) {
+      warnedWatchdogIntervalInvalid = true;
+      warnNotifyText(
+        `ignoring WATCHDOG_USEC=${usecRaw}: derived interval ${intervalMs}ms is outside supported range ${MIN_WATCHDOG_INTERVAL_MS}-${MAX_WATCHDOG_INTERVAL_MS}ms`,
+      );
+    }
     return undefined;
   }
   const timer = setInterval(() => sdNotifyWatchdog(), intervalMs);

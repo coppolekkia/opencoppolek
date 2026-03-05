@@ -363,4 +363,28 @@ describe("startWatchdogHeartbeat", () => {
 
     stderrSpy.mockRestore();
   });
+
+  it("returns undefined for too-small watchdog intervals", () => {
+    process.env.NOTIFY_SOCKET = "/run/user/1000/systemd/notify";
+    process.env.WATCHDOG_USEC = "2000"; // 2ms -> 1ms interval
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    expect(startWatchdogHeartbeat()).toBeUndefined();
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("outside supported range"));
+
+    stderrSpy.mockRestore();
+  });
+
+  it("returns undefined for watchdog intervals above Node timer max", () => {
+    process.env.NOTIFY_SOCKET = "/run/user/1000/systemd/notify";
+    process.env.WATCHDOG_USEC = "5000000000000"; // -> 2_500_000_000ms interval
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    expect(startWatchdogHeartbeat()).toBeUndefined();
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("outside supported range"));
+
+    stderrSpy.mockRestore();
+  });
 });
