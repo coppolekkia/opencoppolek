@@ -6,6 +6,7 @@ import type {
 } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { isCarrierGradeNatIpv4Address, isIpInCidr } from "../shared/net/ip.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
@@ -15,6 +16,7 @@ import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
+  resolveHostName,
   isTrustedProxyAddress,
   resolveClientIp,
 } from "./net.js";
@@ -92,6 +94,7 @@ function headerValue(value: string | string[] | undefined): string | undefined {
 }
 
 const TAILSCALE_TRUSTED_PROXIES = ["127.0.0.1", "::1"] as const;
+const TAILSCALE_IPV6_ULA_CIDR = "fd7a:115c:a1e0::/48";
 
 function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   if (!req) {
@@ -121,13 +124,38 @@ function resolveRequestClientIp(
   });
 }
 
+function isTailscaleForwardedHost(value: string | undefined): boolean {
+  const host = resolveHostName(value);
+  return host.toLowerCase().endsWith(".ts.net");
+}
+
+function isTailscaleServeClientIp(value: string | undefined): boolean {
+  return isCarrierGradeNatIpv4Address(value) || isIpInCidr(value ?? "", TAILSCALE_IPV6_ULA_CIDR);
+}
+
 export function isLocalDirectRequest(
   req?: IncomingMessage,
   trustedProxies?: string[],
   allowRealIpFallback = false,
+  options?: {
+    allowTailscaleServeShortcut?: boolean;
+  },
 ): boolean {
   if (!req) {
     return false;
+  }
+  const allowTailscaleServeShortcut = options?.allowTailscaleServeShortcut === true;
+  const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
+  const forwardedHost = headerValue(req.headers?.["x-forwarded-host"]);
+  const tailscaleClientIp = resolveTailscaleClientIp(req);
+  if (
+    allowTailscaleServeShortcut &&
+    remoteIsTrustedProxy &&
+    isTailscaleProxyRequest(req) &&
+    isTailscaleForwardedHost(forwardedHost) &&
+    isTailscaleServeClientIp(tailscaleClientIp)
+  ) {
+    return true;
   }
   const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
   if (!isLoopbackAddress(clientIp)) {
@@ -140,7 +168,6 @@ export function isLocalDirectRequest(
     req.headers?.["x-forwarded-host"],
   );
 
-  const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
   return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
 }
 
@@ -372,7 +399,12 @@ export async function authorizeGatewayConnect(
     req,
     trustedProxies,
     params.allowRealIpFallback === true,
+    { allowTailscaleServeShortcut: false },
   );
+  const allowVerifiedTailscaleHeaderAuth =
+    allowTailscaleHeaderAuth &&
+    auth.allowTailscale &&
+    (!localDirect || isTailscaleProxyRequest(req));
 
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -416,7 +448,7 @@ export async function authorizeGatewayConnect(
     }
   }
 
-  if (allowTailscaleHeaderAuth && auth.allowTailscale && !localDirect) {
+  if (allowVerifiedTailscaleHeaderAuth) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,

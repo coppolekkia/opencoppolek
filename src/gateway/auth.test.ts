@@ -4,6 +4,7 @@ import {
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
+  isLocalDirectRequest,
   resolveGatewayAuth,
 } from "./auth.js";
 
@@ -33,6 +34,48 @@ function createTailscaleForwardedReq(): never {
     headers: {
       host: "gateway.local",
       "x-forwarded-for": "100.64.0.1",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+      "tailscale-user-login": "peter",
+      "tailscale-user-name": "Peter",
+    },
+  } as never;
+}
+
+function createTailscaleForwardedReqWithPortInHost(): never {
+  return {
+    socket: { remoteAddress: "127.0.0.1" },
+    headers: {
+      host: "gateway.local",
+      "x-forwarded-for": "100.64.0.1",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "ai-hub.bone-egret.ts.net:443",
+      "tailscale-user-login": "peter",
+      "tailscale-user-name": "Peter",
+    },
+  } as never;
+}
+
+function createTailscaleForwardedIpv6Req(): never {
+  return {
+    socket: { remoteAddress: "::1" },
+    headers: {
+      host: "gateway.local",
+      "x-forwarded-for": "fd7a:115c:a1e0::1",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+      "tailscale-user-login": "peter",
+      "tailscale-user-name": "Peter",
+    },
+  } as never;
+}
+
+function createNonTailscaleForwardedReq(): never {
+  return {
+    socket: { remoteAddress: "127.0.0.1" },
+    headers: {
+      host: "gateway.local",
+      "x-forwarded-for": "203.0.113.10",
       "x-forwarded-proto": "https",
       "x-forwarded-host": "ai-hub.bone-egret.ts.net",
       "tailscale-user-login": "peter",
@@ -269,6 +312,71 @@ describe("gateway auth", () => {
     expect(res.method).toBe("token");
   });
 
+  it("treats proxied tailscale serve requests as direct when trusted proxies are configured", () => {
+    expect(
+      isLocalDirectRequest(createTailscaleForwardedReq(), ["127.0.0.1"], false, {
+        allowTailscaleServeShortcut: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats proxied tailscale serve requests with host:port as direct when trusted proxies are configured", () => {
+    expect(
+      isLocalDirectRequest(createTailscaleForwardedReqWithPortInHost(), ["127.0.0.1"], false, {
+        allowTailscaleServeShortcut: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats proxied tailscale serve IPv6 requests as direct when trusted proxies are configured", () => {
+    expect(
+      isLocalDirectRequest(createTailscaleForwardedIpv6Req(), ["::1"], false, {
+        allowTailscaleServeShortcut: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps tailscale local-direct shortcut disabled by default", () => {
+    expect(isLocalDirectRequest(createTailscaleForwardedReq(), ["127.0.0.1"])).toBe(false);
+  });
+
+  it("does not apply the tailscale local-direct shortcut when explicitly disabled", () => {
+    expect(
+      isLocalDirectRequest(createTailscaleForwardedReq(), ["127.0.0.1"], false, {
+        allowTailscaleServeShortcut: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat proxied tailscale serve requests as direct without trusted proxies", () => {
+    expect(isLocalDirectRequest(createTailscaleForwardedReq())).toBe(false);
+  });
+
+  it("does not treat proxied .ts.net requests as direct when forwarded client IP is non-tailscale", () => {
+    expect(
+      isLocalDirectRequest(createNonTailscaleForwardedReq(), ["127.0.0.1"], false, {
+        allowTailscaleServeShortcut: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat non-tailscale proxied requests as direct when trusted proxies are configured", () => {
+    expect(
+      isLocalDirectRequest(
+        {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "gateway.local",
+            "x-forwarded-for": "203.0.113.10",
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "example.com",
+          },
+        } as never,
+        ["127.0.0.1"],
+      ),
+    ).toBe(false);
+  });
+
   it("does not allow tailscale identity to satisfy token mode auth by default", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
@@ -307,6 +415,20 @@ describe("gateway auth", () => {
       authorize: authorizeWsControlUiGatewayConnect,
       expected: { ok: true, method: "tailscale", user: "peter" },
     });
+  });
+
+  it("keeps tailscale header auth enabled when trusted proxies make the request local-direct", async () => {
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      trustedProxies: ["127.0.0.1"],
+      req: createTailscaleForwardedReq(),
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("tailscale");
+    expect(res.user).toBe("peter");
   });
 
   it("uses proxy-aware request client IP by default for rate-limit checks", async () => {
