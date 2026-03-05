@@ -153,6 +153,12 @@ export type MsgContext = {
    */
   OriginatingTo?: string;
   /**
+   * Raw platform conversation/channel ID (e.g., Slack D... or C... channel ID).
+   * Used as a fallback for resolving parent conversation context in thread bindings
+   * when OriginatingTo carries a user: target (DMs) instead of a channel: target.
+   */
+  OriginatingConversationId?: string;
+  /**
    * Messages from hooks to be included in the response.
    * Used for hook confirmation messages like "Session context saved to memory".
    */

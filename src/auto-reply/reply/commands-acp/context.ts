@@ -45,9 +45,17 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
 export function resolveAcpCommandParentConversationId(
   params: HandleCommandsParams,
 ): string | undefined {
-  return resolveParentConversationIdFromTargets({
+  const fromTargets = resolveParentConversationIdFromTargets({
     targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
   });
+  if (fromTargets) {
+    return fromTargets;
+  }
+  // Fallback: use the raw platform conversation ID (e.g., Slack DM channel D...).
+  // This covers cases where OriginatingTo is user:<id> (DMs) and doesn't carry
+  // the platform channel ID needed for thread binding lookups.
+  const raw = params.ctx.OriginatingConversationId;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 export function isAcpCommandDiscordChannel(params: HandleCommandsParams): boolean {
