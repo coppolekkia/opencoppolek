@@ -189,6 +189,41 @@ describe("applyAuthChoice", () => {
     });
   });
 
+  it("sets openai-codex as primary model when onboarding chooses openai-codex", async () => {
+    await setupTempState();
+
+    loginOpenAICodexOAuth.mockResolvedValueOnce({
+      email: "user@example.com",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    });
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-codex",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+            },
+          },
+        },
+      },
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "openai-codex/gpt-5.3-codex",
+    );
+    expect(result.config.agents?.defaults?.models?.["openai-codex/gpt-5.3-codex"]).toBeUndefined();
+  });
+
   it("prompts and writes provider API key for common providers", async () => {
     const scenarios: Array<{
       authChoice:
