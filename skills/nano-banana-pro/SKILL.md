@@ -50,9 +50,16 @@ API key
 - `GEMINI_API_KEY` env var
 - Or set `skills."nano-banana-pro".apiKey` / `skills."nano-banana-pro".env.GEMINI_API_KEY` in `~/.openclaw/openclaw.json`
 
+Specific aspect ratio (optional)
+
+```bash
+uv run {baseDir}/scripts/generate_image.py --prompt "portrait photo" --filename "output.png" --aspect-ratio 9:16
+```
+
 Notes
 
 - Resolutions: `1K` (default), `2K`, `4K`.
+- Aspect ratios: `1:1`, `3:4`, `4:3`, `9:16`, `16:9`. Without `--aspect-ratio` / `-a`, the model picks freely — use this flag for avatars, profile pics, or consistent batch generation.
 - Use timestamps in filenames: `yyyy-mm-dd-hh-mm-ss-name.png`.
 - The script prints a `MEDIA:` line for OpenClaw to auto-attach on supported chat providers.
 - Do not read the image back; report the saved path only.

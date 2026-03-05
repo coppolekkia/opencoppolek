@@ -57,6 +57,12 @@ def main():
         help="Output resolution: 1K (default), 2K, or 4K"
     )
     parser.add_argument(
+        "--aspect-ratio", "-a",
+        choices=["1:1", "3:4", "4:3", "9:16", "16:9"],
+        default=None,
+        help="Output aspect ratio (default: model decides). Options: 1:1, 3:4, 4:3, 9:16, 16:9"
+    )
+    parser.add_argument(
         "--api-key", "-k",
         help="Gemini API key (overrides GEMINI_API_KEY env var)"
     )
@@ -127,14 +133,17 @@ def main():
         print(f"Generating image with resolution {output_resolution}...")
 
     try:
+        # Build image config with optional aspect ratio
+        image_cfg_kwargs = {"image_size": output_resolution}
+        if args.aspect_ratio:
+            image_cfg_kwargs["aspect_ratio"] = args.aspect_ratio
+
         response = client.models.generate_content(
             model="gemini-3-pro-image-preview",
             contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"],
-                image_config=types.ImageConfig(
-                    image_size=output_resolution
-                )
+                image_config=types.ImageConfig(**image_cfg_kwargs)
             )
         )
 
