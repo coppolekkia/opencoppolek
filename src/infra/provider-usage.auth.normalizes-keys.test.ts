@@ -317,6 +317,31 @@ describe("resolveProviderAuths key normalization", () => {
     );
   });
 
+  it("accepts kimi-coding profiles for moonshot usage auth", async () => {
+    await withSuiteHome(
+      async (home) => {
+        await writeAuthProfiles(home, {
+          "kimi-coding:default": {
+            type: "api_key",
+            provider: "kimi-coding",
+            key: "kimi-coding-key",
+          },
+        });
+
+        const auths = await resolveProviderAuths({
+          providers: ["moonshot"],
+        });
+        expect(auths).toEqual([{ provider: "moonshot", token: "kimi-coding-key" }]);
+      },
+      {
+        MOONSHOT_API_KEY: undefined,
+        KIMI_API_KEY: undefined,
+        KIMI_BALANCE_API_KEY: undefined,
+        KIMICODE_API_KEY: undefined,
+      },
+    );
+  });
+
   it("uses zai api_key auth profiles when env and config are missing", async () => {
     await withSuiteHome(
       async (home) => {

@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { collectConfigRuntimeEnvVars } from "../config/env-vars.js";
+import { logVerbose } from "../globals.js";
 import { isRecord } from "../utils.js";
 import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
@@ -286,9 +287,12 @@ async function fetchMoonshotUsageRaw(
     const kimi = await fetchKimiGatewayUsageRaw(apiKey, timeoutMs, fetchFn);
     attempts.push(kimi);
     if (kimi.response.ok) {
+      logVerbose("[usage:kimi] usage resolved via kimi.com billing endpoint");
       return { ...kimi, errors };
     }
+    logVerbose(`[usage:kimi] kimi.com billing endpoint returned HTTP ${kimi.response.status}`);
   } catch (error) {
+    logVerbose(`[usage:kimi] kimi.com billing endpoint request failed: ${String(error)}`);
     errors.push({ endpoint: KIMI_BILLING_ENDPOINT, error });
   }
 
@@ -310,9 +314,12 @@ async function fetchMoonshotUsageRaw(
       attempts.push({ endpoint, response });
 
       if (response.ok) {
+        logVerbose(`[usage:kimi] usage resolved via fallback endpoint: ${endpoint}`);
         return { endpoint, response, errors };
       }
+      logVerbose(`[usage:kimi] fallback endpoint returned HTTP ${response.status}: ${endpoint}`);
     } catch (error) {
+      logVerbose(`[usage:kimi] fallback endpoint request failed: ${endpoint} (${String(error)})`);
       errors.push({ endpoint, error });
     }
   }
@@ -359,8 +366,12 @@ export async function fetchMoonshotUsage(
     const error =
       response.status === 401 || response.status === 403
         ? endpoint.includes("kimi.com")
-          ? `HTTP ${response.status}: Kimi billing endpoint rejected this token (${reason || "invalid auth token"}). This endpoint may require a web-session auth token instead of API key.`
-          : `HTTP ${response.status}: Moonshot rejected the configured key for usage endpoint (${endpoint}).`
+          ? `HTTP ${response.status}: Kimi billing endpoint rejected token (${reason || "invalid auth token"}); set KIMI_WEB_AUTH_TOKEN or KIMI_BILLING_BEARER_TOKEN (API keys often do not work on this endpoint)`
+          : `HTTP ${response.status}: Moonshot usage endpoint rejected configured key (${endpoint})`
+        : response.status === 429
+          ? `HTTP 429: Kimi/Moonshot usage endpoint is rate-limited; model replies may still work`
+          : response.status === 404
+            ? `HTTP 404: Kimi/Moonshot usage endpoint unavailable for this account/region (${endpoint})`
         : message
           ? `HTTP ${response.status}: ${message}`
           : `HTTP ${response.status}`;

@@ -86,15 +86,49 @@ function resolveMinimaxApiKey(): string | undefined {
 }
 
 function resolveMoonshotApiKey(): string | undefined {
-  return resolveProviderApiKeyFromConfigAndStore({
-    providerId: "moonshot",
-    envDirect: [
-      process.env.KIMI_BALANCE_API_KEY,
-      process.env.MOONSHOT_API_KEY,
-      process.env.KIMI_API_KEY,
-      process.env.KIMICODE_API_KEY,
-    ],
-  });
+  const envDirect = [
+    process.env.KIMI_BALANCE_API_KEY,
+    process.env.MOONSHOT_API_KEY,
+    process.env.KIMI_API_KEY,
+    process.env.KIMICODE_API_KEY,
+  ]
+    .map(normalizeSecretInput)
+    .find(Boolean);
+  if (envDirect) {
+    return envDirect;
+  }
+
+  const cfg = loadConfig();
+  const configKey =
+    getCustomProviderApiKey(cfg, "moonshot") ||
+    getCustomProviderApiKey(cfg, "kimi-coding") ||
+    getCustomProviderApiKey(cfg, "kimi-code");
+  if (configKey) {
+    return configKey;
+  }
+
+  const store = ensureAuthProfileStore();
+  const cred = [
+    ...listProfilesForProvider(store, "moonshot"),
+    ...listProfilesForProvider(store, "kimi-coding"),
+    ...listProfilesForProvider(store, "kimi-code"),
+  ]
+    .map((id) => store.profiles[id])
+    .find(
+      (
+        profile,
+      ): profile is
+        | { type: "api_key"; provider: string; key: string }
+        | { type: "token"; provider: string; token: string } =>
+        profile?.type === "api_key" || profile?.type === "token",
+    );
+  if (!cred) {
+    return undefined;
+  }
+  if (cred.type === "api_key") {
+    return normalizeSecretInput(cred.key);
+  }
+  return normalizeSecretInput(cred.token);
 }
 
 function resolveXiaomiApiKey(): string | undefined {

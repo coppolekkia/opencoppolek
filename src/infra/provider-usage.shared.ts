@@ -30,6 +30,9 @@ export function resolveUsageProviderId(provider?: string | null): UsageProviderI
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
+  if (normalized === "kimi-coding" || normalized === "kimi-code") {
+    return "moonshot";
+  }
   return usageProviders.includes(normalized as UsageProviderId)
     ? (normalized as UsageProviderId)
     : undefined;

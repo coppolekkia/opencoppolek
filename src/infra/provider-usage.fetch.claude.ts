@@ -1,6 +1,11 @@
 import { loadConfig } from "../config/config.js";
 import { collectConfigRuntimeEnvVars } from "../config/env-vars.js";
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { logVerbose } from "../globals.js";
+import {
+  buildUsageErrorSnapshot,
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -18,6 +23,13 @@ type ClaudeWebOrganizationsResponse = Array<{
 
 type ClaudeWebUsageResponse = ClaudeUsageResponse;
 
+const DEFAULT_CLAUDE_USAGE_RATE_LIMIT_COOLDOWN_MS = 60_000;
+let claudeUsageRateLimitUntil = 0;
+
+export function resetClaudeUsageRateLimitForTests(): void {
+  claudeUsageRateLimitUntil = 0;
+}
+
 function resolveClaudeRuntimeEnvVar(name: string): string | undefined {
   const direct = process.env[name]?.trim();
   if (direct) {
@@ -28,6 +40,28 @@ function resolveClaudeRuntimeEnvVar(name: string): string | undefined {
     return fromConfig;
   }
   return undefined;
+}
+
+function resolveClaudeUsageRateLimitCooldownMs(): number {
+  const raw = resolveClaudeRuntimeEnvVar("CLAUDE_USAGE_RATE_LIMIT_COOLDOWN_MS");
+  if (!raw) {
+    return DEFAULT_CLAUDE_USAGE_RATE_LIMIT_COOLDOWN_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1_000) {
+    return DEFAULT_CLAUDE_USAGE_RATE_LIMIT_COOLDOWN_MS;
+  }
+  return parsed;
+}
+
+function getClaudeUsageRateLimitRemainingMs(now = Date.now()): number {
+  return Math.max(0, claudeUsageRateLimitUntil - now);
+}
+
+function markClaudeUsageRateLimited(now = Date.now()): number {
+  const cooldownMs = resolveClaudeUsageRateLimitCooldownMs();
+  claudeUsageRateLimitUntil = Math.max(claudeUsageRateLimitUntil, now + cooldownMs);
+  return getClaudeUsageRateLimitRemainingMs(now);
 }
 
 function getClaudeWebCookieJar(): string | undefined {
@@ -158,6 +192,7 @@ async function fetchClaudeWebUsage(
 
   let orgId = orgIdOverride?.trim();
   if (!orgId) {
+    logVerbose("[usage:claude] trying claude.ai organizations fallback");
     const orgRes = await fetchJson(
       "https://claude.ai/api/organizations",
       { headers },
@@ -165,6 +200,7 @@ async function fetchClaudeWebUsage(
       fetchFn,
     );
     if (!orgRes.ok) {
+      logVerbose(`[usage:claude] claude.ai organizations fallback failed: HTTP ${orgRes.status}`);
       return null;
     }
 
@@ -182,6 +218,7 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!usageRes.ok) {
+    logVerbose(`[usage:claude] claude.ai usage fallback failed: HTTP ${usageRes.status}`);
     return null;
   }
 
@@ -203,6 +240,16 @@ export async function fetchClaudeUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
+  const preflightCooldownMs = getClaudeUsageRateLimitRemainingMs();
+  if (preflightCooldownMs > 0) {
+    const waitSec = Math.ceil(preflightCooldownMs / 1000);
+    logVerbose(`[usage:claude] skipping usage fetch due to active 429 cooldown (${waitSec}s left)`);
+    return buildUsageErrorSnapshot(
+      "anthropic",
+      `HTTP 429: Claude usage endpoint cooldown active (${waitSec}s left) to avoid repeated requests; model replies may still work`,
+    );
+  }
+
   const res = await fetchJson(
     "https://api.anthropic.com/api/oauth/usage",
     {
@@ -243,7 +290,14 @@ export async function fetchClaudeUsage(
       (res.status === 403 || res.status === 401 || res.status === 400) &&
       missingUserProfileScope
     ) {
+      logVerbose("[usage:claude] oauth usage missing user:profile scope; trying claude.ai fallback");
       const sessionKeys = resolveClaudeWebSessionKeys(token);
+      if (sessionKeys.length === 0) {
+        return buildUsageErrorSnapshot(
+          "anthropic",
+          `HTTP ${res.status}: ${message ?? "Missing scope user:profile"}; configure CLAUDE_WEB_SESSION_KEY or CLAUDE_WEB_COOKIE for usage fallback`,
+        );
+      }
       for (const sessionKey of sessionKeys) {
         const web = await fetchClaudeWebUsage(
           sessionKey,
@@ -252,9 +306,39 @@ export async function fetchClaudeUsage(
           resolveClaudeRuntimeEnvVar("CLAUDE_ORGANIZATION_ID"),
         );
         if (web) {
+          logVerbose("[usage:claude] claude.ai usage fallback succeeded");
           return web;
         }
       }
+      return buildUsageErrorSnapshot(
+        "anthropic",
+        `HTTP ${res.status}: ${message ?? "Missing scope user:profile"}; claude.ai fallback was attempted but did not return usage data`,
+      );
+    }
+
+    if (res.status === 429) {
+      logVerbose("[usage:claude] oauth usage endpoint returned HTTP 429");
+      const sessionKeys = resolveClaudeWebSessionKeys(token);
+      if (sessionKeys.length > 0) {
+        logVerbose("[usage:claude] trying claude.ai fallback after oauth 429");
+      }
+      for (const sessionKey of sessionKeys) {
+        const web = await fetchClaudeWebUsage(
+          sessionKey,
+          timeoutMs,
+          fetchFn,
+          resolveClaudeRuntimeEnvVar("CLAUDE_ORGANIZATION_ID"),
+        );
+        if (web) {
+          logVerbose("[usage:claude] claude.ai usage fallback succeeded after oauth 429");
+          return web;
+        }
+      }
+      const waitSec = Math.ceil(markClaudeUsageRateLimited() / 1000);
+      return buildUsageErrorSnapshot(
+        "anthropic",
+        `HTTP 429: ${message ?? "Rate limited"}; backing off usage requests for ${waitSec}s to avoid repeated rate-limit hits (model replies may still work)`,
+      );
     }
 
     return buildUsageHttpErrorSnapshot({

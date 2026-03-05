@@ -1,4 +1,5 @@
 import { resolveFetch } from "./fetch.js";
+import { logVerbose } from "../globals.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   fetchClaudeUsage,
@@ -124,6 +125,11 @@ export async function loadProviderUsageSummary(
   );
 
   const snapshots = await Promise.all(tasks);
+  for (const snapshot of snapshots) {
+    if (snapshot.error) {
+      logVerbose(`[usage] ${snapshot.provider} quota fetch failed: ${snapshot.error}`);
+    }
+  }
   const providers = snapshots.filter((entry) => {
     if (entry.windows.length > 0) {
       return true;
