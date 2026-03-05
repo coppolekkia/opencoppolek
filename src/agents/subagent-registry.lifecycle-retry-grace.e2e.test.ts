@@ -35,7 +35,10 @@ const loadConfigMock = vi.fn(() => ({
 }));
 const loadRegistryMock = vi.fn(() => new Map());
 const saveRegistryMock = vi.fn(() => {});
-const announceSpy = vi.fn(async () => true);
+const announceSpy = vi.fn(async (_params?: Record<string, unknown>) => true);
+const captureCompletionReplySpy = vi.fn(
+  async (_sessionKey?: string) => undefined as string | undefined,
+);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayMock,
@@ -51,6 +54,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
+  captureSubagentCompletionReply: captureCompletionReplySpy,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -71,10 +75,11 @@ describe("subagent registry lifecycle error grace", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    announceSpy.mockReset().mockResolvedValue(true);
+    captureCompletionReplySpy.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
-    announceSpy.mockClear();
     lifecycleHandler = undefined;
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
@@ -83,6 +88,34 @@ describe("subagent registry lifecycle error grace", () => {
   const flushAsync = async () => {
     await Promise.resolve();
     await Promise.resolve();
+  };
+
+  const waitForCleanupHandledFalse = async (runId: string) => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const run = mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((candidate) => candidate.runId === runId);
+      if (run?.cleanupHandled === false) {
+        return;
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      await flushAsync();
+    }
+    throw new Error(`run ${runId} did not reach cleanupHandled=false in time`);
+  };
+
+  const waitForCleanupCompleted = async (runId: string) => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const run = mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((candidate) => candidate.runId === runId);
+      if (typeof run?.cleanupCompletedAt === "number") {
+        return run;
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      await flushAsync();
+    }
+    throw new Error(`run ${runId} did not complete cleanup in time`);
   };
 
   function registerCompletionRun(runId: string, childSuffix: string, task: string) {
@@ -157,5 +190,103 @@ describe("subagent registry lifecycle error grace", () => {
     expect(announceSpy).toHaveBeenCalledTimes(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("error");
     expect(readFirstAnnounceOutcome()?.error).toBe("fatal failure");
+  });
+
+  it("freezes completion result at run termination across deferred announce retries", async () => {
+    // Regression guard: late lifecycle noise must never overwrite the frozen completion reply.
+    registerCompletionRun("run-freeze", "freeze", "freeze test");
+    captureCompletionReplySpy.mockResolvedValueOnce("Final answer X");
+    announceSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    const endedAt = Date.now();
+    emitLifecycleEvent("run-freeze", { phase: "end", endedAt });
+    await flushAsync();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const firstCall = announceSpy.mock.calls[0]?.[0] as { roundOneReply?: string } | undefined;
+    expect(firstCall?.roundOneReply).toBe("Final answer X");
+
+    await waitForCleanupHandledFalse("run-freeze");
+
+    captureCompletionReplySpy.mockResolvedValueOnce("Late reply Y");
+    emitLifecycleEvent("run-freeze", { phase: "end", endedAt: endedAt + 100 });
+    await flushAsync();
+
+    expect(announceSpy).toHaveBeenCalledTimes(2);
+    const secondCall = announceSpy.mock.calls[1]?.[0] as { roundOneReply?: string } | undefined;
+    expect(secondCall?.roundOneReply).toBe("Final answer X");
+    expect(captureCompletionReplySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps frozen completion output and retains it for keep-mode cleanup", async () => {
+    registerCompletionRun("run-capped", "capped", "capped result test");
+    captureCompletionReplySpy.mockResolvedValueOnce("x".repeat(120 * 1024));
+    announceSpy.mockResolvedValueOnce(true);
+
+    emitLifecycleEvent("run-capped", { phase: "end", endedAt: Date.now() });
+    await flushAsync();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const call = announceSpy.mock.calls[0]?.[0] as { roundOneReply?: string } | undefined;
+    expect(call?.roundOneReply).toContain("[truncated: frozen completion output exceeded 100KB");
+    expect(Buffer.byteLength(call?.roundOneReply ?? "", "utf8")).toBeLessThanOrEqual(100 * 1024);
+
+    const run = await waitForCleanupCompleted("run-capped");
+    expect(typeof run.frozenResultText).toBe("string");
+    expect(run.frozenResultText).toContain("[truncated: frozen completion output exceeded 100KB");
+    expect(run.frozenResultCapturedAt).toBeTypeOf("number");
+  });
+
+  it("keeps parallel child completion results frozen even when late traffic arrives", async () => {
+    // Regression guard: fan-out retries must preserve each child's first frozen result text.
+    registerCompletionRun("run-parallel-a", "parallel-a", "parallel a");
+    registerCompletionRun("run-parallel-b", "parallel-b", "parallel b");
+    captureCompletionReplySpy
+      .mockResolvedValueOnce("Final answer A")
+      .mockResolvedValueOnce("Final answer B");
+    announceSpy
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true);
+
+    const parallelEndedAt = Date.now();
+    emitLifecycleEvent("run-parallel-a", { phase: "end", endedAt: parallelEndedAt });
+    emitLifecycleEvent("run-parallel-b", { phase: "end", endedAt: parallelEndedAt + 1 });
+    await flushAsync();
+
+    expect(announceSpy).toHaveBeenCalledTimes(2);
+    await waitForCleanupHandledFalse("run-parallel-a");
+    await waitForCleanupHandledFalse("run-parallel-b");
+
+    captureCompletionReplySpy.mockResolvedValue("Late overwrite");
+
+    emitLifecycleEvent("run-parallel-a", { phase: "end", endedAt: parallelEndedAt + 100 });
+    emitLifecycleEvent("run-parallel-b", { phase: "end", endedAt: parallelEndedAt + 101 });
+    await flushAsync();
+
+    expect(announceSpy).toHaveBeenCalledTimes(4);
+
+    const callsByRun = new Map<string, Array<{ roundOneReply?: string }>>();
+    for (const call of announceSpy.mock.calls) {
+      const params = (call?.[0] ?? {}) as { childRunId?: string; roundOneReply?: string };
+      const runId = params.childRunId;
+      if (!runId) {
+        continue;
+      }
+      const existing = callsByRun.get(runId) ?? [];
+      existing.push({ roundOneReply: params.roundOneReply });
+      callsByRun.set(runId, existing);
+    }
+
+    expect(callsByRun.get("run-parallel-a")?.map((entry) => entry.roundOneReply)).toEqual([
+      "Final answer A",
+      "Final answer A",
+    ]);
+    expect(callsByRun.get("run-parallel-b")?.map((entry) => entry.roundOneReply)).toEqual([
+      "Final answer B",
+      "Final answer B",
+    ]);
+    expect(captureCompletionReplySpy).toHaveBeenCalledTimes(2);
   });
 });

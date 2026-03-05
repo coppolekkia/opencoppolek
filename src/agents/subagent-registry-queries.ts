@@ -21,12 +21,34 @@ export function findRunIdsByChildSessionKeyFromRuns(
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
   requesterSessionKey: string,
+  options?: {
+    requesterRunId?: string;
+  },
 ): SubagentRunRecord[] {
   const key = requesterSessionKey.trim();
   if (!key) {
     return [];
   }
-  return [...runs.values()].filter((entry) => entry.requesterSessionKey === key);
+
+  const requesterRunId = options?.requesterRunId?.trim();
+  const requesterRun = requesterRunId ? runs.get(requesterRunId) : undefined;
+  const requesterRunMatchesScope =
+    requesterRun && requesterRun.childSessionKey === key ? requesterRun : undefined;
+  const lowerBound = requesterRunMatchesScope?.startedAt ?? requesterRunMatchesScope?.createdAt;
+  const upperBound = requesterRunMatchesScope?.endedAt;
+
+  return [...runs.values()].filter((entry) => {
+    if (entry.requesterSessionKey !== key) {
+      return false;
+    }
+    if (typeof lowerBound === "number" && entry.createdAt < lowerBound) {
+      return false;
+    }
+    if (typeof upperBound === "number" && entry.createdAt > upperBound) {
+      return false;
+    }
+    return true;
+  });
 }
 
 export function resolveRequesterForChildSessionFromRuns(
@@ -56,6 +78,39 @@ export function resolveRequesterForChildSessionFromRuns(
     requesterSessionKey: best.requesterSessionKey,
     requesterOrigin: best.requesterOrigin,
   };
+}
+
+export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  childSessionKey: string,
+): boolean {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return false;
+  }
+  let latest: SubagentRunRecord | undefined;
+  for (const entry of runs.values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
+    }
+  }
+  if (!latest) {
+    return false;
+  }
+  // Session-mode subagents remain available for follow-up turns.
+  if (latest.spawnMode === "session") {
+    return false;
+  }
+  // Run-mode sessions should only ignore late descendant completion traffic
+  // once the run has fully completed its own cleanup/announce flow.
+  return (
+    typeof latest.endedAt === "number" &&
+    typeof latest.cleanupCompletedAt === "number" &&
+    latest.cleanupCompletedAt >= latest.endedAt
+  );
 }
 
 export function countActiveRunsForSessionFromRuns(

@@ -30,6 +30,12 @@ export type SubagentRunRecord = {
   lastAnnounceRetryAt?: number;
   /** Terminal lifecycle reason recorded when the run finishes. */
   endedReason?: SubagentLifecycleEndedReason;
+  /** Run ended while descendants were still pending and should be re-invoked once they settle. */
+  wakeOnDescendantSettle?: boolean;
+  /** Frozen completion output captured when the run first transitions to ended state. */
+  frozenResultText?: string | null;
+  /** Timestamp when frozenResultText was captured and locked. */
+  frozenResultCapturedAt?: number;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
   attachmentsDir?: string;
