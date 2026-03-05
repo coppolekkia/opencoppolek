@@ -238,12 +238,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const streamMode = resolveTelegramStreamMode(telegramCfg);
+  const hasGroupAllowFrom = Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0;
   const resolveGroupPolicy = (chatId: string | number) =>
     resolveChannelGroupPolicy({
       cfg,
       channel: "telegram",
       accountId: account.accountId,
       groupId: String(chatId),
+      hasGroupAllowFrom,
     });
   const resolveGroupActivation = (params: {
     chatId: string | number;

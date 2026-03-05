@@ -123,6 +123,7 @@ export function resolveIMessageInboundDecision(params: {
         channel: "imessage",
         accountId: params.accountId,
         groupId: groupIdCandidate,
+        hasGroupAllowFrom: params.groupAllowFrom.length > 0,
       })
     : {
         allowlistEnabled: false,
