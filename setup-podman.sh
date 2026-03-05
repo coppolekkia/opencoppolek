@@ -212,11 +212,22 @@ echo "Building image from $REPO_PATH..."
 podman build -t openclaw:local -f "$REPO_PATH/Dockerfile" "$REPO_PATH"
 
 echo "Loading image into $OPENCLAW_USER's Podman store..."
-TMP_IMAGE="$(mktemp -p /tmp openclaw-image.XXXXXX.tar)"
+# Prefer /var/tmp over /tmp: /tmp is typically tmpfs (RAM-backed, limited quota) while
+# /var/tmp is usually on disk, making it safe for multi-GB container images.
+# Fall back to /tmp if /var/tmp is unavailable or not writable (fixes: #25743).
+_pick_tmp_dir() {
+  if [[ -d /var/tmp ]] && [[ -w /var/tmp ]]; then
+    echo /var/tmp
+  else
+    echo /tmp
+  fi
+}
+TMP_IMAGE="$(mktemp -p "$(_pick_tmp_dir)" openclaw-image.XXXXXX.tar)"
+unset -f _pick_tmp_dir
 trap 'rm -f "$TMP_IMAGE"' EXIT
 podman save openclaw:local -o "$TMP_IMAGE"
 chmod 644 "$TMP_IMAGE"
-(cd /tmp && run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" podman load -i "$TMP_IMAGE")
+run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" podman load -i "$TMP_IMAGE"
 rm -f "$TMP_IMAGE"
 trap - EXIT
 
