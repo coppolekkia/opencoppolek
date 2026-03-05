@@ -283,12 +283,22 @@ function mergeConfig(
   };
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
-  const minScore = clampNumber(query.minScore, 0, 1);
+  const rawMinScore = clampNumber(query.minScore, 0, 1);
   const vectorWeight = clampNumber(hybrid.vectorWeight, 0, 1);
   const textWeight = clampNumber(hybrid.textWeight, 0, 1);
   const sum = vectorWeight + textWeight;
   const normalizedVectorWeight = sum > 0 ? vectorWeight / sum : DEFAULT_HYBRID_VECTOR_WEIGHT;
   const normalizedTextWeight = sum > 0 ? textWeight / sum : DEFAULT_HYBRID_TEXT_WEIGHT;
+
+  // When hybrid search is enabled and the user hasn't explicitly configured minScore,
+  // cap it at normalizedTextWeight so that a perfect BM25-only match (vectorScore=0,
+  // textScore=1.0 → combined score = textWeight) is not silently dropped.
+  // See: https://github.com/openclaw/openclaw/issues/25183
+  const userExplicitMinScore = overrides?.query?.minScore ?? defaults?.query?.minScore ?? undefined;
+  const minScore =
+    hybrid.enabled && userExplicitMinScore === undefined
+      ? Math.min(rawMinScore, normalizedTextWeight)
+      : rawMinScore;
   const candidateMultiplier = clampInt(hybrid.candidateMultiplier, 1, 20);
   const temporalDecayHalfLifeDays = Math.max(
     1,

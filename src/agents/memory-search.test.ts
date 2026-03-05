@@ -260,4 +260,42 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.sources).toContain("sessions");
   });
+
+  it("caps default minScore at textWeight when hybrid is enabled", () => {
+    // With default weights (vector=0.7, text=0.3), a perfect BM25-only match
+    // scores 0.3. DEFAULT_MIN_SCORE (0.35) would silently drop it.
+    // The fix caps minScore at normalizedTextWeight when user hasn't set it.
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            // No explicit minScore — should use default, then cap
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    // normalizedTextWeight = 0.3, DEFAULT_MIN_SCORE = 0.35
+    // min(0.35, 0.3) = 0.3
+    expect(resolved?.query.minScore).toBe(0.3);
+  });
+
+  it("respects explicit minScore even when hybrid is enabled", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            query: { minScore: 0.5 },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    // User explicitly set 0.5 — should not be capped
+    expect(resolved?.query.minScore).toBe(0.5);
+  });
 });
