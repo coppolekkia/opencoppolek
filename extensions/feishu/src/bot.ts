@@ -783,12 +783,13 @@ export function parseFeishuMessageEvent(
   );
   const senderOpenId = event.sender.sender_id.open_id?.trim();
   const senderUserId = event.sender.sender_id.user_id?.trim();
-  const senderFallbackId = senderOpenId || senderUserId || "";
+  const senderUnionId = event.sender.sender_id.union_id?.trim();
+  const senderFallbackId = senderOpenId || senderUserId || senderUnionId || "";
 
   const ctx: FeishuMessageContext = {
     chatId: event.message.chat_id,
     messageId: event.message.message_id,
-    senderId: senderUserId || senderOpenId || "",
+    senderId: senderUserId || senderOpenId || senderUnionId || "",
     // Keep the historical field name, but fall back to user_id when open_id is unavailable
     // (common in some mobile app deliveries).
     senderOpenId: senderFallbackId,
@@ -894,6 +895,7 @@ export async function handleFeishuMessage(params: {
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
+  const senderUnionId = event.sender.sender_id.union_id?.trim() || undefined;
 
   // Handle merge_forward messages: fetch full message via API then expand sub-messages
   if (event.message.message_type === "merge_forward") {
@@ -1034,7 +1036,7 @@ export async function handleFeishuMessage(params: {
         groupPolicy: "allowlist",
         allowFrom: effectiveSenderAllowFrom,
         senderId: ctx.senderOpenId,
-        senderIds: [senderUserId],
+        senderIds: [senderUserId, senderUnionId],
         senderName: ctx.senderName,
       });
       if (!senderAllowed) {
@@ -1094,7 +1096,7 @@ export async function handleFeishuMessage(params: {
     const dmAllowed = resolveFeishuAllowlistMatch({
       allowFrom: effectiveDmAllowFrom,
       senderId: ctx.senderOpenId,
-      senderIds: [senderUserId],
+      senderIds: [senderUserId, senderUnionId],
       senderName: ctx.senderName,
     }).allowed;
 
@@ -1137,7 +1139,7 @@ export async function handleFeishuMessage(params: {
     const senderAllowedForCommands = resolveFeishuAllowlistMatch({
       allowFrom: commandAllowFrom,
       senderId: ctx.senderOpenId,
-      senderIds: [senderUserId],
+      senderIds: [senderUserId, senderUnionId],
       senderName: ctx.senderName,
     }).allowed;
     const commandAuthorized = shouldComputeCommandAuthorized

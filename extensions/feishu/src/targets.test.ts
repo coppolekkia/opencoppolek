@@ -10,6 +10,10 @@ describe("resolveReceiveIdType", () => {
     expect(resolveReceiveIdType("ou_123")).toBe("open_id");
   });
 
+  it("resolves union IDs by on_ prefix", () => {
+    expect(resolveReceiveIdType("on_123")).toBe("union_id");
+  });
+
   it("defaults unprefixed IDs to user_id", () => {
     expect(resolveReceiveIdType("u_123")).toBe("user_id");
   });
@@ -24,6 +28,10 @@ describe("resolveReceiveIdType", () => {
 
   it("treats dm-prefixed open IDs as open_id", () => {
     expect(resolveReceiveIdType("dm:ou_123")).toBe("open_id");
+  });
+
+  it("treats dm-prefixed union IDs as union_id", () => {
+    expect(resolveReceiveIdType("dm:on_123")).toBe("union_id");
   });
 });
 
@@ -51,6 +59,10 @@ describe("normalizeFeishuTarget", () => {
   it("strips provider and dm prefixes", () => {
     expect(normalizeFeishuTarget("lark:dm:ou_123")).toBe("ou_123");
   });
+
+  it("strips provider and union_id prefixes", () => {
+    expect(normalizeFeishuTarget("feishu:union_id:on_123")).toBe("on_123");
+  });
 });
 
 describe("looksLikeFeishuId", () => {
@@ -66,5 +78,10 @@ describe("looksLikeFeishuId", () => {
     expect(looksLikeFeishuId("feishu:group:oc_123")).toBe(true);
     expect(looksLikeFeishuId("group:oc_123")).toBe(true);
     expect(looksLikeFeishuId("channel:oc_456")).toBe(true);
+  });
+
+  it("accepts union_id-prefixed and raw on_ IDs", () => {
+    expect(looksLikeFeishuId("union_id:on_123")).toBe(true);
+    expect(looksLikeFeishuId("on_123")).toBe(true);
   });
 });
