@@ -209,6 +209,7 @@ public struct PresenceEntry: Codable, Sendable {
     public let platform: String?
     public let devicefamily: String?
     public let modelidentifier: String?
+    public let nodeversion: String?
     public let mode: String?
     public let lastinputseconds: Int?
     public let reason: String?
@@ -227,6 +228,7 @@ public struct PresenceEntry: Codable, Sendable {
         platform: String?,
         devicefamily: String?,
         modelidentifier: String?,
+        nodeversion: String?,
         mode: String?,
         lastinputseconds: Int?,
         reason: String?,
@@ -244,6 +246,7 @@ public struct PresenceEntry: Codable, Sendable {
         self.platform = platform
         self.devicefamily = devicefamily
         self.modelidentifier = modelidentifier
+        self.nodeversion = nodeversion
         self.mode = mode
         self.lastinputseconds = lastinputseconds
         self.reason = reason
@@ -263,6 +266,7 @@ public struct PresenceEntry: Codable, Sendable {
         case platform
         case devicefamily = "deviceFamily"
         case modelidentifier = "modelIdentifier"
+        case nodeversion = "nodeVersion"
         case mode
         case lastinputseconds = "lastInputSeconds"
         case reason

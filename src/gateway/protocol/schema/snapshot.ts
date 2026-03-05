@@ -9,6 +9,7 @@ export const PresenceEntrySchema = Type.Object(
     platform: Type.Optional(NonEmptyString),
     deviceFamily: Type.Optional(NonEmptyString),
     modelIdentifier: Type.Optional(NonEmptyString),
+    nodeVersion: Type.Optional(NonEmptyString),
     mode: Type.Optional(NonEmptyString),
     lastInputSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
     reason: Type.Optional(NonEmptyString),
