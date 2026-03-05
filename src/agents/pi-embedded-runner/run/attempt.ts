@@ -1525,14 +1525,36 @@ export async function runEmbeddedAttempt(
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
-        cacheTrace?.recordStage("prompt:before", {
-          prompt: effectivePrompt,
-          messages: activeSession.messages,
-        });
 
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
+        // Merge the orphaned message content into the current prompt to preserve context (#33549).
+        // Insert orphaned text between any hook prependContext and the raw prompt so that
+        // before_prompt_build hooks keep their expected position at the top of the prompt.
         const leafEntry = sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+          const orphanedContent =
+            typeof leafEntry.message.content === "string"
+              ? leafEntry.message.content
+              : Array.isArray(leafEntry.message.content)
+                ? leafEntry.message.content
+                    .filter(
+                      (block: { type?: string; text?: string }) =>
+                        block.type === "text" && typeof block.text === "string",
+                    )
+                    .map((block: { text: string }) => block.text)
+                    .join("\n")
+                : "";
+          if (orphanedContent) {
+            // Reconstruct effectivePrompt preserving hook prependContext ordering:
+            // [prependContext] | orphanedContent | params.prompt
+            const parts: string[] = [];
+            if (hookResult?.prependContext) {
+              parts.push(hookResult.prependContext);
+            }
+            parts.push(orphanedContent);
+            parts.push(params.prompt);
+            effectivePrompt = parts.join("\n\n");
+          }
           if (leafEntry.parentId) {
             sessionManager.branch(leafEntry.parentId);
           } else {
@@ -1541,10 +1563,15 @@ export async function runEmbeddedAttempt(
           const sessionContext = sessionManager.buildSessionContext();
           activeSession.agent.replaceMessages(sessionContext.messages);
           log.warn(
-            `Removed orphaned user message to prevent consecutive user turns. ` +
+            `Merged orphaned user message into current prompt to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
           );
         }
+
+        cacheTrace?.recordStage("prompt:before", {
+          prompt: effectivePrompt,
+          messages: activeSession.messages,
+        });
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
