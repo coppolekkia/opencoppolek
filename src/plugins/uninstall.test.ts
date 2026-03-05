@@ -430,7 +430,7 @@ describe("removePluginFromConfig", () => {
         },
       },
       channels: {
-        defaults: { groupPolicy: "reject" },
+        defaults: { groupPolicy: "disabled" },
         telegram: { enabled: true },
       },
     };
@@ -438,7 +438,7 @@ describe("removePluginFromConfig", () => {
     const { config: result, actions } = removePluginFromConfig(config, "defaults");
 
     expect((result.channels as Record<string, unknown>)?.defaults).toEqual({
-      groupPolicy: "reject",
+      groupPolicy: "disabled",
     });
     expect(actions.channelConfig).toBe(false);
   });
