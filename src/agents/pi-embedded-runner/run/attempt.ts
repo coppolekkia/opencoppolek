@@ -123,7 +123,8 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
-import { detectAndLoadPromptImages } from "./images.js";
+import { shouldUseImagePreAnalysis, analyzeImagesWithImageModel } from "./image-pre-analysis.js";
+import { detectAndLoadPromptImages, modelSupportsImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -1554,12 +1555,15 @@ export async function runEmbeddedAttempt(
             activeSession.agent.replaceMessages(activeSession.messages);
           }
 
-          // Detect and load images referenced in the prompt for vision-capable models.
-          // Images are prompt-local only (pi-like behavior).
+          const mainModelSupportsImages = modelSupportsImages(params.model);
+          const usePreAnalysis = shouldUseImagePreAnalysis({ config: params.config });
+
+          // Detect and load images referenced in the prompt.
+          // When pre-analysis is enabled, we still need image payloads even if the main model is text-only.
           const imageResult = await detectAndLoadPromptImages({
             prompt: effectivePrompt,
             workspaceDir: effectiveWorkspace,
-            model: params.model,
+            model: usePreAnalysis ? { input: ["image"] } : params.model,
             existingImages: params.images,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
@@ -1624,7 +1628,61 @@ export async function runEmbeddedAttempt(
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            if (usePreAnalysis) {
+              // Pre-analyze images with imageModel, then pass text analysis to main model
+              log.debug(`Image pre-analysis: using configured imageModel for image analysis`);
+              try {
+                const preAnalysis = await abortable(
+                  analyzeImagesWithImageModel({
+                    images: imageResult.images,
+                    config: params.config,
+                    agentDir: params.agentDir ?? "",
+                    userPrompt: effectivePrompt,
+                  }),
+                );
+                if (preAnalysis.successfulImageCount > 0 && preAnalysis.analysisText) {
+                  log.debug(
+                    `Image pre-analysis: analyzed ${preAnalysis.imageCount} image(s) with ${preAnalysis.provider}/${preAnalysis.model}`,
+                  );
+                  const promptWithAnalysis = effectivePrompt + preAnalysis.analysisText;
+                  await abortable(activeSession.prompt(promptWithAnalysis));
+                } else {
+                  // No successful analysis produced, fall back to main model with images if supported.
+                  if (mainModelSupportsImages) {
+                    log.debug(
+                      `Image pre-analysis: no successful analyses, falling back to main model with images`,
+                    );
+                    await abortable(
+                      activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                    );
+                  } else {
+                    await abortable(activeSession.prompt(effectivePrompt));
+                  }
+                }
+              } catch (preAnalysisErr) {
+                if (isRunnerAbortError(preAnalysisErr)) {
+                  throw preAnalysisErr;
+                }
+                log.warn(
+                  `Image pre-analysis failed: ${preAnalysisErr instanceof Error ? preAnalysisErr.message : String(preAnalysisErr)}`,
+                );
+                // Fall back to main model with images if supported
+                if (mainModelSupportsImages) {
+                  log.debug(`Image pre-analysis: failed, falling back to main model with images`);
+                  await abortable(
+                    activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                  );
+                } else {
+                  await abortable(activeSession.prompt(effectivePrompt));
+                }
+              }
+            } else {
+              // No imageModel configured; images were only loaded when mainModelSupportsImages is true
+              // (detectAndLoadPromptImages returns [] for non-vision models when usePreAnalysis is false).
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            }
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
