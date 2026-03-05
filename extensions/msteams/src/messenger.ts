@@ -446,19 +446,26 @@ export async function sendMSTeamsMessages(params: {
     ctx: SendContext,
     message: MSTeamsRenderedMessage,
     messageIndex: number,
+    options?: { replyToId?: string },
   ): Promise<string> => {
     const response = await sendWithRetry(
-      async () =>
-        await ctx.sendActivity(
-          await buildActivity(
-            message,
-            params.conversationRef,
-            params.tokenProvider,
-            params.sharePointSiteId,
-            params.mediaMaxBytes,
-          ),
-        ),
-      { messageIndex, messageCount: messages.length },
+      async () => {
+        const activity = await buildActivity(
+          message,
+          params.conversationRef,
+          params.tokenProvider,
+          params.sharePointSiteId,
+          params.mediaMaxBytes,
+        );
+        if (options?.replyToId) {
+          activity.replyToId = options.replyToId;
+        }
+        return await ctx.sendActivity(activity);
+      },
+      {
+        messageIndex,
+        messageCount: messages.length,
+      },
     );
     return extractMessageId(response) ?? "unknown";
   };
@@ -467,10 +474,11 @@ export async function sendMSTeamsMessages(params: {
     ctx: SendContext,
     batch: MSTeamsRenderedMessage[],
     startIndex: number,
+    options?: { replyToId?: string },
   ): Promise<string[]> => {
     const messageIds: string[] = [];
     for (const [idx, message] of batch.entries()) {
-      messageIds.push(await sendMessageInContext(ctx, message, startIndex + idx));
+      messageIds.push(await sendMessageInContext(ctx, message, startIndex + idx, options));
     }
     return messageIds;
   };
@@ -478,24 +486,39 @@ export async function sendMSTeamsMessages(params: {
   const sendProactively = async (
     batch: MSTeamsRenderedMessage[],
     startIndex: number,
+    options?: { replyToId?: string; keepActivityId?: boolean },
   ): Promise<string[]> => {
     const baseRef = buildConversationReference(params.conversationRef);
-    const proactiveRef: MSTeamsConversationReference = {
-      ...baseRef,
-      activityId: undefined,
-    };
+    const reference: MSTeamsConversationReference = options?.keepActivityId
+      ? baseRef
+      : {
+          ...baseRef,
+          activityId: undefined,
+        };
 
     const messageIds: string[] = [];
-    await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-      messageIds.push(...(await sendMessageBatchInContext(ctx, batch, startIndex)));
+    await params.adapter.continueConversation(params.appId, reference, async (ctx) => {
+      messageIds.push(...(await sendMessageBatchInContext(ctx, batch, startIndex, options)));
     });
     return messageIds;
   };
 
   if (params.replyStyle === "thread") {
     const ctx = params.context;
+    const replyToId = params.conversationRef.activityId;
+    const requireReplyTargetForFallback = (): string => {
+      if (!replyToId) {
+        throw new Error(
+          "Missing conversationRef.activityId for replyStyle=thread proactive fallback",
+        );
+      }
+      return replyToId;
+    };
     if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
+      return await sendProactively(messages, 0, {
+        replyToId: requireReplyTargetForFallback(),
+        keepActivityId: true,
+      });
     }
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
@@ -507,7 +530,13 @@ export async function sendMSTeamsMessages(params: {
         onRevoked: async () => {
           const remaining = messages.slice(idx);
           return {
-            ids: remaining.length > 0 ? await sendProactively(remaining, idx) : [],
+            ids:
+              remaining.length > 0
+                ? await sendProactively(remaining, idx, {
+                    replyToId: requireReplyTargetForFallback(),
+                    keepActivityId: true,
+                  })
+                : [],
             fellBack: true,
           };
         },
