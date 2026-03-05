@@ -26,9 +26,13 @@ import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating
 import { recordInboundSession } from "../../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
+import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveThreadSessionKeys,
+} from "../../../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
@@ -106,6 +110,7 @@ type SlackRoutingContext = {
   threadKeys: ReturnType<typeof resolveThreadSessionKeys>;
   sessionKey: string;
   historyKey: string;
+  isBoundThreadSession: boolean;
 };
 
 async function resolveSlackConversationContext(params: {
@@ -297,12 +302,29 @@ function resolveSlackRoutingContext(params: {
     threadId: canonicalThreadId,
     parentSessionKey: canonicalThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
   });
-  const sessionKey = threadKeys.sessionKey;
+  const threadBinding =
+    isThreadReply && threadTs
+      ? getSessionBindingService().resolveByConversation({
+          channel: "slack",
+          accountId: account.accountId,
+          conversationId: threadTs,
+        })
+      : null;
+  const boundSessionKey = threadBinding?.targetSessionKey?.trim() || undefined;
+  const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
+  const sessionKey = boundSessionKey ?? threadKeys.sessionKey;
+  const effectiveRoute = boundSessionKey
+    ? {
+        ...route,
+        sessionKey,
+        agentId: boundAgentId || route.agentId,
+      }
+    : route;
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
   return {
-    route,
+    route: effectiveRoute,
     chatType,
     replyToMode,
     threadContext,
@@ -311,6 +333,7 @@ function resolveSlackRoutingContext(params: {
     threadKeys,
     sessionKey,
     historyKey,
+    isBoundThreadSession: Boolean(boundSessionKey && isThreadReply),
   };
 }
 
@@ -361,6 +384,7 @@ export async function prepareSlackMessage(params: {
     threadKeys,
     sessionKey,
     historyKey,
+    isBoundThreadSession,
   } = routing;
 
   const mentionRegexes = resolveCachedMentionRegexes(ctx, route.agentId);
@@ -468,9 +492,10 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const shouldRequireMention = isRoom
-    ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
-    : false;
+  const shouldRequireMention =
+    isBoundThreadSession || !isRoom
+      ? false
+      : (channelConfig?.requireMention ?? ctx.defaultRequireMention);
 
   // Allow "control commands" to bypass mention gating if sender is authorized.
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
@@ -704,7 +729,7 @@ export async function prepareSlackMessage(params: {
     ReplyToId: threadContext.replyToId,
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
-    ParentSessionKey: threadKeys.parentSessionKey,
+    ParentSessionKey: isBoundThreadSession ? undefined : threadKeys.parentSessionKey,
     // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
     ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
     ThreadHistoryBody: threadHistoryBody,

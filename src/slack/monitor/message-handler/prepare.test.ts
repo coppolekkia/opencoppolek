@@ -2,9 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { App } from "@slack/bolt";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  registerSessionBindingAdapter,
+  __testing as sessionBindingTesting,
+} from "../../../infra/outbound/session-binding-service.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import type { RuntimeEnv } from "../../../runtime.js";
@@ -36,6 +40,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
       fixtureRoot = "";
     }
+  });
+
+  afterEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
   function createInboundSlackCtx(params: {
@@ -628,6 +636,55 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.SessionKey).toContain(":thread:500.000");
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
+  });
+
+  it("routes bound Slack thread replies to the bound session key", async () => {
+    registerSessionBindingAdapter({
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "300.000"
+          ? {
+              bindingId: "default:300.000",
+              targetSessionKey: "agent:codex:acp:session-300",
+              targetKind: "session",
+              conversation: {
+                channel: "slack",
+                accountId: "default",
+                conversationId: "300.000",
+                parentConversationId: "C123",
+              },
+              status: "active",
+              boundAt: Date.now(),
+            }
+          : null,
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, groupPolicy: "open" } },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        thread_ts: "300.000",
+        ts: "300.100",
+        parent_user_id: "U2",
+        text: "follow up without mention",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.SessionKey).toBe("agent:codex:acp:session-300");
+    expect(prepared!.ctxPayload.ParentSessionKey).toBeUndefined();
   });
 });
 

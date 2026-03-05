@@ -28,6 +28,7 @@ import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
+import { registerSlackThreadBindingAdapter } from "../thread-bindings.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
@@ -201,6 +202,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       : null;
   let unregisterHttpHandler: (() => void) | null = null;
+  const unregisterThreadBindingAdapter = registerSlackThreadBindingAdapter({
+    accountId: account.accountId,
+    token: botToken,
+    client: app.client,
+  });
 
   let botUserId = "";
   let teamId = "";
@@ -474,6 +480,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
+    unregisterThreadBindingAdapter();
     await app.stop().catch(() => undefined);
   }
 }
