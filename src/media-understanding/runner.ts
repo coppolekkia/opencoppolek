@@ -103,8 +103,27 @@ export function createMediaAttachmentCache(
   return new MediaAttachmentCache(attachments, options);
 }
 
+const BINARY_CACHE_MAX = 64;
+const GEMINI_PROBE_CACHE_MAX = 16;
 const binaryCache = new Map<string, Promise<string | null>>();
 const geminiProbeCache = new Map<string, Promise<boolean>>();
+
+function setBoundedCache<T>(
+  cache: Map<string, T>,
+  key: string,
+  value: T,
+  maxEntries: number,
+): void {
+  cache.delete(key);
+  cache.set(key, value);
+  if (cache.size <= maxEntries) {
+    return;
+  }
+  const oldest = cache.keys().next();
+  if (!oldest.done) {
+    cache.delete(oldest.value);
+  }
+}
 
 export function clearMediaUnderstandingBinaryCacheForTests(): void {
   binaryCache.clear();
@@ -165,6 +184,7 @@ async function isExecutable(filePath: string): Promise<boolean> {
 async function findBinary(name: string): Promise<string | null> {
   const cached = binaryCache.get(name);
   if (cached) {
+    setBoundedCache(binaryCache, name, cached, BINARY_CACHE_MAX);
     return cached;
   }
   const resolved = (async () => {
@@ -198,7 +218,7 @@ async function findBinary(name: string): Promise<string | null> {
 
     return null;
   })();
-  binaryCache.set(name, resolved);
+  setBoundedCache(binaryCache, name, resolved, BINARY_CACHE_MAX);
   return resolved;
 }
 
@@ -209,6 +229,7 @@ async function hasBinary(name: string): Promise<boolean> {
 async function probeGeminiCli(): Promise<boolean> {
   const cached = geminiProbeCache.get("gemini");
   if (cached) {
+    setBoundedCache(geminiProbeCache, "gemini", cached, GEMINI_PROBE_CACHE_MAX);
     return cached;
   }
   const resolved = (async () => {
@@ -224,7 +245,7 @@ async function probeGeminiCli(): Promise<boolean> {
       return false;
     }
   })();
-  geminiProbeCache.set("gemini", resolved);
+  setBoundedCache(geminiProbeCache, "gemini", resolved, GEMINI_PROBE_CACHE_MAX);
   return resolved;
 }
 
@@ -803,3 +824,11 @@ export async function runCapability(params: {
     decision,
   };
 }
+
+export const __test = {
+  binaryCache,
+  geminiProbeCache,
+  BINARY_CACHE_MAX,
+  GEMINI_PROBE_CACHE_MAX,
+  setBoundedCache,
+};
