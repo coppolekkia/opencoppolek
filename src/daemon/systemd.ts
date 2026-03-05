@@ -275,7 +275,9 @@ export async function isSystemdUserServiceAvailable(
   if (detail.includes("not supported")) {
     return false;
   }
-  return false;
+  // Non-zero exit without any unavailability indicator means systemd is
+  // present but has degraded/failed units — still available for our purposes.
+  return true;
 }
 
 async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as GatewayServiceEnv) {
@@ -287,7 +289,18 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   if (isSystemctlMissing(detail)) {
     throw new Error("systemctl not available; systemd user services are required on Linux.");
   }
-  throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  // Check for bus-unavailability errors (matches isSystemdUserServiceAvailable checks).
+  const lower = detail.toLowerCase();
+  if (
+    lower.includes("failed to connect") ||
+    lower.includes("not been booted") ||
+    lower.includes("no such file or directory") ||
+    lower.includes("not supported")
+  ) {
+    throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  }
+  // Non-zero exit without missing/unavailability indicators means systemd is
+  // available but has degraded/failed units — acceptable for service operations.
 }
 
 export async function installSystemdService({
