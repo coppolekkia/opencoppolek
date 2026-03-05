@@ -58,6 +58,61 @@ export function resolveMirroredTranscriptText(params: {
   return trimmed ? trimmed : null;
 }
 
+function extractAssistantText(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const candidate = message as Record<string, unknown>;
+  const content = candidate.content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (Array.isArray(content)) {
+    const textParts = content
+      .map((part) => {
+        const item = part as Record<string, unknown>;
+        return item.type === "text" && typeof item.text === "string" ? item.text : null;
+      })
+      .filter((text): text is string => typeof text === "string")
+      .map((text) => text.trim())
+      .filter(Boolean);
+    if (textParts.length > 0) {
+      return textParts.join("\n");
+    }
+  }
+  if (typeof candidate.text === "string") {
+    const trimmed = candidate.text.trim();
+    return trimmed ? trimmed : null;
+  }
+  return null;
+}
+
+function isDuplicateAssistantTail(params: {
+  sessionManager: SessionManager;
+  mirrorText: string;
+}): boolean {
+  const entries = params.sessionManager.getEntries();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index] as { type?: unknown; message?: unknown };
+    if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") {
+      continue;
+    }
+    const message = entry.message as Record<string, unknown>;
+    if (typeof message.role !== "string" || message.role !== "assistant") {
+      return false;
+    }
+    const lastAssistantText = extractAssistantText(message);
+    if (lastAssistantText !== params.mirrorText) {
+      return false;
+    }
+    // Only skip the synthetic delivery-mirror write when it would immediately
+    // duplicate a real assistant turn that is already in the transcript.
+    return !(message.provider === "openclaw" && message.model === "delivery-mirror");
+  }
+  return false;
+}
+
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
@@ -128,7 +183,11 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
+  const nowMs = Date.now();
   const sessionManager = SessionManager.open(sessionFile);
+  if (isDuplicateAssistantTail({ sessionManager, mirrorText })) {
+    return { ok: false, reason: "duplicate assistant text" };
+  }
   sessionManager.appendMessage({
     role: "assistant",
     content: [{ type: "text", text: mirrorText }],
@@ -150,7 +209,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       },
     },
     stopReason: "stop",
-    timestamp: Date.now(),
+    timestamp: nowMs,
   });
 
   emitSessionTranscriptUpdate(sessionFile);
