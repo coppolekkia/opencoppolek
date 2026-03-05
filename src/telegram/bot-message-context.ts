@@ -481,13 +481,12 @@ export const buildTelegramMessageContext = async ({
   // Preflight audio transcription for mention detection in groups
   // This allows voice notes to be checked for mentions before being dropped
   let preflightTranscript: string | undefined;
+  const audioConfigEnabled = cfg.tools?.media?.audio && cfg.tools.media.audio.enabled !== false;
   const needsPreflightTranscription =
-    isGroup &&
-    requireMention &&
     hasAudio &&
     !hasUserText &&
-    mentionRegexes.length > 0 &&
-    !disableAudioPreflight;
+    !disableAudioPreflight &&
+    ((isGroup && requireMention && mentionRegexes.length > 0) || audioConfigEnabled === true);
 
   if (needsPreflightTranscription) {
     try {

@@ -65,6 +65,23 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   return AUDIO_HEADER_RE.test(trimmed);
 };
 
+/**
+ * Apply voice-note-loop text suppression to a TTS-enriched payload.
+ * When voiceNoteLoop is "enabled" and TTS was applied (mediaUrl present),
+ * strip the text so only the voice note is delivered.
+ */
+const applyVoiceNoteLoopPolicy = (
+  payload: ReplyPayload,
+  voiceNoteLoop: string,
+  isInboundAudio: boolean,
+): ReplyPayload => {
+  if (voiceNoteLoop !== "enabled" || !isInboundAudio || !payload.mediaUrl) {
+    return payload;
+  }
+  // "enabled" mode: voice only — suppress text when audio was generated
+  return { ...payload, text: undefined };
+};
+
 const resolveSessionStoreEntry = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -166,7 +183,12 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreEntry(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
-  const inboundAudio = isInboundAudioContext(ctx);
+  const rawInboundAudio = isInboundAudioContext(ctx);
+  const ttsConfig = resolveTtsConfig(cfg);
+  const voiceNoteLoop = ttsConfig.voiceNoteLoop ?? "disabled";
+  // When voiceNoteLoop is disabled, suppress inbound-audio detection so
+  // tts.auto: "inbound" won't automatically trigger TTS for voice notes.
+  const inboundAudio = voiceNoteLoop === "disabled" ? false : rawInboundAudio;
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
 
@@ -379,14 +401,18 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
-              cfg,
-              channel: ttsChannel,
-              kind: "tool",
-              inboundAudio,
-              ttsAuto: sessionTtsAuto,
-            });
+            const ttsPayload = applyVoiceNoteLoopPolicy(
+              await maybeApplyTtsToPayload({
+                payload,
+                cfg,
+                channel: ttsChannel,
+                kind: "tool",
+                inboundAudio,
+                ttsAuto: sessionTtsAuto,
+              }),
+              voiceNoteLoop,
+              rawInboundAudio,
+            );
             const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
             if (!deliveryPayload) {
               return;
@@ -415,14 +441,18 @@ export async function dispatchReplyFromConfig(params: {
               accumulatedBlockText += payload.text;
               blockCount++;
             }
-            const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
-              cfg,
-              channel: ttsChannel,
-              kind: "block",
-              inboundAudio,
-              ttsAuto: sessionTtsAuto,
-            });
+            const ttsPayload = applyVoiceNoteLoopPolicy(
+              await maybeApplyTtsToPayload({
+                payload,
+                cfg,
+                channel: ttsChannel,
+                kind: "block",
+                inboundAudio,
+                ttsAuto: sessionTtsAuto,
+              }),
+              voiceNoteLoop,
+              rawInboundAudio,
+            );
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
@@ -471,14 +501,18 @@ export async function dispatchReplyFromConfig(params: {
       if (shouldSuppressReasoningPayload(reply)) {
         continue;
       }
-      const ttsReply = await maybeApplyTtsToPayload({
-        payload: reply,
-        cfg,
-        channel: ttsChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: sessionTtsAuto,
-      });
+      const ttsReply = applyVoiceNoteLoopPolicy(
+        await maybeApplyTtsToPayload({
+          payload: reply,
+          cfg,
+          channel: ttsChannel,
+          kind: "final",
+          inboundAudio,
+          ttsAuto: sessionTtsAuto,
+        }),
+        voiceNoteLoop,
+        rawInboundAudio,
+      );
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({
