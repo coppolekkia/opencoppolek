@@ -110,16 +110,28 @@ export function createTelegramDraftStream(params: {
       : requestedPreviewTransport === "message"
         ? false
         : params.thread?.scope === "dm";
+  // sendMessageDraft cannot include reply_to_message_id; disable draft previews
+  // for quoted replies to avoid duplicate visible messages (preview + final reply).
+  const disableDraftForQuotedReply = params.replyToMessageId != null;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyParams =
     params.replyToMessageId != null
       ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
       : threadParams;
-  const resolvedDraftApi = prefersDraftTransport
-    ? resolveSendMessageDraftApi(params.api)
-    : undefined;
-  const usesDraftTransport = Boolean(prefersDraftTransport && resolvedDraftApi);
-  if (prefersDraftTransport && !usesDraftTransport) {
+  const resolvedDraftApi =
+    prefersDraftTransport && !disableDraftForQuotedReply
+      ? resolveSendMessageDraftApi(params.api)
+      : undefined;
+  const usesDraftTransport = Boolean(
+    prefersDraftTransport && !disableDraftForQuotedReply && resolvedDraftApi,
+  );
+  if (prefersDraftTransport && disableDraftForQuotedReply) {
+    const notify = requestedPreviewTransport === "draft" ? params.warn : params.log;
+    notify?.(
+      "telegram stream preview: reply_to_message_id present; forcing sendMessage/editMessageText transport",
+    );
+  }
+  if (prefersDraftTransport && !disableDraftForQuotedReply && !usesDraftTransport) {
     params.warn?.(
       "telegram stream preview: sendMessageDraft unavailable; falling back to sendMessage/editMessageText",
     );

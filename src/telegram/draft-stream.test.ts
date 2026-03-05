@@ -147,6 +147,24 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
   });
 
+  it("forces message transport for quoted replies in dm threads", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "auto",
+      replyToMessageId: 999,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", {
+      message_thread_id: 42,
+      reply_to_message_id: 999,
+    });
+    expect(api.sendMessageDraft).not.toHaveBeenCalled();
+  });
+
   it("falls back to message transport when sendMessageDraft is unavailable", async () => {
     const api = createMockDraftApi();
     delete (api as { sendMessageDraft?: unknown }).sendMessageDraft;

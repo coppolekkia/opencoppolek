@@ -138,6 +138,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     context: TelegramMessageContext;
     telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
     streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
+    replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
     bot?: Bot;
   }) {
     const bot = params.bot ?? createBot();
@@ -146,7 +147,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       bot,
       cfg: {},
       runtime: createRuntime(),
-      replyToMode: "first",
+      replyToMode: params.replyToMode ?? "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
       telegramCfg: params.telegramCfg ?? {},
@@ -205,6 +206,27 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not force draft reply anchoring when reply mode is off", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hello" });
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), replyToMode: "off" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: undefined,
+      }),
+    );
   });
 
   it("uses 30-char preview debounce for legacy block stream mode", async () => {
