@@ -139,7 +139,7 @@ export type OnboardOptions = {
   customApiKey?: string;
   customModelId?: string;
   customProviderId?: string;
-  customCompatibility?: "openai" | "anthropic";
+  customCompatibility?: "openai" | "openai-responses" | "anthropic";
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

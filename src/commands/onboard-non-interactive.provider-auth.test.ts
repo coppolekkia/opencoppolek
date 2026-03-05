@@ -704,7 +704,9 @@ describe("onboard (non-interactive): provider auth", () => {
             customCompatibility: "xmlrpc",
             skipSkills: true,
           }),
-        ).rejects.toThrow('Invalid --custom-compatibility (use "openai" or "anthropic").');
+        ).rejects.toThrow(
+          'Invalid --custom-compatibility (use "openai", "openai-responses", or "anthropic").',
+        );
       },
     );
   });

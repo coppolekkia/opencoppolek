@@ -61,7 +61,7 @@ function transformAzureUrl(baseUrl: string, modelId: string): string {
   return `${normalizedUrl}/openai/deployments/${modelId}`;
 }
 
-export type CustomApiCompatibility = "openai" | "anthropic";
+export type CustomApiCompatibility = "openai" | "openai-responses" | "anthropic";
 type CustomApiCompatibilityChoice = CustomApiCompatibility | "unknown";
 export type CustomApiResult = {
   config: OpenClawConfig;
@@ -136,6 +136,11 @@ const COMPATIBILITY_OPTIONS: Array<{
     hint: "Uses /chat/completions",
   },
   {
+    value: "openai-responses",
+    label: "OpenAI Responses-compatible",
+    hint: "Uses /responses",
+  },
+  {
     value: "anthropic",
     label: "Anthropic-compatible",
     hint: "Uses /messages",
@@ -143,7 +148,7 @@ const COMPATIBILITY_OPTIONS: Array<{
   {
     value: "unknown",
     label: "Unknown (detect automatically)",
-    hint: "Probes OpenAI then Anthropic endpoints",
+    hint: "Probes OpenAI, OpenAI Responses, then Anthropic endpoints",
   },
 ];
 
@@ -276,7 +281,7 @@ function normalizeOptionalProviderApiKey(value: unknown): SecretInput | undefine
 function resolveVerificationEndpoint(params: {
   baseUrl: string;
   modelId: string;
-  endpointPath: "chat/completions" | "messages";
+  endpointPath: "chat/completions" | "responses" | "messages";
 }) {
   const resolvedUrl = isAzureUrl(params.baseUrl)
     ? transformAzureUrl(params.baseUrl, params.modelId)
@@ -351,6 +356,36 @@ async function requestOpenAiVerification(params: {
       },
     });
   }
+}
+
+async function requestOpenAiResponsesVerification(params: {
+  baseUrl: string;
+  apiKey: string;
+  modelId: string;
+}): Promise<VerificationResult> {
+  const endpoint = resolveVerificationEndpoint({
+    baseUrl: params.baseUrl,
+    modelId: params.modelId,
+    endpointPath: "responses",
+  });
+  const headers = isAzureUrl(params.baseUrl)
+    ? buildAzureOpenAiHeaders(params.apiKey)
+    : buildOpenAiHeaders(params.apiKey);
+  return await requestVerification({
+    endpoint,
+    headers,
+    body: {
+      model: params.modelId,
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "Hi" }],
+        },
+      ],
+      max_output_tokens: 1,
+      stream: false,
+    },
+  });
 }
 
 async function requestAnthropicVerification(params: {
@@ -473,8 +508,14 @@ async function applyCustomApiRetryChoice(params: {
 
 function resolveProviderApi(
   compatibility: CustomApiCompatibility,
-): "openai-completions" | "anthropic-messages" {
-  return compatibility === "anthropic" ? "anthropic-messages" : "openai-completions";
+): "openai-completions" | "openai-responses" | "anthropic-messages" {
+  if (compatibility === "anthropic") {
+    return "anthropic-messages";
+  }
+  if (compatibility === "openai-responses") {
+    return "openai-responses";
+  }
+  return "openai-completions";
 }
 
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
@@ -482,13 +523,17 @@ function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
   if (!compatibilityRaw) {
     return "openai";
   }
-  if (compatibilityRaw !== "openai" && compatibilityRaw !== "anthropic") {
+  if (
+    compatibilityRaw !== "openai" &&
+    compatibilityRaw !== "openai-responses" &&
+    compatibilityRaw !== "anthropic"
+  ) {
     throw new CustomApiError(
       "invalid_compatibility",
-      'Invalid --custom-compatibility (use "openai" or "anthropic").',
+      'Invalid --custom-compatibility (use "openai", "openai-responses", or "anthropic").',
     );
   }
-  return compatibilityRaw;
+  return compatibilityRaw as CustomApiCompatibility;
 }
 
 export function resolveCustomProviderId(
@@ -560,10 +605,14 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
   }
 
-  if (params.compatibility !== "openai" && params.compatibility !== "anthropic") {
+  if (
+    params.compatibility !== "openai" &&
+    params.compatibility !== "openai-responses" &&
+    params.compatibility !== "anthropic"
+  ) {
     throw new CustomApiError(
       "invalid_compatibility",
-      'Custom provider compatibility must be "openai" or "anthropic".',
+      'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
     );
   }
 
@@ -714,30 +763,41 @@ export async function promptCustomApiConfig(params: {
         compatibility = "openai";
         verifiedFromProbe = true;
       } else {
-        const anthropicProbe = await requestAnthropicVerification({
+        const openaiResponsesProbe = await requestOpenAiResponsesVerification({
           baseUrl,
           apiKey: resolvedApiKey,
           modelId,
         });
-        if (anthropicProbe.ok) {
-          probeSpinner.stop("Detected Anthropic-compatible endpoint.");
-          compatibility = "anthropic";
+        if (openaiResponsesProbe.ok) {
+          probeSpinner.stop("Detected OpenAI Responses-compatible endpoint.");
+          compatibility = "openai-responses";
           verifiedFromProbe = true;
         } else {
-          probeSpinner.stop("Could not detect endpoint type.");
-          await prompter.note(
-            "This endpoint did not respond to OpenAI or Anthropic style requests.",
-            "Endpoint detection",
-          );
-          const retryChoice = await promptCustomApiRetryChoice(prompter);
-          ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
-            prompter,
-            config,
-            secretInputMode: params.secretInputMode,
-            retryChoice,
-            current: { baseUrl, apiKey, resolvedApiKey, modelId },
-          }));
-          continue;
+          const anthropicProbe = await requestAnthropicVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+          });
+          if (anthropicProbe.ok) {
+            probeSpinner.stop("Detected Anthropic-compatible endpoint.");
+            compatibility = "anthropic";
+            verifiedFromProbe = true;
+          } else {
+            probeSpinner.stop("Could not detect endpoint type.");
+            await prompter.note(
+              "This endpoint did not respond to OpenAI, OpenAI Responses, or Anthropic style requests.",
+              "Endpoint detection",
+            );
+            const retryChoice = await promptCustomApiRetryChoice(prompter);
+            ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
+              prompter,
+              config,
+              secretInputMode: params.secretInputMode,
+              retryChoice,
+              current: { baseUrl, apiKey, resolvedApiKey, modelId },
+            }));
+            continue;
+          }
         }
       }
     }
@@ -750,7 +810,9 @@ export async function promptCustomApiConfig(params: {
     const result =
       compatibility === "anthropic"
         ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
-        : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
+        : compatibility === "openai-responses"
+          ? await requestOpenAiResponsesVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
+          : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
     if (result.ok) {
       verifySpinner.stop("Verification successful.");
       break;

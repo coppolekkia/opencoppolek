@@ -77,6 +77,17 @@ function expectOpenAiCompatResult(params: {
   expect(params.result.config.models?.providers?.custom?.api).toBe("openai-completions");
 }
 
+function expectOpenAiResponsesCompatResult(params: {
+  prompter: ReturnType<typeof createTestPrompter>;
+  textCalls: number;
+  selectCalls: number;
+  result: Awaited<ReturnType<typeof runPromptCustomApi>>;
+}) {
+  expect(params.prompter.text).toHaveBeenCalledTimes(params.textCalls);
+  expect(params.prompter.select).toHaveBeenCalledTimes(params.selectCalls);
+  expect(params.result.config.models?.providers?.custom?.api).toBe("openai-responses");
+}
+
 function buildCustomProviderConfig(contextWindow?: number) {
   if (contextWindow === undefined) {
     return {} as OpenClawConfig;
@@ -156,6 +167,59 @@ describe("promptCustomApiConfig", () => {
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
   });
 
+  it("uses openai-responses compatibility when selected", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "gpt-5.2", "custom", "alias"],
+      select: ["plaintext", "openai-responses"],
+    });
+    stubFetchSequence([{ ok: true }]);
+    const result = await runPromptCustomApi(prompter);
+
+    expectOpenAiResponsesCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
+  });
+
+  it("uses /responses payload for openai-responses verification probes", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "gpt-5.2", "custom", "alias"],
+      select: ["plaintext", "openai-responses"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    const firstCall = fetchMock.mock.calls[0];
+    const firstUrl = firstCall?.[0];
+    const firstInit = firstCall?.[1] as { body?: string } | undefined;
+    if (typeof firstUrl !== "string") {
+      throw new Error("Expected first verification call URL");
+    }
+    const parsedBody = JSON.parse(firstInit?.body ?? "{}");
+
+    expect(firstUrl).toContain("/responses");
+    expect(parsedBody).toMatchObject({
+      model: "gpt-5.2",
+      max_output_tokens: 1,
+      stream: false,
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "Hi" }],
+        },
+      ],
+    });
+  });
+
+  it("detects openai-responses compatibility when unknown", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "gpt-5.2", "custom", "alias"],
+      select: ["plaintext", "unknown"],
+    });
+    stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
+    const result = await runPromptCustomApi(prompter);
+
+    expectOpenAiResponsesCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
+  });
+
   it("uses expanded max_tokens for openai verification probes", async () => {
     const prompter = createTestPrompter({
       text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
@@ -214,14 +278,18 @@ describe("promptCustomApiConfig", () => {
       text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
       select: ["plaintext", "unknown"],
     });
-    const fetchMock = stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
+    const fetchMock = stubFetchSequence([
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: true },
+    ]);
 
     await runPromptCustomApi(prompter);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
-    expect(secondCall?.body).toBeDefined();
-    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const thirdCall = fetchMock.mock.calls[2]?.[1] as { body?: string } | undefined;
+    expect(thirdCall?.body).toBeDefined();
+    expect(JSON.parse(thirdCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
   });
 
   it("re-prompts base url when unknown detection fails", async () => {
@@ -237,7 +305,12 @@ describe("promptCustomApiConfig", () => {
       ],
       select: ["plaintext", "unknown", "baseUrl", "plaintext"],
     });
-    stubFetchSequence([{ ok: false, status: 404 }, { ok: false, status: 404 }, { ok: true }]);
+    stubFetchSequence([
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: true },
+    ]);
     await runPromptCustomApi(prompter);
 
     expect(prompter.note).toHaveBeenCalledWith(
@@ -398,7 +471,8 @@ describe("applyCustomApiConfig", () => {
         modelId: "foo-large",
         compatibility: "invalid" as unknown as "openai",
       },
-      expectedMessage: 'Custom provider compatibility must be "openai" or "anthropic".',
+      expectedMessage:
+        'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
     },
     {
       name: "explicit provider ids that normalize to empty",
@@ -434,6 +508,16 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     });
   });
 
+  it("parses openai-responses compatibility flag", () => {
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai-responses",
+    });
+
+    expect(result.compatibility).toBe("openai-responses");
+  });
+
   it.each([
     {
       name: "missing required flags",
@@ -447,7 +531,8 @@ describe("parseNonInteractiveCustomApiFlags", () => {
         modelId: "foo-large",
         compatibility: "xmlrpc",
       },
-      expectedMessage: 'Invalid --custom-compatibility (use "openai" or "anthropic").',
+      expectedMessage:
+        'Invalid --custom-compatibility (use "openai", "openai-responses", or "anthropic").',
     },
     {
       name: "invalid explicit provider ids",
