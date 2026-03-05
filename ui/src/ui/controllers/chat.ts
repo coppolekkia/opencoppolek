@@ -54,22 +54,32 @@ export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
+  const requestedKey = state.sessionKey;
   state.chatLoading = true;
   state.lastError = null;
   try {
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
-        sessionKey: state.sessionKey,
+        sessionKey: requestedKey,
         limit: 200,
       },
     );
+    // Discard stale response if the user switched sessions during the request
+    if (state.sessionKey !== requestedKey) {
+      return;
+    }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
-    state.lastError = String(err);
+    // Only apply error if the session hasn't changed
+    if (state.sessionKey === requestedKey) {
+      state.lastError = String(err);
+    }
   } finally {
+    // Always clear chatLoading — if the session changed, the new session's own
+    // loadChatHistory will set it back to true independently.
     state.chatLoading = false;
   }
 }
