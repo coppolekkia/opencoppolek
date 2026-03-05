@@ -39,10 +39,11 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
-    ({ runServiceRestart } = await import("./lifecycle-core.js"));
+    ({ runServiceRestart, runServiceStart } = await import("./lifecycle-core.js"));
   });
 
   beforeEach(() => {
@@ -58,6 +59,7 @@ describe("runServiceRestart token drift", () => {
     service.isLoaded.mockClear();
     service.readCommand.mockClear();
     service.restart.mockClear();
+    service.label = "TestService";
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
@@ -122,5 +124,110 @@ describe("runServiceRestart token drift", () => {
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
+  });
+});
+
+describe("runServiceStart LaunchAgent", () => {
+  beforeAll(async () => {
+    ({ runServiceRestart, runServiceStart } = await import("./lifecycle-core.js"));
+  });
+
+  beforeEach(() => {
+    runtimeLogs.length = 0;
+    loadConfig.mockReset();
+    loadConfig.mockReturnValue({
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    });
+    service.isLoaded.mockClear();
+    service.readCommand.mockClear();
+    service.restart.mockClear();
+    service.label = "TestService";
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
+    });
+    service.restart.mockResolvedValue(undefined);
+    vi.unstubAllEnvs();
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
+  });
+
+  it("restarts unloaded LaunchAgent services on start", async () => {
+    service.label = "LaunchAgent";
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install --force"],
+      opts: { json: true },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; ok?: boolean };
+    expect(payload.ok).toBe(true);
+    expect(payload.result).toBe("started");
+  });
+
+  it("keeps LaunchAgent not-loaded result when plist command is missing", async () => {
+    service.label = "LaunchAgent";
+    service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue(null);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install --force"],
+      opts: { json: true },
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; ok?: boolean };
+    expect(payload.ok).toBe(true);
+    expect(payload.result).toBe("not-loaded");
+  });
+
+  it("keeps non-LaunchAgent start behavior when service is not loaded", async () => {
+    service.label = "TestService";
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install --force"],
+      opts: { json: true },
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; ok?: boolean };
+    expect(payload.ok).toBe(true);
+    expect(payload.result).toBe("not-loaded");
+  });
+
+  it("propagates LaunchAgent restart failures as start failures", async () => {
+    service.label = "LaunchAgent";
+    service.isLoaded.mockResolvedValue(false);
+    service.restart.mockRejectedValue(new Error("launchctl error"));
+
+    await expect(
+      runServiceStart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => ["openclaw gateway install --force"],
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { ok?: boolean; error?: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toContain("Gateway start failed");
   });
 });

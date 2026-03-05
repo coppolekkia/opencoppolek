@@ -164,6 +164,45 @@ export async function runServiceStart(params: {
     return;
   }
   if (!loaded) {
+    if (params.service.label === "LaunchAgent") {
+      let hasLaunchAgentConfig = false;
+      try {
+        hasLaunchAgentConfig = (await params.service.readCommand(process.env)) != null;
+      } catch {
+        hasLaunchAgentConfig = false;
+      }
+      if (!hasLaunchAgentConfig) {
+        await handleServiceNotLoaded({
+          serviceNoun: params.serviceNoun,
+          service: params.service,
+          loaded,
+          renderStartHints: params.renderStartHints,
+          json,
+          emit,
+        });
+        return;
+      }
+      try {
+        await params.service.restart({ env: process.env, stdout });
+      } catch (err) {
+        const hints = params.renderStartHints();
+        fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
+        return;
+      }
+
+      let started = true;
+      try {
+        started = await params.service.isLoaded({ env: process.env });
+      } catch {
+        started = true;
+      }
+      emit({
+        ok: true,
+        result: "started",
+        service: buildDaemonServiceSnapshot(params.service, started),
+      });
+      return;
+    }
     await handleServiceNotLoaded({
       serviceNoun: params.serviceNoun,
       service: params.service,
