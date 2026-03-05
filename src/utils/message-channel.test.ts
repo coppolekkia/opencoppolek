@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../gateway/protocol/client-info.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createMSTeamsTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { resolveGatewayMessageChannel } from "./message-channel.js";
+import { isWebchatClient, resolveGatewayMessageChannel } from "./message-channel.js";
 
 const emptyRegistry = createTestRegistry([]);
 const msteamsPlugin: ChannelPlugin = {
@@ -30,5 +31,17 @@ describe("message-channel", () => {
       createTestRegistry([{ pluginId: "msteams", plugin: msteamsPlugin, source: "test" }]),
     );
     expect(resolveGatewayMessageChannel("teams")).toBe("msteams");
+  });
+
+  it("identifies control UI and webchat UI as webchat clients", () => {
+    expect(
+      isWebchatClient({ id: GATEWAY_CLIENT_IDS.WEBCHAT_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT }),
+    ).toBe(true);
+    expect(
+      isWebchatClient({ id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT }),
+    ).toBe(true);
+    expect(
+      isWebchatClient({ id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.UI }),
+    ).toBe(true);
   });
 });
