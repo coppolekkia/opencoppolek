@@ -211,3 +211,91 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 });
+
+describe("spawnSubagentDirect post-spawn verification", () => {
+  beforeEach(() => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockClear();
+    setupGatewayMock();
+  });
+
+  const ctx = {
+    agentSessionKey: "agent:main:main",
+    agentChannel: "telegram" as const,
+    agentAccountId: "123",
+    agentTo: "456",
+  };
+
+  it("retries once when spawned session evidence is missing, then accepts", async () => {
+    let agentAttempt = 0;
+    let childKey: string | undefined;
+    callGatewayMock.mockImplementation(async (opts: { method?: string; params?: unknown }) => {
+      if (opts.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (opts.method === "sessions.delete") {
+        return { ok: true };
+      }
+      if (opts.method === "agent") {
+        const params = (opts.params ?? {}) as { sessionKey?: string };
+        if (params.sessionKey) {
+          childKey = params.sessionKey;
+        }
+        agentAttempt += 1;
+        return { runId: `run-${agentAttempt}` };
+      }
+      if (opts.method === "sessions.list") {
+        const params = (opts.params ?? {}) as { spawnedBy?: string };
+        expect(params.spawnedBy).toBe("agent:main:main");
+        if (agentAttempt >= 2) {
+          return { sessions: childKey ? [{ key: childKey }] : [] };
+        }
+        return { sessions: [] };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect({ task: "test task" }, ctx);
+    expect(result.status).toBe("accepted");
+    expect(result.runId).toBe("run-2");
+
+    const agentCalls = callGatewayMock.mock.calls
+      .map((call) => call[0] as { method?: string; params?: { sessionKey?: string } })
+      .filter((call) => call.method === "agent");
+    expect(agentCalls).toHaveLength(2);
+    expect(
+      new Set(
+        agentCalls
+          .map((call) => call.params?.sessionKey)
+          .filter((value): value is string => Boolean(value)),
+      ).size,
+    ).toBe(1);
+  });
+
+  it("fails and cleans up when spawned session evidence is missing after retry", async () => {
+    callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (opts.method === "agent") {
+        return { runId: "run-missing" };
+      }
+      if (opts.method === "sessions.list") {
+        return { sessions: [] };
+      }
+      if (opts.method === "sessions.delete") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect({ task: "test task" }, ctx);
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("spawn verification failed");
+
+    const methods = callGatewayMock.mock.calls.map(
+      (call) => (call[0] as { method?: string }).method,
+    );
+    expect(methods.filter((method) => method === "agent")).toHaveLength(2);
+  });
+});

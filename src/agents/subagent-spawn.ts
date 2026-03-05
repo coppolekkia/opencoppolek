@@ -182,6 +182,38 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+const SUBAGENT_SPAWN_VERIFICATION_MAX_ATTEMPTS = 2;
+
+async function hasSpawnedSessionEvidence(params: {
+  requesterSessionKey: string;
+  childSessionKey: string;
+}): Promise<boolean> {
+  try {
+    const result = await callGateway<{
+      sessions?: Array<{
+        key?: string;
+      }>;
+    }>({
+      method: "sessions.list",
+      params: {
+        spawnedBy: params.requesterSessionKey,
+        // Keep verification bounded; we only need to find one key.
+        limit: 200,
+      },
+      timeoutMs: 5_000,
+    });
+    const sessions = result?.sessions;
+    if (!Array.isArray(sessions)) {
+      // If this gateway response shape is unavailable, skip strict verification.
+      return true;
+    }
+    return sessions.some((entry) => entry?.key === params.childSessionKey);
+  } catch {
+    // Best-effort verification: avoid failing a valid spawn on transient list errors.
+    return true;
+  }
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   childSessionKey: string;
@@ -697,34 +729,54 @@ export async function spawnSubagentDirect(
     .filter((line): line is string => Boolean(line))
     .join("\n\n");
 
-  const childIdem = crypto.randomUUID();
-  let childRunId: string = childIdem;
+  const spawnAttemptSeed = crypto.randomUUID();
+  let childRunId = "";
+  let spawnVerified = false;
   try {
-    const response = await callGateway<{ runId: string }>({
-      method: "agent",
-      params: {
-        message: childTaskMessage,
-        sessionKey: childSessionKey,
-        channel: requesterOrigin?.channel,
-        to: requesterOrigin?.to ?? undefined,
-        accountId: requesterOrigin?.accountId ?? undefined,
-        threadId: requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
-        idempotencyKey: childIdem,
-        deliver: false,
-        lane: AGENT_LANE_SUBAGENT,
-        extraSystemPrompt: childSystemPrompt,
-        thinking: thinkingOverride,
-        timeout: runTimeoutSeconds,
-        label: label || undefined,
-        spawnedBy: spawnedByKey,
-        groupId: ctx.agentGroupId ?? undefined,
-        groupChannel: ctx.agentGroupChannel ?? undefined,
-        groupSpace: ctx.agentGroupSpace ?? undefined,
-      },
-      timeoutMs: 10_000,
-    });
-    if (typeof response?.runId === "string" && response.runId) {
-      childRunId = response.runId;
+    for (let attempt = 1; attempt <= SUBAGENT_SPAWN_VERIFICATION_MAX_ATTEMPTS; attempt += 1) {
+      const childIdem = `${spawnAttemptSeed}:attempt:${attempt}`;
+      let attemptRunId: string = childIdem;
+      const response = await callGateway<{ runId: string }>({
+        method: "agent",
+        params: {
+          message: childTaskMessage,
+          sessionKey: childSessionKey,
+          channel: requesterOrigin?.channel,
+          to: requesterOrigin?.to ?? undefined,
+          accountId: requesterOrigin?.accountId ?? undefined,
+          threadId:
+            requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+          idempotencyKey: childIdem,
+          deliver: false,
+          lane: AGENT_LANE_SUBAGENT,
+          extraSystemPrompt: childSystemPrompt,
+          thinking: thinkingOverride,
+          timeout: runTimeoutSeconds,
+          label: label || undefined,
+          spawnedBy: spawnedByKey,
+          groupId: ctx.agentGroupId ?? undefined,
+          groupChannel: ctx.agentGroupChannel ?? undefined,
+          groupSpace: ctx.agentGroupSpace ?? undefined,
+        },
+        timeoutMs: 10_000,
+      });
+      if (typeof response?.runId === "string" && response.runId) {
+        attemptRunId = response.runId;
+      }
+      childRunId = attemptRunId;
+
+      if (
+        await hasSpawnedSessionEvidence({
+          requesterSessionKey: requesterInternalKey,
+          childSessionKey,
+        })
+      ) {
+        spawnVerified = true;
+        break;
+      }
+    }
+    if (!spawnVerified) {
+      throw new Error("spawn verification failed: missing spawned session evidence");
     }
   } catch (err) {
     if (attachmentAbsDir) {
@@ -782,7 +834,7 @@ export async function spawnSubagentDirect(
       status: "error",
       error: messageText,
       childSessionKey,
-      runId: childRunId,
+      runId: childRunId || undefined,
     };
   }
 
