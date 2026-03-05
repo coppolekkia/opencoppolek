@@ -452,4 +452,27 @@ describe("coerceFormValues", () => {
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     expect(coerced.flag).toBe(true);
   });
+
+  it("preserves large discord snowflake strings in string|number union arrays", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        enabled: { type: "boolean" },
+        users: {
+          type: "array",
+          items: {
+            anyOf: [{ type: "string" }, { type: "number" }],
+          },
+        },
+      },
+    };
+    const snowflake = "123456789012345678";
+    const form = { enabled: true, users: [snowflake] };
+
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    const users = coerced.users as unknown[];
+
+    expect(typeof users[0]).toBe("string");
+    expect(users[0]).toBe(snowflake);
+  });
 });

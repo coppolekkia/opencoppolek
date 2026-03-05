@@ -57,6 +57,7 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     const variants = (schema.anyOf ?? schema.oneOf ?? []).filter(
       (v) => !(v.type === "null" || (Array.isArray(v.type) && v.type.includes("null"))),
     );
+    const hasStringVariant = variants.some((variant) => schemaType(variant) === "string");
 
     if (variants.length === 1) {
       return coerceFormValues(value, variants[0]);
@@ -69,6 +70,14 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
         if (variantType === "number" || variantType === "integer") {
           const coerced = coerceNumberString(value, variantType === "integer");
           if (coerced === undefined || typeof coerced === "number") {
+            if (
+              hasStringVariant &&
+              typeof coerced === "number" &&
+              Number.isInteger(coerced) &&
+              !Number.isSafeInteger(coerced)
+            ) {
+              continue;
+            }
             return coerced;
           }
         }
