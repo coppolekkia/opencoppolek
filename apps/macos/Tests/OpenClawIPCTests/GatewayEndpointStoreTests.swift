@@ -75,6 +75,74 @@ import Testing
         #expect(password == "launchd-pass")
     }
 
+    @Test func resolveGatewayTokenUsesRemoteConfigInRemoteMode() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "token": " remote-token ",
+                ],
+            ],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: true,
+            root: root,
+            env: [:],
+            launchdSnapshot: nil)
+        #expect(token == "remote-token")
+    }
+
+    @Test func resolveGatewayPasswordUsesRemoteConfigInRemoteMode() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "password": " remote-password ",
+                ],
+            ],
+        ]
+
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: true,
+            root: root,
+            env: [:],
+            launchdSnapshot: nil)
+        #expect(password == "remote-password")
+    }
+
+    @Test func resolveGatewayTokenPrefersEnvOverRemoteConfig() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "token": "config-token",
+                ],
+            ],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: true,
+            root: root,
+            env: ["OPENCLAW_GATEWAY_TOKEN": "env-token"],
+            launchdSnapshot: nil)
+        #expect(token == "env-token")
+    }
+
+    @Test func resolveGatewayPasswordPrefersEnvOverRemoteConfig() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "password": "config-password",
+                ],
+            ],
+        ]
+
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: true,
+            root: root,
+            env: ["OPENCLAW_GATEWAY_PASSWORD": "env-password"],
+            launchdSnapshot: nil)
+        #expect(password == "env-password")
+    }
+
     @Test func connectionModeResolverPrefersConfigModeOverDefaults() {
         let defaults = self.makeDefaults()
         defaults.set("remote", forKey: connectionModeKey)
