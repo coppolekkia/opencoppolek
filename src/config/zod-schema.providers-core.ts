@@ -475,6 +475,12 @@ export const DiscordAccountSchema = z
       .strict()
       .optional(),
     ui: DiscordUiSchema,
+    agentComponents: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     slashCommand: z
       .object({
         ephemeral: z.boolean().optional(),

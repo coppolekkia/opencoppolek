@@ -85,4 +85,21 @@ describe("config discord", () => {
       ).toBe(true);
     }
   });
+
+  it("accepts discord agentComponents config", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          agentComponents: { enabled: true },
+          accounts: {
+            main: {
+              agentComponents: { enabled: false },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
