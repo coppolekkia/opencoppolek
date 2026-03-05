@@ -82,7 +82,20 @@ function normalizeMentionAlias(value: unknown): string {
   return normalizeToken(value);
 }
 
+type AgentMentionAliasCache = {
+  agentsRef: OpenClawConfig["agents"] | undefined;
+  aliases: Map<string, string>;
+};
+
+const agentMentionAliasCacheByCfg = new WeakMap<OpenClawConfig, AgentMentionAliasCache>();
+
 function buildAgentMentionAliasMap(cfg: OpenClawConfig): Map<string, string> {
+  const agentsRef = cfg.agents;
+  const existing = agentMentionAliasCacheByCfg.get(cfg);
+  if (existing && existing.agentsRef === agentsRef) {
+    return existing.aliases;
+  }
+
   const aliases = new Map<string, string>();
   const addAlias = (alias: unknown, agentId: string) => {
     const normalized = normalizeMentionAlias(alias);
@@ -103,6 +116,7 @@ function buildAgentMentionAliasMap(cfg: OpenClawConfig): Map<string, string> {
     addAlias(agent.identity?.name, rawId);
     addAlias(agent.identity?.name?.replace(/\s+/g, ""), rawId);
   }
+  agentMentionAliasCacheByCfg.set(cfg, { agentsRef, aliases });
   return aliases;
 }
 

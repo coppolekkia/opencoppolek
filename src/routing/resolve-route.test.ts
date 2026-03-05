@@ -827,6 +827,45 @@ describe("mention-based explicit routing", () => {
     expect(route.matchedBy).toBe("mention");
   });
 
+  test("mention alias cache refreshes when agents reference changes", () => {
+    const mutableCfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "tim", name: "Tim" },
+        ],
+      },
+    };
+
+    const first = resolveAgentRoute({
+      cfg: mutableCfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "@tim first ping",
+    });
+    expect(first.agentId).toBe("tim");
+    expect(first.matchedBy).toBe("mention");
+
+    mutableCfg.agents = {
+      list: [
+        { id: "main", default: true },
+        { id: "tim", name: "Tim" },
+        { id: "steve", name: "Steve" },
+      ],
+    };
+
+    const second = resolveAgentRoute({
+      cfg: mutableCfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "@steve second ping",
+    });
+    expect(second.agentId).toBe("steve");
+    expect(second.matchedBy).toBe("mention");
+  });
+
   test("mention routes do not poison cache for subsequent plain messages", () => {
     const mentioned = resolveAgentRoute({
       cfg,
