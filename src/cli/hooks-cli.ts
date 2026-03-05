@@ -87,7 +87,9 @@ function resolveHookForToggle(
     );
   }
   if (opts?.requireEligible && !hook.eligible) {
-    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
+    // Surface the most specific reason so users understand why enable was rejected
+    const reason = hook.events.length === 0 ? "no events defined" : "missing requirements";
+    throw new Error(`Hook "${hookName}" is not eligible (${reason})`);
   }
   return hook;
 }
@@ -122,6 +124,9 @@ function formatHookStatus(hook: HookStatusEntry): string {
   }
   if (hook.disabled) {
     return theme.warn("⏸ disabled");
+  }
+  if (hook.events.length === 0) {
+    return theme.warn("⚠ no events");
   }
   return theme.error("✗ missing");
 }
@@ -336,7 +341,9 @@ export function formatHookInfo(
     ? theme.success("✓ Ready")
     : hook.disabled
       ? theme.warn("⏸ Disabled")
-      : theme.error("✗ Missing requirements");
+      : hook.events.length === 0
+        ? theme.warn("⚠ No events defined")
+        : theme.error("✗ Missing requirements");
 
   lines.push(`${emoji} ${theme.heading(hook.name)} ${status}`);
   lines.push("");
@@ -428,6 +435,7 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
           eligible: eligible.map((h) => h.name),
           notEligible: notEligible.map((h) => ({
             name: h.name,
+            events: h.events,
             missing: h.missing,
           })),
         },
@@ -454,6 +462,12 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
       const reasons = [];
       if (hook.disabled) {
         reasons.push("disabled");
+      } else if (hook.events.length === 0) {
+        // Sole reason — missing-requirement details would mislead the user
+        // into fixing the wrong thing when the real issue is no events defined.
+        reasons.push("no events defined");
+        lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
+        continue;
       }
       if (hook.missing.bins.length > 0) {
         reasons.push(`bins: ${hook.missing.bins.join(", ")}`);
