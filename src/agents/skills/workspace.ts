@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  formatSkillsForPrompt,
+  formatSkillsForPrompt as formatSkillsForPromptFromSdk,
   loadSkillsFromDir,
   type Skill,
 } from "@mariozechner/pi-coding-agent";
@@ -418,8 +418,9 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
   let truncated = total > byCount.length;
   let truncatedReason: "count" | "chars" | null = truncated ? "count" : null;
 
+  const formatMode = params.config?.skills?.promptMode ?? "full";
   const fits = (skills: Skill[]): boolean => {
-    const block = formatSkillsForPrompt(skills);
+    const block = formatSkillsForPrompt(skills, formatMode);
     return block.length <= limits.maxSkillsPromptChars;
   };
 
@@ -479,6 +480,31 @@ type WorkspaceSkillBuildOptions = {
   eligibility?: SkillEligibilityContext;
 };
 
+function formatSkillsForPrompt(
+  skills: Skill[],
+  mode: "full" | "compact" | "lazy" = "full",
+): string {
+  if (mode === "lazy") {
+    return "";
+  }
+  if (mode === "compact") {
+    const blocks = skills.map((skill) => {
+      const normalized = (skill.description ?? "").replace(/\s+/g, " ").trim();
+      const firstSentence = normalized.split(/(?<=[.!?])\s+/)[0]?.trim() ?? "";
+      return [
+        "<available_skill>",
+        `  <name>${skill.name}</name>`,
+        `  <description>${firstSentence || skill.description || ""}</description>`,
+        "</available_skill>",
+      ].join("\n");
+    });
+    return ["<available_skills>", ...blocks, "</available_skills>"].join("\n");
+  }
+  return formatSkillsForPromptBase(skills);
+}
+
+const formatSkillsForPromptBase = formatSkillsForPromptFromSdk;
+
 function resolveWorkspaceSkillPromptState(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions,
@@ -506,10 +532,11 @@ function resolveWorkspaceSkillPromptState(
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
+  const promptMode = opts?.config?.skills?.promptMode ?? "full";
   const prompt = [
     remoteNote,
     truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt), promptMode),
   ]
     .filter(Boolean)
     .join("\n");
