@@ -148,7 +148,9 @@ async function downloadToFile(
       return;
     }
     if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-      reject(new Error(`Invalid URL protocol: ${parsedUrl.protocol}. Only HTTP/HTTPS allowed.`));
+      reject(
+        new Error(`Invalid URL protocol: ${parsedUrl.protocol} (${url}). Only HTTP/HTTPS allowed.`),
+      );
       return;
     }
     const requestImpl = parsedUrl.protocol === "https:" ? httpsRequestImpl : httpRequestImpl;
