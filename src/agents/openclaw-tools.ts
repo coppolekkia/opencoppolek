@@ -14,6 +14,10 @@ import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import {
+  createSessionMemoryRecallTool,
+  createSessionMemorySignalTool,
+} from "./tools/session-memory-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -75,6 +79,12 @@ export function createOpenClawTools(options?: {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
 }): AnyAgentTool[] {
+  const agentId =
+    options?.requesterAgentIdOverride ??
+    resolveSessionAgentId({
+      sessionKey: options?.agentSessionKey,
+      config: options?.config,
+    });
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
@@ -125,6 +135,16 @@ export function createOpenClawTools(options?: {
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const sessionMemoryRecallTool = createSessionMemoryRecallTool({
+    config: options?.config,
+    agentId,
+    sessionId: options?.sessionId,
+  });
+  const sessionMemorySignalTool = createSessionMemorySignalTool({
+    config: options?.config,
+    agentId,
+    sessionId: options?.sessionId,
+  });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -189,6 +209,8 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
+    ...(sessionMemoryRecallTool ? [sessionMemoryRecallTool] : []),
+    ...(sessionMemorySignalTool ? [sessionMemorySignalTool] : []),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
@@ -200,10 +222,7 @@ export function createOpenClawTools(options?: {
       config: options?.config,
       workspaceDir,
       agentDir: options?.agentDir,
-      agentId: resolveSessionAgentId({
-        sessionKey: options?.agentSessionKey,
-        config: options?.config,
-      }),
+      agentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
       messageChannel: options?.agentChannel,
