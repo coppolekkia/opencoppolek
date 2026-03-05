@@ -14,6 +14,72 @@ const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_PENDING_MAX = 3;
+
+/**
+ * Brute-force protection for pairing code approval.
+ * After MAX_PAIRING_APPROVE_FAILURES consecutive failures per channel,
+ * further attempts are blocked for PAIRING_APPROVE_COOLDOWN_MS.
+ * Individual pairing requests are also expired after
+ * MAX_PAIRING_REQUEST_FAILURES failed guesses against them.
+ * See: https://github.com/openclaw/openclaw/issues/16458
+ */
+const MAX_PAIRING_APPROVE_FAILURES = 10;
+const PAIRING_APPROVE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_PAIRING_REQUEST_FAILURES = 5;
+
+type PairingApproveAttemptState = {
+  failures: number;
+  lastFailureAtMs: number;
+};
+
+/**
+ * In-memory rate-limit state for pairing code approval attempts.
+ * Keyed by `${channel}:${accountId ?? ""}`.  Reset on successful approval
+ * or after the cooldown window elapses.
+ */
+const pairingApproveAttempts = new Map<string, PairingApproveAttemptState>();
+
+function pairingApproveKey(channel: PairingChannel, accountId?: string): string {
+  return `${channel}:${accountId?.trim().toLowerCase() ?? ""}`;
+}
+
+function isPairingApproveCoolingDown(key: string, nowMs: number): boolean {
+  const state = pairingApproveAttempts.get(key);
+  if (!state) {
+    return false;
+  }
+  if (state.failures < MAX_PAIRING_APPROVE_FAILURES) {
+    return false;
+  }
+  if (nowMs - state.lastFailureAtMs > PAIRING_APPROVE_COOLDOWN_MS) {
+    // Cooldown expired — reset.
+    pairingApproveAttempts.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function recordPairingApproveFailure(key: string, nowMs: number): void {
+  const state = pairingApproveAttempts.get(key);
+  if (state && nowMs - state.lastFailureAtMs > PAIRING_APPROVE_COOLDOWN_MS) {
+    // Window expired — start fresh.
+    pairingApproveAttempts.set(key, { failures: 1, lastFailureAtMs: nowMs });
+    return;
+  }
+  pairingApproveAttempts.set(key, {
+    failures: (state?.failures ?? 0) + 1,
+    lastFailureAtMs: nowMs,
+  });
+}
+
+function resetPairingApproveFailures(key: string): void {
+  pairingApproveAttempts.delete(key);
+}
+
+/** Exported for testing only. */
+export function _resetPairingApproveState(): void {
+  pairingApproveAttempts.clear();
+}
 const PAIRING_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
@@ -42,6 +108,8 @@ export type PairingRequest = {
   createdAt: string;
   lastSeenAt: string;
   meta?: Record<string, string>;
+  /** Number of failed approval attempts against this request's code. */
+  failedAttempts?: number;
 };
 
 type PairingStore = {
@@ -800,6 +868,14 @@ export async function approveChannelPairingCode(params: {
     return null;
   }
 
+  const nowMs = Date.now();
+  const attemptKey = pairingApproveKey(params.channel, params.accountId);
+
+  // Rate-limit check: reject immediately if too many recent failures.
+  if (isPairingApproveCoolingDown(attemptKey, nowMs)) {
+    return null;
+  }
+
   const filePath = resolvePairingPath(params.channel, env);
   return await withFileLock(
     filePath,
@@ -814,10 +890,32 @@ export async function approveChannelPairingCode(params: {
         return requestMatchesAccountId(r, normalizedAccountId);
       });
       if (idx < 0) {
-        if (removed) {
+        // Wrong code — record the failure.
+        recordPairingApproveFailure(attemptKey, nowMs);
+
+        // Increment failedAttempts on all matching requests and expire
+        // any that have exceeded the per-request threshold.
+        let requestsChanged = removed;
+        const surviving: PairingRequest[] = [];
+        for (const req of pruned) {
+          if (!requestMatchesAccountId(req, normalizedAccountId)) {
+            surviving.push(req);
+            continue;
+          }
+          const attempts = (req.failedAttempts ?? 0) + 1;
+          if (attempts >= MAX_PAIRING_REQUEST_FAILURES) {
+            // Too many failed guesses against this request — expire it.
+            requestsChanged = true;
+            continue;
+          }
+          surviving.push({ ...req, failedAttempts: attempts });
+          requestsChanged = true;
+        }
+
+        if (requestsChanged) {
           await writeJsonFile(filePath, {
             version: 1,
-            requests: pruned,
+            requests: surviving,
           } satisfies PairingStore);
         }
         return null;
@@ -826,6 +924,9 @@ export async function approveChannelPairingCode(params: {
       if (!entry) {
         return null;
       }
+      // Success — reset rate-limit state.
+      resetPairingApproveFailures(attemptKey);
+
       pruned.splice(idx, 1);
       await writeJsonFile(filePath, {
         version: 1,
