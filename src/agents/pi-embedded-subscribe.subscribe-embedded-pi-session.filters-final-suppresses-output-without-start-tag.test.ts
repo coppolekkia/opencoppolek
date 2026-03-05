@@ -37,7 +37,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onPartialReply).not.toHaveBeenCalled();
   });
-  it("suppresses agent events on message_end without <final> tags when enforced", () => {
+  it("falls back to raw text on message_end without <final> tags when enforced and nothing was streamed", () => {
     const { session, emit } = createStubSessionHarness();
 
     const onAgentEvent = vi.fn();
@@ -49,8 +49,29 @@ describe("subscribeEmbeddedPiSession", () => {
       onAgentEvent,
     });
     emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
-    // With enforceFinalTag, text without <final> tags is treated as leaked
-    // reasoning and should NOT be recovered by the message_end fallback.
+    // When enforceFinalTag is true but no assistant event was emitted during
+    // streaming, the message_end fallback fires so the response isn't silently
+    // dropped (#34537).  Thinking tags are stripped in the fallback path.
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].text).toBe("Hello world");
+  });
+  it("suppresses thinking-only text on message_end when enforceFinalTag is true", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onAgentEvent,
+    });
+    emitMessageStartAndEndForAssistantText({
+      emit,
+      text: "<think>internal reasoning only</think>",
+    });
+    // Thinking-only content is correctly stripped and nothing is emitted.
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(0);
   });

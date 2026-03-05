@@ -16,6 +16,7 @@ import {
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  stripThinkingTagsFromText,
 } from "./pi-embedded-utils.js";
 
 const stripTrailingDirective = (text: string): string => {
@@ -288,10 +289,20 @@ export function handleMessageEnd(
   let mediaUrls = parsedText?.mediaUrls;
   let hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
 
-  if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
+  // Fallback: if no cleaned text was produced, try using the raw text.
+  // When enforceFinalTag is true, only fall back if no assistant event was
+  // emitted during streaming — otherwise the model simply didn't produce
+  // <final> tags and the response would be silently dropped (#34537).
+  if (
+    !cleanedText &&
+    !hasMedia &&
+    (!ctx.params.enforceFinalTag || !ctx.state.emittedAssistantUpdate)
+  ) {
     const rawTrimmed = rawText.trim();
     const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
-    const rawCandidate = rawStrippedFinal || rawTrimmed;
+    // Strip thinking tags so reasoning content doesn't leak in the fallback.
+    const rawStripped = stripThinkingTagsFromText(rawStrippedFinal || rawTrimmed);
+    const rawCandidate = rawStripped.trim();
     if (rawCandidate) {
       const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
       cleanedText = parsedFallback.text ?? rawCandidate;
