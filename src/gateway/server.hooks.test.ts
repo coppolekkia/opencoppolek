@@ -42,6 +42,18 @@ async function postHook(
   });
 }
 
+async function waitForSessionEvent(sessionKey: string, timeoutMs = 2000): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = peekSystemEvents(sessionKey);
+    if (events.length > 0) {
+      return events;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timeout waiting for system event in ${sessionKey}`);
+}
+
 function setMainAndHooksAgents(): void {
   testState.agentsConfig = {
     list: [{ id: "main", default: true }, { id: "hooks" }],
@@ -246,6 +258,34 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("posts hook summaries to the requested session key instead of main", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["agent:"],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      const targetSessionKey = "agent:main:whatsapp:dm:+15550001111";
+      mockIsolatedRunOkOnce();
+
+      const resAgent = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        sessionKey: targetSessionKey,
+      });
+      expect(resAgent.status).toBe(200);
+
+      const targetEvents = await waitForSessionEvent(targetSessionKey);
+      expect(targetEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+
+      drainSystemEvents(targetSessionKey);
+    });
+  });
+
   test("normalizes duplicate target-agent prefixes before isolated dispatch", async () => {
     testState.hooksConfig = {
       enabled: true,
@@ -264,14 +304,84 @@ describe("gateway server hooks", () => {
         sessionKey: "agent:hooks:slack:channel:c123",
       });
       expect(resAgent.status).toBe(200);
-      await waitForSystemEvent();
+      const requestedSessionKey = "agent:hooks:slack:channel:c123";
+      const notifyEvents = await waitForSessionEvent(requestedSessionKey);
+      expect(notifyEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
 
       const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string; job?: { agentId?: string } }
         | undefined;
       expect(routedCall?.job?.agentId).toBe("hooks");
       expect(routedCall?.sessionKey).toBe("slack:channel:c123");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents("slack:channel:c123")).toEqual([]);
+      expect(peekSystemEvents(resolveMainKey())).toEqual([]);
+      drainSystemEvents(requestedSessionKey);
+    });
+  });
+
+  test("canonicalizes notify lane when request session key uses mixed-case agent prefix", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+    };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+
+      const resAgent = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        agentId: "hooks",
+        sessionKey: "agent:HOOKS:slack:channel:c123",
+      });
+      expect(resAgent.status).toBe(200);
+
+      const canonicalNotifyKey = "agent:hooks:slack:channel:c123";
+      const notifyEvents = await waitForSessionEvent(canonicalNotifyKey);
+      expect(notifyEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+
+      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string; job?: { agentId?: string } }
+        | undefined;
+      expect(routedCall?.job?.agentId).toBe("hooks");
+      expect(routedCall?.sessionKey).toBe("slack:channel:c123");
+      expect(peekSystemEvents("agent:HOOKS:slack:channel:c123")).toEqual([]);
+      drainSystemEvents(canonicalNotifyKey);
+    });
+  });
+
+  test("canonicalizes cross-agent notify lane when request session key uses mixed-case agent prefix", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+    };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+
+      const resAgent = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        agentId: "main",
+        sessionKey: "agent:HOOKS:slack:channel:c123",
+      });
+      expect(resAgent.status).toBe(200);
+
+      const canonicalNotifyKey = "agent:hooks:slack:channel:c123";
+      const notifyEvents = await waitForSessionEvent(canonicalNotifyKey);
+      expect(notifyEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+
+      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string; job?: { agentId?: string } }
+        | undefined;
+      expect(routedCall?.job?.agentId).toBe("main");
+      expect(routedCall?.sessionKey).toBe(canonicalNotifyKey);
+      expect(peekSystemEvents("agent:HOOKS:slack:channel:c123")).toEqual([]);
+      drainSystemEvents(canonicalNotifyKey);
     });
   });
 

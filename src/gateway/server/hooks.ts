@@ -7,6 +7,7 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   normalizeHookDispatchSessionKey,
   type HookAgentDispatchPayload,
@@ -34,11 +35,26 @@ export function createGatewayHooksRequestHandler(params: {
   };
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
+    const requestedSessionKey = value.sessionKey.trim();
     const sessionKey = normalizeHookDispatchSessionKey({
-      sessionKey: value.sessionKey,
+      sessionKey: requestedSessionKey,
       targetAgentId: value.agentId,
     });
     const mainSessionKey = resolveMainSessionKeyFromConfig();
+    let notifySessionKey = sessionKey || mainSessionKey;
+    if (requestedSessionKey && requestedSessionKey !== sessionKey) {
+      const parsedRequested = parseAgentSessionKey(requestedSessionKey);
+      const targetAgentId = value.agentId ? normalizeAgentId(value.agentId) : undefined;
+      if (
+        parsedRequested &&
+        targetAgentId &&
+        normalizeAgentId(parsedRequested.agentId) === targetAgentId
+      ) {
+        notifySessionKey = `agent:${targetAgentId}:${sessionKey}`;
+      } else {
+        notifySessionKey = sessionKey || mainSessionKey;
+      }
+    }
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
@@ -75,14 +91,14 @@ export function createGatewayHooksRequestHandler(params: {
           job,
           message: value.message,
           sessionKey,
-          lane: "cron",
+          lane: "hook",
         });
         const summary = result.summary?.trim() || result.error?.trim() || result.status;
         const prefix =
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
         if (!result.delivered) {
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-            sessionKey: mainSessionKey,
+            sessionKey: notifySessionKey,
           });
           if (value.wakeMode === "now") {
             requestHeartbeatNow({ reason: `hook:${jobId}` });
@@ -91,7 +107,7 @@ export function createGatewayHooksRequestHandler(params: {
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
         enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
-          sessionKey: mainSessionKey,
+          sessionKey: notifySessionKey,
         });
         if (value.wakeMode === "now") {
           requestHeartbeatNow({ reason: `hook:${jobId}:error` });
