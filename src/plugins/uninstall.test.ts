@@ -308,6 +308,140 @@ describe("removePluginFromConfig", () => {
     expect(result.plugins?.enabled).toBe(true);
     expect(result.plugins?.deny).toEqual(["denied-plugin"]);
   });
+
+  it("removes channel config for extension plugin", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          timbot: { enabled: true },
+        },
+      },
+      channels: {
+        timbot: { sdkAppId: "123", secretKey: "abc" },
+        telegram: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "timbot");
+
+    expect((result.channels as Record<string, unknown>)?.timbot).toBeUndefined();
+    expect((result.channels as Record<string, unknown>)?.telegram).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("removes channel config for built-in channel plugin", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+      channels: {
+        telegram: { enabled: true },
+        discord: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "telegram");
+
+    expect((result.channels as Record<string, unknown>)?.telegram).toBeUndefined();
+    expect((result.channels as Record<string, unknown>)?.discord).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("cleans up channels object when removing the only channel config", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          timbot: { enabled: true },
+        },
+      },
+      channels: {
+        timbot: { sdkAppId: "123" },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "timbot");
+
+    expect(result.channels).toBeUndefined();
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("does not set channelConfig action when no channel config exists", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+      },
+    };
+
+    const { actions } = removePluginFromConfig(config, "my-plugin");
+
+    expect(actions.channelConfig).toBe(false);
+  });
+
+  it("does not remove aliased channel config when plugin id matches an alias", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          gchat: { enabled: true },
+        },
+      },
+      channels: {
+        googlechat: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "gchat");
+
+    // gchat is an alias for googlechat, but the plugin "gchat" is not the googlechat channel;
+    // channels.googlechat must remain untouched.
+    expect((result.channels as Record<string, unknown>)?.googlechat).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(false);
+  });
+
+  it("prefers exact pluginId key over normalized alias", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          gchat: { enabled: true },
+        },
+      },
+      channels: {
+        gchat: { token: "abc" },
+        googlechat: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "gchat");
+
+    // Should remove channels.gchat (exact match), not channels.googlechat (alias target).
+    expect((result.channels as Record<string, unknown>)?.gchat).toBeUndefined();
+    expect((result.channels as Record<string, unknown>)?.googlechat).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("does not remove shared channel config keys like defaults or modelByChannel", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          defaults: { enabled: true },
+        },
+      },
+      channels: {
+        defaults: { groupPolicy: "disabled" },
+        telegram: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "defaults");
+
+    expect((result.channels as Record<string, unknown>)?.defaults).toEqual({
+      groupPolicy: "disabled",
+    });
+    expect(actions.channelConfig).toBe(false);
+  });
 });
 
 describe("uninstallPlugin", () => {

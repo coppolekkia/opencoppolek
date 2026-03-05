@@ -11,6 +11,7 @@ export type UninstallActions = {
   allowlist: boolean;
   loadPath: boolean;
   memorySlot: boolean;
+  channelConfig: boolean;
   directory: boolean;
 };
 
@@ -60,7 +61,7 @@ export function resolveUninstallDirectoryTarget(params: {
 
 /**
  * Remove plugin references from config (pure config mutation).
- * Returns a new config with the plugin removed from entries, installs, allow, load.paths, and slots.
+ * Returns a new config with the plugin removed from entries, installs, allow, load.paths, slots, and channels.
  */
 export function removePluginFromConfig(
   cfg: OpenClawConfig,
@@ -72,6 +73,7 @@ export function removePluginFromConfig(
     allowlist: false,
     loadPath: false,
     memorySlot: false,
+    channelConfig: false,
   };
 
   const pluginsConfig = cfg.plugins ?? {};
@@ -155,9 +157,22 @@ export function removePluginFromConfig(
     delete cleanedPlugins.slots;
   }
 
+  // Remove channel config entry matching the plugin id.
+  // Only remove channels[pluginId] by exact match to avoid alias collisions
+  // (e.g. uninstalling a plugin named "gchat" must not delete channels.googlechat).
+  // Skip shared config keys that are not channel ids.
+  const CHANNELS_SHARED_KEYS = new Set(["defaults", "modelByChannel"]);
+  let channels = cfg.channels as Record<string, unknown> | undefined;
+  if (channels && pluginId in channels && !CHANNELS_SHARED_KEYS.has(pluginId)) {
+    const { [pluginId]: _, ...rest } = channels;
+    channels = Object.keys(rest).length > 0 ? rest : undefined;
+    actions.channelConfig = true;
+  }
+
   const config: OpenClawConfig = {
     ...cfg,
     plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+    channels: channels as OpenClawConfig["channels"],
   };
 
   return { config, actions };
