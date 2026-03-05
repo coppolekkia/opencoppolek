@@ -23,7 +23,7 @@ The default workspace layout uses two memory layers:
   - Read today + yesterday at session start.
 - `MEMORY.md` (optional)
   - Curated long-term memory.
-  - **Only load in the main, private session** (never in group contexts).
+  - **Loaded in all non-subagent sessions** (main + channel sessions). Sub-agents and cron sessions use the minimal bootstrap allowlist, so `MEMORY.md` is not injected there.
 
 These files live under the workspace (`agents.defaults.workspace`, default
 `~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.

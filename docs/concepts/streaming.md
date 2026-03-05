@@ -132,7 +132,10 @@ Legacy key migration:
 
 - Telegram: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
 - Discord: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
-- Slack: `streamMode` auto-migrates to `streaming` enum; boolean `streaming` auto-migrates to `nativeStreaming`.
+- Slack: `streamMode` auto-migrates to `streaming` enum. Boolean `streaming` by
+  itself normalizes both the canonical `streaming` mode and `nativeStreaming`;
+  if `streamMode` is also present, `streamMode` still determines preview
+  behavior and the boolean only migrates to `nativeStreaming`.
 
 ### Runtime behavior
 

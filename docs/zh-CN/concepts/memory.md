@@ -28,7 +28,7 @@ OpenClaw 记忆是**智能体工作空间中的纯 Markdown 文件**。这些文
   - 在会话开始时读取今天和昨天的内容。
 - `MEMORY.md`（可选）
   - 精心整理的长期记忆。
-  - **仅在主要的私人会话中加载**（绝不在群组上下文中加载）。
+  - **在所有非子智能体会话中加载**（主会话 + 频道会话）。子智能体和 cron 会话使用最小引导文件白名单，因此不会注入 `MEMORY.md`。
 
 这些文件位于工作空间下（`agents.defaults.workspace`，默认 `~/.openclaw/workspace`）。完整布局参见[智能体工作空间](/concepts/agent-workspace)。
 

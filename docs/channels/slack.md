@@ -481,10 +481,10 @@ OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
 
 `channels.slack.streaming` controls live preview behavior:
 
-- `off`: disable live preview streaming.
-- `partial` (default): replace preview text with the latest partial output.
-- `block`: append chunked preview updates.
-- `progress`: show progress status text while generating, then send final text.
+- `"off"`: disable live preview streaming entirely (use this to stop draft previews; must be quoted — bare `off` is a YAML boolean).
+- `"partial"` (default): replace preview text with the latest partial output.
+- `"block"`: append chunked preview updates.
+- `"progress"`: show progress status text while generating, then send final text.
 
 `channels.slack.nativeStreaming` controls Slack's native streaming API (`chat.startStream` / `chat.appendStream` / `chat.stopStream`) when `streaming` is `partial` (default: `true`).
 
@@ -500,7 +500,13 @@ channels:
 Legacy keys:
 
 - `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming`.
-- boolean `channels.slack.streaming` is auto-migrated to `channels.slack.nativeStreaming`.
+- boolean `channels.slack.streaming` is normalized to the canonical `channels.slack.streaming` enum and `channels.slack.nativeStreaming`.
+
+Legacy boolean note: when boolean `streaming` is used by itself, `streaming: false`
+is normalized to `streaming: "off"` with `nativeStreaming: false`. If legacy
+`streamMode` is also present, `streamMode` still determines preview behavior and
+the boolean only affects `nativeStreaming`. Prefer the canonical `streaming` enum
+in new configs.
 
 ### Requirements
 

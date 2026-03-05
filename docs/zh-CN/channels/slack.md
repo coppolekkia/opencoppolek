@@ -495,6 +495,52 @@ Slack 仅使用 Socket Mode（无 HTTP webhook 服务器）。提供两个令牌
 - `systemPrompt`：频道的额外系统提示（与主题/目的组合）。
 - `enabled`：设置为 `false` 以禁用频道。
 
+## 文本流式传输
+
+OpenClaw 通过 Agents and AI Apps API 支持 Slack 原生文本流式传输。
+
+`channels.slack.streaming` 控制实时预览行为：
+
+- `"off"`：完全禁用实时预览流式传输（要停止草稿预览时使用此值）。
+- `partial`（默认）：用最新的部分输出替换预览文本。
+- `block`：追加分块的预览更新。
+- `progress`：在生成期间显示进度状态文本，然后发送最终文本。
+
+`channels.slack.nativeStreaming` 控制 Slack 的原生流式 API（`chat.startStream` / `chat.appendStream` / `chat.stopStream`）在 `streaming` 为 `partial` 时的行为（默认：`true`）。
+
+禁用 Slack 原生流式传输（保留草稿预览行为）：
+
+```yaml
+channels:
+  slack:
+    streaming: partial
+    nativeStreaming: false
+```
+
+旧键：
+
+- `channels.slack.streamMode`（`replace | status_final | append`）会自动迁移为 `channels.slack.streaming`。
+- 布尔型 `channels.slack.streaming` 会规范化为标准的 `channels.slack.streaming` 枚举值和 `channels.slack.nativeStreaming`。
+
+旧布尔值说明：当布尔型 `streaming` 单独使用时，`streaming: false` 会规范化为
+`streaming: "off"` 加 `nativeStreaming: false`。如果同时还存在旧版
+`streamMode`，预览行为仍由 `streamMode` 决定，而布尔值只会影响
+`nativeStreaming`。新配置中更推荐直接使用标准的 `streaming` 枚举值。
+
+### 要求
+
+1. 在 Slack 应用设置中启用 **Agents and AI Apps**。
+2. 确保应用具有 `assistant:write` 权限范围。
+3. 该消息必须可用回复线程。线程选择仍然遵循 `replyToMode`。
+
+### 行为
+
+- 第一个文本块会启动流（`chat.startStream`）。
+- 后续文本块会追加到同一个流中（`chat.appendStream`）。
+- 回复结束时会完成该流（`chat.stopStream`）。
+- 媒体和非文本负载会回退为普通投递。
+- 如果流式传输在回复过程中失败，OpenClaw 会对剩余负载回退为普通投递。
+
 ## 投递目标
 
 与 cron/CLI 发送一起使用：
