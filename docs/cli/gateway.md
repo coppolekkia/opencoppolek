@@ -105,6 +105,11 @@ Options:
 - `--no-probe`: skip the RPC probe (service-only view).
 - `--deep`: scan system-level services too.
 
+Notes:
+
+- `gateway status` resolves configured auth SecretRefs for probe auth when possible.
+- If a required auth SecretRef is unresolved in this command path, probe auth can fail; pass `--token`/`--password` explicitly or resolve the secret source first.
+
 ### `gateway probe`
 
 `gateway probe` is the “debug everything” command. It always probes:
@@ -162,6 +167,8 @@ openclaw gateway uninstall
 Notes:
 
 - `gateway install` supports `--port`, `--runtime`, `--token`, `--force`, `--json`.
+- When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `gateway install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
+- If token auth requires a token and the configured token SecretRef is unresolved, install fails closed instead of persisting fallback plaintext.
 - Lifecycle commands accept `--json` for scripting.
 
 ## Discover gateways (Bonjour)

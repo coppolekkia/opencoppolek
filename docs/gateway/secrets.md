@@ -49,8 +49,9 @@ Examples of inactive surfaces:
 
 ## Gateway auth surface diagnostics
 
-When a SecretRef is configured on `gateway.auth.password`, `gateway.remote.token`, or
-`gateway.remote.password`, gateway startup/reload logs the surface state explicitly:
+When a SecretRef is configured on `gateway.auth.token`, `gateway.auth.password`,
+`gateway.remote.token`, or `gateway.remote.password`, gateway startup/reload logs the
+surface state explicitly:
 
 - `active`: the SecretRef is part of the effective auth surface and must resolve.
 - `inactive`: the SecretRef is ignored for this runtime because another auth surface wins, or
@@ -65,6 +66,7 @@ When onboarding runs in interactive mode and you choose SecretRef storage, OpenC
 
 - Env refs: validates env var name and confirms a non-empty value is visible during onboarding.
 - Provider refs (`file` or `exec`): validates provider selection, resolves `id`, and checks resolved value type.
+- Quickstart reuse path: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, and `exec` refs) using the same fail-fast gate.
 
 If validation fails, onboarding shows the error and lets you retry.
 
