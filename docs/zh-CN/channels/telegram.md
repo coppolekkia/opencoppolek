@@ -471,6 +471,8 @@ OpenClaw 支持接收和发送 Telegram 贴纸，并具有智能缓存功能。
 
 **缓存位置：** `~/.openclaw/telegram/sticker-cache.json`
 
+**缓存上限：** 最多 1000 条，超出时会自动淘汰最早的记录。
+
 **缓存条目格式：**
 
 ```json

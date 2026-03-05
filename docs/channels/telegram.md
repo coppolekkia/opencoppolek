@@ -540,6 +540,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Stickers are described once (when possible) and cached to reduce repeated vision calls.
 
+    Cache size is capped at 1000 stickers; when exceeded, the oldest entries are evicted automatically.
+
     Enable sticker actions:
 
 ```json5

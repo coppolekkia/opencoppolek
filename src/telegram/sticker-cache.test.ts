@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MAX_STICKER_CACHE_ENTRIES,
   cacheSticker,
   getAllCachedStickers,
   getCachedSticker,
@@ -112,6 +113,21 @@ describe("sticker-cache", () => {
       const result = getCachedSticker("unique789");
       expect(result?.description).toBe("Updated description");
       expect(result?.fileId).toBe("file789-new");
+    });
+
+    it("evicts oldest entries when cache exceeds max size", () => {
+      for (let i = 0; i < MAX_STICKER_CACHE_ENTRIES + 1; i += 1) {
+        cacheSticker({
+          fileId: `file-${i}`,
+          fileUniqueId: `unique-${i}`,
+          description: `Sticker ${i}`,
+          cachedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
+        });
+      }
+
+      expect(getCacheStats().count).toBe(MAX_STICKER_CACHE_ENTRIES);
+      expect(getCachedSticker("unique-0")).toBeNull();
+      expect(getCachedSticker(`unique-${MAX_STICKER_CACHE_ENTRIES}`)).not.toBeNull();
     });
   });
 

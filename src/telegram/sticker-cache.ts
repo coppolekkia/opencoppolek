@@ -16,6 +16,7 @@ import { resolveAutoImageModel } from "../media-understanding/runner.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
+export const MAX_STICKER_CACHE_ENTRIES = 1000;
 
 export interface CachedSticker {
   fileId: string;
@@ -49,6 +50,26 @@ function saveCache(cache: StickerCache): void {
   saveJsonFile(CACHE_FILE, cache);
 }
 
+function stickerCachedAtMs(sticker: CachedSticker): number {
+  const parsed = Date.parse(sticker.cachedAt);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function pruneCacheIfNeeded(cache: StickerCache): void {
+  const entries = Object.entries(cache.stickers);
+  if (entries.length <= MAX_STICKER_CACHE_ENTRIES) {
+    return;
+  }
+  const overflow = entries.length - MAX_STICKER_CACHE_ENTRIES;
+  const oldestIds = entries
+    .toSorted(([, a], [, b]) => stickerCachedAtMs(a) - stickerCachedAtMs(b))
+    .slice(0, overflow)
+    .map(([id]) => id);
+  for (const id of oldestIds) {
+    delete cache.stickers[id];
+  }
+}
+
 /**
  * Get a cached sticker by its unique ID.
  */
@@ -63,6 +84,7 @@ export function getCachedSticker(fileUniqueId: string): CachedSticker | null {
 export function cacheSticker(sticker: CachedSticker): void {
   const cache = loadCache();
   cache.stickers[sticker.fileUniqueId] = sticker;
+  pruneCacheIfNeeded(cache);
   saveCache(cache);
 }
 
