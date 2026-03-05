@@ -1,0 +1,54 @@
+{
+  "name": "Agent Memory Management (by PolarDB)",
+  "id": "agent-memory-polardb",
+  "version": "1.0.0",
+  "description_for_model": "Long-term memory tool. Use it to store (save_fact), retrieve (search_memories), or clear (delete_all_memories) user-specific facts and preferences across sessions.",
+  "icon": "易",
+  "description_for_human": "Manages long-term memories via PolarDB.",
+  "auth": {
+    "type": "token",
+    "token_header": "Authorization",
+    "token_prefix": "Token"
+  },
+  "api": {
+    "type": "python",
+    "main_file": "handler.py",
+    "functions": [
+      {
+        "name": "save_fact",
+        "description": "Save a user preference or fact.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "user_id": { "type": "string", "description": "Unique user identifier" },
+            "fact": { "type": "string", "description": "The fact to remember" }
+          },
+          "required": ["user_id", "fact"]
+        }
+      },
+      {
+        "name": "search_memories",
+        "description": "Search history for user context.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "user_id": { "type": "string", "description": "Unique user identifier" },
+            "query": { "type": "string", "description": "Search terms" }
+          },
+          "required": ["user_id", "query"]
+        }
+      },
+      {
+        "name": "delete_all_memories",
+        "description": "Clear all memory data for a user.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "user_id": { "type": "string", "description": "Unique user identifier" }
+          },
+          "required": ["user_id"]
+        }
+      }
+    ]
+  }
+}
