@@ -822,6 +822,159 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back when context-overflow text wraps a DNS transport failure", async () => {
+    const dnsCause = Object.assign(new Error("getaddrinfo ENOTFOUND ollama.run"), {
+      code: "ENOTFOUND",
+      syscall: "getaddrinfo",
+      hostname: "ollama.run",
+    });
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Ollama API error 400: context window exceeds limit"), {
+          cause: dnsCause,
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "ollama",
+      model: "minimax-m2.5:cloud",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]).toEqual(["ollama", "minimax-m2.5:cloud"]);
+    expect(run.mock.calls[1]?.[0]).not.toBe("ollama");
+  });
+
+  it("falls back when context-overflow text wraps an ENETRESET transport failure", async () => {
+    const resetCause = Object.assign(new Error("socket ENETRESET"), {
+      code: "ENETRESET",
+    });
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Ollama API error 400: context window exceeds limit"), {
+          cause: resetCause,
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "ollama",
+      model: "minimax-m2.5:cloud",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]).toEqual(["ollama", "minimax-m2.5:cloud"]);
+    expect(run.mock.calls[1]?.[0]).not.toBe("ollama");
+  });
+
+  it("falls back when context-overflow text includes an explicit top-level transport phrase", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          "Request size exceeds model context window after connect ENOTFOUND api.openai.com",
+        ),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back when context-overflow text wraps transport failures in AggregateError.errors", async () => {
+    const transportLeaf = Object.assign(new Error("connect ENOTFOUND api.openai.com"), {
+      code: "ENOTFOUND",
+    });
+    const aggregatedCause = new AggregateError(
+      [transportLeaf, new Error("secondary connect failure")],
+      "multiple connect failures",
+    );
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Ollama API error 400: context window exceeds limit"), {
+          cause: aggregatedCause,
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "ollama",
+      model: "minimax-m2.5:cloud",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]).toEqual(["ollama", "minimax-m2.5:cloud"]);
+    expect(run.mock.calls[1]?.[0]).not.toBe("ollama");
+  });
+
+  it("does not treat standalone DNS text as transport failure for true overflow errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("Request size exceeds model context window. Debug dump includes DNS records."),
+      )
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("Request size exceeds model context window");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat top-level transport token lists as transport failures for true overflow errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          "Request size exceeds model context window. Debug text includes ENOTFOUND and getaddrinfo tokens.",
+        ),
+      )
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("Request size exceeds model context window");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("does not fall back on user aborts", async () => {
     const cfg = makeCfg();
     const run = vi

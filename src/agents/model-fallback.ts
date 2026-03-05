@@ -61,6 +61,127 @@ function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
+const TRANSPORT_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ENETRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "UND_ERR_DNS_RESOLVE_FAILED",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_CONNECT",
+  "UND_ERR_SOCKET",
+]);
+const TRANSPORT_ERROR_MESSAGE_RE =
+  /\b(getaddrinfo|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETRESET|ETIMEDOUT|ESOCKETTIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT_TIMEOUT|UND_ERR_CONNECT|UND_ERR_SOCKET)\b/i;
+const TOP_LEVEL_TRANSPORT_PHRASE_RE =
+  /\b(connect|getaddrinfo|socket)\s+(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETRESET|ETIMEDOUT|ESOCKETTIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT_TIMEOUT|UND_ERR_CONNECT|UND_ERR_SOCKET)\b/i;
+
+function hasDnsTransportPhrase(message: string): boolean {
+  const lower = message.toLowerCase();
+  if (!lower.includes("dns")) {
+    return false;
+  }
+  return (
+    lower.includes("dns resolution failed") ||
+    lower.includes("dns lookup failed") ||
+    lower.includes("dns resolve failed") ||
+    lower.includes("dns error") ||
+    ((lower.includes("dns lookup") || lower.includes("dns resolution")) &&
+      (lower.includes("failed") || lower.includes("failure")))
+  );
+}
+
+function hasTopLevelTransportMessageHint(message: string): boolean {
+  return hasDnsTransportPhrase(message) || TOP_LEVEL_TRANSPORT_PHRASE_RE.test(message);
+}
+
+function isIterableUnknown(value: unknown): value is Iterable<unknown> {
+  return typeof value === "object" && value !== null && Symbol.iterator in value;
+}
+
+function hasTransportFailureHint(err: unknown): boolean {
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: err, depth: 0 }];
+  const seen = new Set<object>();
+
+  while (queue.length > 0) {
+    const currentEntry = queue.shift();
+    if (!currentEntry) {
+      continue;
+    }
+    const { value: current, depth } = currentEntry;
+    if (!current) {
+      continue;
+    }
+    if (typeof current === "string") {
+      const hasMessageHint =
+        depth === 0
+          ? hasTopLevelTransportMessageHint(current)
+          : TRANSPORT_ERROR_MESSAGE_RE.test(current) || hasDnsTransportPhrase(current);
+      if (hasMessageHint) {
+        return true;
+      }
+      continue;
+    }
+    if (typeof current !== "object") {
+      continue;
+    }
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+
+    const candidate = current as {
+      code?: unknown;
+      errno?: unknown;
+      message?: unknown;
+      cause?: unknown;
+      reason?: unknown;
+      original?: unknown;
+      error?: unknown;
+      errors?: unknown;
+    };
+
+    const code = typeof candidate.code === "string" ? candidate.code : candidate.errno;
+    if (typeof code === "string" && TRANSPORT_ERROR_CODES.has(code.toUpperCase())) {
+      return true;
+    }
+    if (
+      typeof candidate.message === "string" &&
+      (depth === 0
+        ? hasTopLevelTransportMessageHint(candidate.message)
+        : TRANSPORT_ERROR_MESSAGE_RE.test(candidate.message) ||
+          hasDnsTransportPhrase(candidate.message))
+    ) {
+      return true;
+    }
+
+    if (candidate.cause) {
+      queue.push({ value: candidate.cause, depth: depth + 1 });
+    }
+    if (candidate.reason) {
+      queue.push({ value: candidate.reason, depth: depth + 1 });
+    }
+    if (candidate.original) {
+      queue.push({ value: candidate.original, depth: depth + 1 });
+    }
+    if (candidate.error) {
+      queue.push({ value: candidate.error, depth: depth + 1 });
+    }
+    if (candidate.errors && isIterableUnknown(candidate.errors)) {
+      for (const nested of candidate.errors) {
+        queue.push({ value: nested, depth: depth + 1 });
+      }
+    }
+  }
+  return false;
+}
+
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
   candidates: ModelCandidate[];
   addExplicitCandidate: (candidate: ModelCandidate) => void;
@@ -511,7 +632,7 @@ export async function runWithModelFallback<T>(params: {
       // throw, rethrow it immediately rather than trying a different model
       // that may have a smaller context window and fail worse.
       const errMessage = err instanceof Error ? err.message : String(err);
-      if (isLikelyContextOverflowError(errMessage)) {
+      if (isLikelyContextOverflowError(errMessage) && !hasTransportFailureHint(err)) {
         throw err;
       }
       const normalized =
