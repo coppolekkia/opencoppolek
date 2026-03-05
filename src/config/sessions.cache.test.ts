@@ -8,6 +8,7 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "./sessions.js";
+import { SESSION_STORE_CACHE_MAX_ENTRIES } from "./sessions/store-cache.js";
 
 function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
@@ -231,5 +232,41 @@ describe("Session Store Cache", () => {
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2["session:2"]).toBeDefined();
     expect(loaded2["session:2"].displayName).toBe("Added");
+  });
+
+  it("should evict least-recently-used cache entries when cache exceeds the max size", async () => {
+    const allStorePaths = Array.from({ length: SESSION_STORE_CACHE_MAX_ENTRIES + 1 }, (_, index) =>
+      path.join(testDir, `sessions-${index}.json`),
+    );
+
+    for (const [index, filePath] of allStorePaths.entries()) {
+      const testStore = createSingleSessionStore(
+        createSessionEntry({ sessionId: `id-${index}`, displayName: `Session ${index}` }),
+        `session:${index}`,
+      );
+      await saveSessionStore(filePath, testStore);
+      const loaded = loadSessionStore(filePath);
+      expect(loaded[`session:${index}`]?.displayName).toBe(`Session ${index}`);
+    }
+
+    const oldestPath = allStorePaths[0];
+    const newestPath = allStorePaths[allStorePaths.length - 1];
+    expect(oldestPath).toBeDefined();
+    expect(newestPath).toBeDefined();
+
+    const readSpy = vi.spyOn(fs, "readFileSync");
+
+    const oldestReload = loadSessionStore(oldestPath);
+    expect(oldestReload["session:0"]?.displayName).toBe("Session 0");
+    expect(readSpy).toHaveBeenCalledTimes(1);
+
+    readSpy.mockClear();
+
+    const newestReload = loadSessionStore(newestPath);
+    expect(newestReload[`session:${SESSION_STORE_CACHE_MAX_ENTRIES}`]?.displayName).toBe(
+      `Session ${SESSION_STORE_CACHE_MAX_ENTRIES}`,
+    );
+    expect(readSpy).toHaveBeenCalledTimes(0);
+    readSpy.mockRestore();
   });
 });

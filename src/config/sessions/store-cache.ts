@@ -9,8 +9,46 @@ type SessionStoreCacheEntry = {
   serialized?: string;
 };
 
+export const SESSION_STORE_CACHE_MAX_ENTRIES = 64;
+
 const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
 const SESSION_STORE_SERIALIZED_CACHE = new Map<string, string>();
+
+function setMostRecent<K, V>(map: Map<K, V>, key: K, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+}
+
+function touchMostRecent<K, V>(map: Map<K, V>, key: K): V | undefined {
+  const value = map.get(key);
+  if (value === undefined) {
+    return undefined;
+  }
+  map.delete(key);
+  map.set(key, value);
+  return value;
+}
+
+function trimSessionStoreCacheBounds(): void {
+  while (SESSION_STORE_CACHE.size > SESSION_STORE_CACHE_MAX_ENTRIES) {
+    const oldestKey = SESSION_STORE_CACHE.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    SESSION_STORE_CACHE.delete(oldestKey);
+    SESSION_STORE_SERIALIZED_CACHE.delete(oldestKey);
+  }
+}
+
+function trimSessionStoreSerializedCacheBounds(): void {
+  while (SESSION_STORE_SERIALIZED_CACHE.size > SESSION_STORE_CACHE_MAX_ENTRIES) {
+    const oldestKey = SESSION_STORE_SERIALIZED_CACHE.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    SESSION_STORE_SERIALIZED_CACHE.delete(oldestKey);
+  }
+}
 
 export function clearSessionStoreCaches(): void {
   SESSION_STORE_CACHE.clear();
@@ -23,7 +61,7 @@ export function invalidateSessionStoreCache(storePath: string): void {
 }
 
 export function getSerializedSessionStore(storePath: string): string | undefined {
-  return SESSION_STORE_SERIALIZED_CACHE.get(storePath);
+  return touchMostRecent(SESSION_STORE_SERIALIZED_CACHE, storePath);
 }
 
 export function setSerializedSessionStore(storePath: string, serialized?: string): void {
@@ -31,7 +69,8 @@ export function setSerializedSessionStore(storePath: string, serialized?: string
     SESSION_STORE_SERIALIZED_CACHE.delete(storePath);
     return;
   }
-  SESSION_STORE_SERIALIZED_CACHE.set(storePath, serialized);
+  setMostRecent(SESSION_STORE_SERIALIZED_CACHE, storePath, serialized);
+  trimSessionStoreSerializedCacheBounds();
 }
 
 export function dropSessionStoreObjectCache(storePath: string): void {
@@ -57,6 +96,7 @@ export function readSessionStoreCache(params: {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
+  touchMostRecent(SESSION_STORE_CACHE, params.storePath);
   return structuredClone(cached.store);
 }
 
@@ -67,7 +107,7 @@ export function writeSessionStoreCache(params: {
   sizeBytes?: number;
   serialized?: string;
 }): void {
-  SESSION_STORE_CACHE.set(params.storePath, {
+  setMostRecent(SESSION_STORE_CACHE, params.storePath, {
     store: structuredClone(params.store),
     loadedAt: Date.now(),
     storePath: params.storePath,
@@ -75,7 +115,9 @@ export function writeSessionStoreCache(params: {
     sizeBytes: params.sizeBytes,
     serialized: params.serialized,
   });
+  trimSessionStoreCacheBounds();
   if (params.serialized !== undefined) {
-    SESSION_STORE_SERIALIZED_CACHE.set(params.storePath, params.serialized);
+    setMostRecent(SESSION_STORE_SERIALIZED_CACHE, params.storePath, params.serialized);
+    trimSessionStoreSerializedCacheBounds();
   }
 }
