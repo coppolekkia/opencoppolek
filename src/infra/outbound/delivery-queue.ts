@@ -9,6 +9,7 @@ import type { OutboundChannel } from "./targets.js";
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
 const MAX_RETRIES = 5;
+const ACTIVE_DELIVERY_IDS = new Set<string>();
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -77,13 +78,20 @@ export async function ensureQueueDir(stateDir?: string): Promise<string> {
 
 /** Persist a delivery entry to disk before attempting send. Returns the entry ID. */
 type QueuedDeliveryParams = QueuedDeliveryPayload;
+type EnqueueDeliveryOptions = {
+  markInFlight?: boolean;
+};
 
 export async function enqueueDelivery(
   params: QueuedDeliveryParams,
   stateDir?: string,
+  options?: EnqueueDeliveryOptions,
 ): Promise<string> {
   const queueDir = await ensureQueueDir(stateDir);
   const id = generateSecureUuid();
+  if (options?.markInFlight) {
+    markDeliveryInFlight(id);
+  }
   const entry: QueuedDelivery = {
     id,
     enqueuedAt: Date.now(),
@@ -102,9 +110,16 @@ export async function enqueueDelivery(
   const filePath = path.join(queueDir, `${id}.json`);
   const tmp = `${filePath}.${process.pid}.tmp`;
   const json = JSON.stringify(entry, null, 2);
-  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
-  await fs.promises.rename(tmp, filePath);
-  return id;
+  try {
+    await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
+    await fs.promises.rename(tmp, filePath);
+    return id;
+  } catch (error) {
+    if (options?.markInFlight) {
+      clearDeliveryInFlight(id);
+    }
+    throw error;
+  }
 }
 
 /** Remove a successfully delivered entry from the queue. */
@@ -122,6 +137,24 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
     }
     // Already removed — no-op.
   }
+}
+
+/**
+ * Mark a queued delivery as actively being processed in this process.
+ * Recovery uses this to avoid replaying entries already in-flight.
+ */
+export function markDeliveryInFlight(id: string): void {
+  ACTIVE_DELIVERY_IDS.add(id);
+}
+
+/** Clear the in-flight marker for a queued delivery. */
+export function clearDeliveryInFlight(id: string): void {
+  ACTIVE_DELIVERY_IDS.delete(id);
+}
+
+/** Return true when the queued delivery is currently in-flight in this process. */
+export function isDeliveryInFlight(id: string): boolean {
+  return ACTIVE_DELIVERY_IDS.has(id);
 }
 
 /** Update a queue entry after a failed delivery attempt. */
@@ -272,7 +305,7 @@ export interface RecoveryLogger {
 }
 
 /**
- * On gateway startup, scan the delivery queue and retry any pending entries.
+ * Scan the delivery queue and retry any pending entries.
  * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
  */
 export async function recoverPendingDeliveries(opts: {
@@ -280,7 +313,7 @@ export async function recoverPendingDeliveries(opts: {
   log: RecoveryLogger;
   cfg: OpenClawConfig;
   stateDir?: string;
-  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
+  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to the next recovery pass. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
@@ -299,13 +332,29 @@ export async function recoverPendingDeliveries(opts: {
   let failed = 0;
   let skippedMaxRetries = 0;
   let deferredBackoff = 0;
+  let deferredInFlight = 0;
 
   for (const entry of pending) {
     const now = Date.now();
     if (now >= deadline) {
-      const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
-      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
+      const deferred =
+        pending.length -
+        recovered -
+        failed -
+        skippedMaxRetries -
+        deferredBackoff -
+        deferredInFlight;
+      opts.log.warn(
+        `Recovery time budget exceeded — ${deferred} entries deferred to the next recovery pass`,
+      );
       break;
+    }
+    if (isDeliveryInFlight(entry.id)) {
+      deferredInFlight += 1;
+      opts.log.info(
+        `Delivery ${entry.id} is currently in-flight — deferring to the next recovery pass`,
+      );
+      continue;
     }
     if (entry.retryCount >= MAX_RETRIES) {
       opts.log.warn(

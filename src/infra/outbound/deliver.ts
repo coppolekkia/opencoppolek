@@ -36,7 +36,12 @@ import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import {
+  ackDelivery,
+  clearDeliveryInFlight,
+  enqueueDelivery,
+  failDelivery,
+} from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -469,18 +474,22 @@ export async function deliverOutboundPayloads(
   // Write-ahead delivery queue: persist before sending, remove after success.
   const queueId = params.skipQueue
     ? null
-    : await enqueueDelivery({
-        channel,
-        to,
-        accountId: params.accountId,
-        payloads,
-        threadId: params.threadId,
-        replyToId: params.replyToId,
-        bestEffort: params.bestEffort,
-        gifPlayback: params.gifPlayback,
-        silent: params.silent,
-        mirror: params.mirror,
-      }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
+    : await enqueueDelivery(
+        {
+          channel,
+          to,
+          accountId: params.accountId,
+          payloads,
+          threadId: params.threadId,
+          replyToId: params.replyToId,
+          bestEffort: params.bestEffort,
+          gifPlayback: params.gifPlayback,
+          silent: params.silent,
+          mirror: params.mirror,
+        },
+        undefined,
+        { markInFlight: true },
+      ).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
@@ -518,6 +527,10 @@ export async function deliverOutboundPayloads(
       }
     }
     throw err;
+  } finally {
+    if (queueId) {
+      clearDeliveryInFlight(queueId);
+    }
   }
 }
 

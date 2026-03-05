@@ -30,6 +30,7 @@ const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
+  clearDeliveryInFlight: vi.fn(),
 }));
 const logMocks = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
+  clearDeliveryInFlight: queueMocks.clearDeliveryInFlight,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -82,6 +84,14 @@ const whatsappChunkConfig: OpenClawConfig = {
 type DeliverOutboundArgs = Parameters<typeof deliverOutboundPayloads>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
 type DeliverSession = DeliverOutboundArgs["session"];
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
@@ -202,6 +212,7 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
     queueMocks.failDelivery.mockResolvedValue(undefined);
+    queueMocks.clearDeliveryInFlight.mockClear();
     logMocks.warn.mockClear();
   });
 
@@ -762,6 +773,59 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
     expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("requests in-flight reservation during enqueue and clears marker on success", async () => {
+    const deferred = createDeferred<{ messageId: string; toJid: string }>();
+    const sendWhatsApp = vi.fn().mockImplementation(async () => await deferred.promise);
+    const deliveryPromise = deliverOutboundPayloads({
+      cfg: whatsappChunkConfig,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    await vi.waitFor(() => expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1));
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "hello" }],
+      }),
+      undefined,
+      { markInFlight: true },
+    );
+    expect(queueMocks.clearDeliveryInFlight).not.toHaveBeenCalled();
+
+    deferred.resolve({ messageId: "w1", toJid: "jid" });
+    await deliveryPromise;
+
+    expect(queueMocks.clearDeliveryInFlight).toHaveBeenCalledWith("mock-queue-id");
+  });
+
+  it("clears in-flight marker when delivery throws", async () => {
+    const sendWhatsApp = vi.fn().mockRejectedValue(new Error("boom"));
+    await expect(
+      deliverOutboundPayloads({
+        cfg: whatsappChunkConfig,
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "hello" }],
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "hello" }],
+      }),
+      undefined,
+      { markInFlight: true },
+    );
+    expect(queueMocks.clearDeliveryInFlight).toHaveBeenCalledWith("mock-queue-id");
   });
 
   it("passes normalized payload to onError", async () => {

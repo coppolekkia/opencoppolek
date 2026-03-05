@@ -23,6 +23,7 @@ export function wrapHostEditToolWithPostWriteRecovery(
   base: AnyAgentTool,
   root: string,
 ): AnyAgentTool {
+  type ToolExecuteArgs = Parameters<AnyAgentTool["execute"]>;
   return {
     ...base,
     execute: async (
