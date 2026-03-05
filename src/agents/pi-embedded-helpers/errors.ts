@@ -91,6 +91,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("context length") ||
     lower.includes("maximum context length");
   return (
+    lower.includes("model_context_window_exceeded") ||
     lower.includes("request_too_large") ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
