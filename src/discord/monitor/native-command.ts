@@ -20,6 +20,7 @@ import {
 } from "../../acp/persistent-bindings.route.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { resolveCommandsAllowFromList } from "../../auto-reply/command-auth.js";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
@@ -41,6 +42,7 @@ import { resolveStoredModelOverride } from "../../auto-reply/reply/model-selecti
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { getChannelDock } from "../../channels/dock.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import type { OpenClawConfig, loadConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
@@ -1435,6 +1437,27 @@ async function dispatchDiscordCommandInteraction(params: {
   if (isGroupDm && discordConfig?.dm?.groupEnabled === false) {
     await respond("Discord group DMs are disabled.");
     return;
+  }
+
+  // Check commands.allowFrom (cross-channel command authorization).
+  // This must happen here before the auto-reply pipeline to avoid silent
+  // timeouts on deferred interactions when the sender is not authorized.
+  const commandsAllowFromList = resolveCommandsAllowFromList({
+    dock: getChannelDock("discord"),
+    cfg,
+    accountId,
+    providerId: "discord",
+  });
+  if (commandsAllowFromList !== null) {
+    const commandsAllowAll = commandsAllowFromList.some((entry) => entry.trim() === "*");
+    if (!commandsAllowAll) {
+      const senderIdLower = sender.id.toLowerCase();
+      const isAllowed = commandsAllowFromList.includes(senderIdLower);
+      if (!isAllowed) {
+        await respond("You are not authorized to use this command.", { ephemeral: true });
+        return;
+      }
+    }
   }
 
   const menu = resolveCommandArgMenu({
