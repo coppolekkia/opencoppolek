@@ -80,7 +80,14 @@ export function resolveModel(
     // Otherwise, configured providers can default to a generic API and break specific transports.
     const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
     if (forwardCompat) {
-      return { model: forwardCompat, authStorage, modelRegistry };
+      // Apply baseUrl override before normalization to avoid double /v1 issues with anthropic-messages
+      // Use normalized provider key to match config (supports aliases like aws-bedrock -> amazon-bedrock)
+      const configuredBaseUrl = cfg?.models?.providers?.[normalizedProvider]?.baseUrl;
+      const modelWithBaseUrl = configuredBaseUrl
+        ? { ...forwardCompat, baseUrl: configuredBaseUrl }
+        : forwardCompat;
+      const model = normalizeModelCompat(modelWithBaseUrl);
+      return { model, authStorage, modelRegistry };
     }
     // OpenRouter is a pass-through proxy — any model ID available on OpenRouter
     // should work without being pre-registered in the local catalog.
@@ -133,7 +140,12 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  const providerOverride = cfg?.models?.providers?.[provider] as InlineProviderConfig | undefined;
+  // Apply baseUrl and headers override before discovered-model normalization
+  // Use normalized provider key to match config (supports aliases like aws-bedrock -> amazon-bedrock)
+  const normalizedProvider = normalizeProviderId(provider);
+  const providerOverride = cfg?.models?.providers?.[normalizedProvider] as
+    | InlineProviderConfig
+    | undefined;
   if (providerOverride?.baseUrl || providerOverride?.headers) {
     const overridden: Model<Api> & { headers?: Record<string, string> } = { ...model };
     if (providerOverride.baseUrl) {
