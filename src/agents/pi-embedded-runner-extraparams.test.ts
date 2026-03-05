@@ -172,6 +172,7 @@ describe("applyExtraParamsToAgent", () => {
     cfg?: Record<string, unknown>;
     payload?: Record<string, unknown>;
     initialPayload?: Record<string, unknown>;
+    context?: Context;
   }) {
     const payload: Record<string, unknown> = {
       store: false,
@@ -189,7 +190,7 @@ describe("applyExtraParamsToAgent", () => {
       params.applyProvider,
       params.applyModelId,
     );
-    const context: Context = { messages: [] };
+    const context: Context = params.context ?? { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
     return payload;
   }
@@ -1622,6 +1623,57 @@ describe("applyExtraParamsToAgent", () => {
           { type: "input_text", text: "describe this image" },
           { type: "input_image", image_url: "https://example.com/a.png" },
         ],
+      },
+    ]);
+    expect(payload.stream).toBe(true);
+  });
+
+  it("preserves scalar input for sub2api gpt-5.2 compat when context has messages", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api",
+        id: "gpt-5.2",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        stream: false,
+        input: "caller-provided scalar input",
+      },
+      context: {
+        messages: [{ role: "user", content: "context-derived prompt" }],
+      },
+    });
+
+    expect(payload.input).toBe("caller-provided scalar input");
+    expect(payload.stream).toBe(true);
+  });
+
+  it("fills missing gpt-5.2 input from context messages", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api",
+        id: "gpt-5.2",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        stream: false,
+      },
+      context: {
+        messages: [{ role: "user", content: "context-derived prompt" }],
+      },
+    });
+
+    expect(payload.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "context-derived prompt" }],
       },
     ]);
     expect(payload.stream).toBe(true);
