@@ -13,6 +13,7 @@ import { resolveChannelCapabilities } from "../../config/channel-capabilities.js
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { ingestSessionToMemory } from "../../memory/session-ingest.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -646,6 +647,20 @@ export async function compactEmbeddedPiSessionDirect(
             .catch((hookErr: unknown) => {
               log.warn(`before_compaction hook failed: ${String(hookErr)}`);
             });
+        }
+        // Ingest full pre-compaction messages into memory index without
+        // blocking compaction, preserving detailed session recall.
+        if (params.workspaceDir) {
+          void ingestSessionToMemory({
+            messages: preCompactionMessages,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            workspaceDir: params.workspaceDir,
+            config: params.config,
+            agentId: sessionAgentId,
+          }).catch((err) => {
+            log.warn(`session memory ingest failed: ${String(err)}`);
+          });
         }
 
         const diagEnabled = log.isEnabled("debug");
