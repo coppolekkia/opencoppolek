@@ -11,13 +11,28 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 // Entries expire after 5 minutes.
 const mentionedThreads = new Map<string, number>();
 const MENTION_TTL_MS = 5 * 60 * 1000;
+const MAX_TRACKED_MENTIONS = 1000;
 
-function cleanExpiredMentions(): void {
-  const now = Date.now();
+function cleanExpiredMentions(now = Date.now()): void {
   for (const [key, ts] of mentionedThreads) {
     if (now - ts > MENTION_TTL_MS) {
       mentionedThreads.delete(key);
     }
+  }
+}
+
+function trackMention(key: string, now = Date.now()): void {
+  cleanExpiredMentions(now);
+  if (mentionedThreads.has(key)) {
+    mentionedThreads.delete(key);
+  }
+  mentionedThreads.set(key, now);
+  while (mentionedThreads.size > MAX_TRACKED_MENTIONS) {
+    const oldestKey = mentionedThreads.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    mentionedThreads.delete(oldestKey);
   }
 }
 
@@ -75,8 +90,7 @@ export default function register(api: OpenClawPluginApi) {
       (botUserId && text.includes(`<@${botUserId}>`));
 
     if (mentioned) {
-      cleanExpiredMentions();
-      mentionedThreads.set(`${channelId}:${threadTs}`, Date.now());
+      trackMention(`${channelId}:${threadTs}`);
     }
   });
 

@@ -142,6 +142,52 @@ describe("thread-ownership plugin", () => {
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
+    it("bounds mention cache and evicts oldest tracked thread", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      const channelId = "CCAP";
+      await hooks.message_received(
+        {
+          content: "Hey @TestBot oldest",
+          metadata: { threadTs: "cap-oldest", channelId },
+        },
+        { channelId: "slack", conversationId: channelId },
+      );
+
+      for (let i = 0; i < 1000; i += 1) {
+        await hooks.message_received(
+          {
+            content: "Hey @TestBot fill",
+            metadata: { threadTs: `cap-${i}`, channelId },
+          },
+          { channelId: "slack", conversationId: channelId },
+        );
+      }
+
+      await hooks.message_sending(
+        {
+          content: "Should require ownership check after eviction",
+          metadata: { threadTs: "cap-oldest", channelId },
+          to: channelId,
+        },
+        { channelId: "slack", conversationId: channelId },
+      );
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+      vi.mocked(globalThis.fetch).mockClear();
+      await hooks.message_sending(
+        {
+          content: "Newest tracked thread should still bypass ownership check",
+          metadata: { threadTs: "cap-999", channelId },
+          to: channelId,
+        },
+        { channelId: "slack", conversationId: channelId },
+      );
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
     it("ignores @-mentions on non-slack channels", async () => {
       // Use a unique thread key so module-level state from other tests doesn't interfere.
       await hooks.message_received(
