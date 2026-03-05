@@ -98,6 +98,10 @@ const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 
+function coerceSkillName(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
 function sanitizeSkillCommandName(raw: string): string {
   const normalized = raw
     .toLowerCase()
@@ -206,16 +210,35 @@ function resolveNestedSkillsRoot(
 }
 
 function unwrapLoadedSkills(loaded: unknown): Skill[] {
-  if (Array.isArray(loaded)) {
-    return loaded as Skill[];
-  }
-  if (loaded && typeof loaded === "object" && "skills" in loaded) {
-    const skills = (loaded as { skills?: unknown }).skills;
-    if (Array.isArray(skills)) {
-      return skills as Skill[];
+  const rawSkills = (() => {
+    if (Array.isArray(loaded)) {
+      return loaded;
     }
+    if (loaded && typeof loaded === "object" && "skills" in loaded) {
+      const skills = (loaded as { skills?: unknown }).skills;
+      if (Array.isArray(skills)) {
+        return skills;
+      }
+    }
+    return [];
+  })();
+
+  const normalized: Skill[] = [];
+  for (const skill of rawSkills) {
+    if (!skill || typeof skill !== "object") {
+      continue;
+    }
+    const rawName = (skill as { name?: unknown }).name;
+    const name = String(rawName ?? "").trim();
+    if (!name) {
+      continue;
+    }
+    normalized.push({
+      ...(skill as Skill),
+      name,
+    });
   }
-  return [];
+  return normalized;
 }
 
 function loadSkillEntries(
@@ -678,7 +701,10 @@ export function buildWorkspaceSkillCommandSpecs(
 
   const specs: SkillCommandSpec[] = [];
   for (const entry of userInvocable) {
-    const rawName = entry.skill.name;
+    const rawName = coerceSkillName((entry as { skill?: { name?: unknown } }).skill?.name);
+    if (!rawName) {
+      continue;
+    }
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
       debugSkillCommandOnce(
