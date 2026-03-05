@@ -115,6 +115,50 @@ describe("createSlackMessageHandler", () => {
     expect(enqueueMock).toHaveBeenCalledTimes(1);
   });
 
+  it("app_mention bypasses dedup cache so channel mentions are not silently dropped", async () => {
+    // Simulate the race: `message` arrives first and poisons the dedup cache,
+    // then `app_mention` arrives with wasMentioned=true. The app_mention must
+    // NOT be dropped by markMessageSeen.
+    const seen = new Set<string>();
+    const { handler, trackEvent } = createHandlerWithTracker({
+      markMessageSeen: (channel, ts) => {
+        const key = `${channel}:${ts}`;
+        if (seen.has(key)) {
+          return true;
+        }
+        seen.add(key);
+        return false;
+      },
+    });
+
+    // First: message event arrives and is processed (sets dedup key)
+    await handler(
+      {
+        type: "message",
+        channel: "C999",
+        ts: "1700000000.000100",
+        text: "<@U_BOT> hello",
+        user: "U111",
+      } as never,
+      { source: "message" },
+    );
+
+    // Second: app_mention for the same ts — must NOT be deduped
+    await handler(
+      {
+        type: "app_mention",
+        channel: "C999",
+        ts: "1700000000.000100",
+        text: "<@U_BOT> hello",
+        user: "U111",
+      } as never,
+      { source: "app_mention", wasMentioned: true },
+    );
+
+    expect(trackEvent).toHaveBeenCalledTimes(2);
+    expect(enqueueMock).toHaveBeenCalledTimes(2);
+  });
+
   it("flushes pending top-level buffered keys before immediate non-debounce follow-ups", async () => {
     const handler = createSlackMessageHandler({
       ctx: createContext(),
