@@ -242,6 +242,8 @@ export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeAgentId,
+  parseAgentSessionKey,
+  type ParsedAgentSessionKey,
   resolveThreadSessionKeys,
 } from "../routing/session-key.js";
 export {
@@ -398,6 +400,7 @@ export type { ScopeTokenProvider } from "./fetch-auth.js";
 export { rawDataToString } from "../infra/ws.js";
 export { isWSLSync, isWSL2Sync, isWSLEnv } from "../infra/wsl.js";
 export { isTruthyEnvValue } from "../infra/env.js";
+export { extractDeliveryInfo } from "../config/sessions.js";
 export { resolveToolsBySender } from "../config/group-policy.js";
 export {
   buildPendingHistoryContextFromMap,
@@ -470,6 +473,7 @@ export {
   formatAllowlistMatchMeta,
   resolveAllowlistMatchSimple,
 } from "../channels/plugins/allowlist-match.js";
+export { Type } from "@sinclair/typebox";
 export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 export type { PollInput } from "../polls.js";
 
@@ -503,6 +507,11 @@ export {
   readReactionParams,
   readStringParam,
 } from "../agents/tools/common.js";
+export {
+  callGatewayTool,
+  type GatewayCallOptions,
+  readGatewayCallOptions,
+} from "../agents/tools/gateway.js";
 export { formatDocsLink } from "../terminal/links.js";
 export {
   DM_GROUP_ACCESS_REASON,
