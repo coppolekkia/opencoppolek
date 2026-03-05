@@ -166,4 +166,96 @@ describe("config io paths", () => {
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("- gateway.port:"));
     });
   });
+
+  it("logs config warnings once when unchanged across reloads", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            plugins: {
+              entries: {
+                "missing-plugin": { enabled: true },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const logger = {
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+
+      expect(io.loadConfig().plugins?.entries?.["missing-plugin"]).toEqual({ enabled: true });
+      expect(io.loadConfig().plugins?.entries?.["missing-plugin"]).toEqual({ enabled: true });
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("plugins.entries.missing-plugin"),
+      );
+    });
+  });
+
+  it("logs config warnings again when warning details change", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            plugins: {
+              entries: {
+                "missing-plugin-a": { enabled: true },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const logger = {
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+
+      io.loadConfig();
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            plugins: {
+              entries: {
+                "missing-plugin-b": { enabled: true },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      io.loadConfig();
+
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+      expect(logger.warn.mock.calls[0]?.[0]).toContain("plugins.entries.missing-plugin-a");
+      expect(logger.warn.mock.calls[1]?.[0]).toContain("plugins.entries.missing-plugin-b");
+    });
+  });
 });
