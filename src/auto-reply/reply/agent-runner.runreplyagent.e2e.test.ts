@@ -315,7 +315,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     const result = await run();
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ internalOutcome: "queued-followup" });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
