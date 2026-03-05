@@ -352,7 +352,7 @@ describe("pairing store", () => {
     });
   });
 
-  it("reads sync allowFrom with account-scoped isolation and wildcard filtering", async () => {
+  it("reads sync allowFrom scoped to non-default accounts without legacy fallback", async () => {
     await withTempStateDir(async (stateDir) => {
       await writeAllowFromFixture({
         stateDir,
@@ -443,6 +443,21 @@ describe("pairing store", () => {
       expect(beta).toHaveLength(1);
       expect(alpha[0]?.code).toBe(first.code);
       expect(beta[0]?.code).toBe(second.code);
+    });
+  });
+
+  it("does not inherit legacy channel-scoped allowFrom for non-default accounts", async () => {
+    await withTempStateDir(async (stateDir) => {
+      await writeAllowFromFixture({ stateDir, channel: "telegram", allowFrom: ["1001"] });
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["1002"],
+      });
+
+      const scoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      expect(scoped).toEqual(["1002"]);
     });
   });
 

@@ -547,8 +547,11 @@ export async function readChannelAllowFromStore(
   }
   const scopedPath = resolveAllowFromPath(channel, env, resolvedAccountId);
   const scopedEntries = await readAllowFromStateForPath(channel, scopedPath);
-  // Backward compatibility: legacy channel-level allowFrom store was unscoped.
-  // Keep honoring it for default account to prevent re-pair prompts after upgrades.
+  // Legacy channel-level allowFrom entries are only inherited by the default account.
+  // This preserves single-account upgrade behavior while preventing cross-account auth bleed.
+  if (normalizedAccountId !== "default") {
+    return dedupePreserveOrder(scopedEntries);
+  }
   const legacyPath = resolveAllowFromPath(channel, env);
   const legacyEntries = await readAllowFromStateForPath(channel, legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
@@ -578,6 +581,9 @@ export function readChannelAllowFromStoreSync(
   }
   const scopedPath = resolveAllowFromPath(channel, env, resolvedAccountId);
   const scopedEntries = readAllowFromStateForPathSync(channel, scopedPath);
+  if (normalizedAccountId !== "default") {
+    return dedupePreserveOrder(scopedEntries);
+  }
   const legacyPath = resolveAllowFromPath(channel, env);
   const legacyEntries = readAllowFromStateForPathSync(channel, legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
