@@ -364,6 +364,23 @@ function trimWhitespaceFromToolCallNamesInMessage(
       typedBlock.name = normalized;
     }
   }
+  // Drop tool call blocks whose name is still empty/blank after normalization.
+  // Without this guard, normalizeToolCallIdsInMessage assigns call_auto_*
+  // fallback IDs to nameless blocks, creating orphaned tool-call references
+  // that trigger "Tool not found" retry loops (#34129, #29965).
+  const filtered = content.filter((block: unknown) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    const typed = block as { type?: unknown; name?: unknown };
+    if (!isToolCallBlockType(typed.type)) {
+      return true;
+    }
+    return typeof typed.name === "string" && typed.name.trim().length > 0;
+  });
+  if (filtered.length < content.length) {
+    (message as { content: unknown[] }).content = filtered;
+  }
   normalizeToolCallIdsInMessage(message);
 }
 

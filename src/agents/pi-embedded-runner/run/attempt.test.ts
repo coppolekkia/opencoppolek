@@ -225,25 +225,44 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
-  it("does not collapse whitespace-only tool names to empty strings", async () => {
-    const partialToolCall = { type: "toolCall", name: "   " };
-    const finalToolCall = { type: "toolCall", name: "\t  " };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-    };
-    const { baseFn } = createEventStream({ event, finalToolCall });
+  it("drops tool call blocks with whitespace-only names", async () => {
+    const wsBlock = { type: "toolCall", name: "   ", id: "ws_id" };
+    const validBlock = { type: "toolCall", name: "exec" };
+    const finalMessage = { role: "assistant", content: [wsBlock, validBlock] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
 
     const stream = await invokeWrappedStream(baseFn);
-
-    for await (const _item of stream) {
-      // drain
-    }
     await stream.result();
 
-    expect(partialToolCall.name).toBe("   ");
-    expect(finalToolCall.name).toBe("\t  ");
-    expect(baseFn).toHaveBeenCalledTimes(1);
+    expect(finalMessage.content).toHaveLength(1);
+    expect(finalMessage.content[0]).toBe(validBlock);
+  });
+
+  it("drops tool call blocks with empty names to prevent call_auto loop", async () => {
+    const emptyNameBlock = { type: "toolCall", name: "", id: "orig_id" };
+    const validBlock = { type: "toolCall", name: " read ", id: "call_1" };
+    const textBlock = { type: "text", text: "hello" };
+    const finalMessage = { role: "assistant", content: [textBlock, emptyNameBlock, validBlock] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    // Empty-name tool call should be removed
+    expect(finalMessage.content).toHaveLength(2);
+    expect(finalMessage.content[0]).toBe(textBlock);
+    expect(finalMessage.content[1]).toBe(validBlock);
+    expect(validBlock.name).toBe("read");
   });
 
   it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
