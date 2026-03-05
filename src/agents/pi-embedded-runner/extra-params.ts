@@ -560,6 +560,29 @@ function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): S
   };
 }
 
+/**
+ * MiniMax's Anthropic-compatible endpoint does not support the `thinking`
+ * parameter. When MiniMax models have `reasoning: true`, the Anthropic adapter
+ * injects `thinking: { type: "enabled", budget_tokens: … }` which causes the
+ * server to hang and eventually time out. Strip the thinking parameter entirely.
+ */
+function createMinimaxThinkingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          delete payloadObj.thinking;
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 type MoonshotThinkingType = "enabled" | "disabled";
 
 function normalizeMoonshotThinkingType(value: unknown): MoonshotThinkingType | undefined {
@@ -900,6 +923,11 @@ export function applyExtraParamsToAgent(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+  }
+
+  if (provider === "minimax" || provider === "minimax-portal") {
+    log.debug(`stripping thinking parameter for MiniMax compatibility (${provider}/${modelId})`);
+    agent.streamFn = createMinimaxThinkingWrapper(agent.streamFn);
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {

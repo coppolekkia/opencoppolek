@@ -411,6 +411,65 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.thinking).toBe("off");
   });
 
+  it("strips thinking parameter for MiniMax provider", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "enabled", budget_tokens: 1024 },
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M2.5", undefined, undefined);
+
+    const model = {
+      api: "anthropic",
+      provider: "minimax",
+      id: "MiniMax-M2.5",
+    } as Model<"anthropic">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.thinking).toBeUndefined();
+  });
+
+  it("strips thinking parameter for minimax-portal provider", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "enabled", budget_tokens: 2048 },
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "minimax-portal",
+      "MiniMax-M2.5",
+      undefined,
+      undefined,
+    );
+
+    const model = {
+      api: "anthropic",
+      provider: "minimax-portal",
+      id: "MiniMax-M2.5",
+    } as Model<"anthropic">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.thinking).toBeUndefined();
+  });
+
   it("maps thinkingLevel=off to Moonshot thinking.type=disabled", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
