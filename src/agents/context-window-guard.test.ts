@@ -8,17 +8,17 @@ import {
 } from "./context-window-guard.js";
 
 describe("context-window-guard", () => {
-  it("blocks below 16k (model metadata)", () => {
+  it("blocks below 1024 (model metadata)", () => {
     const info = resolveContextWindowInfo({
       cfg: undefined,
       provider: "openrouter",
       modelId: "tiny",
-      modelContextWindow: 8000,
+      modelContextWindow: 512,
       defaultTokens: 200_000,
     });
     const guard = evaluateContextWindowGuard({ info });
     expect(guard.source).toBe("model");
-    expect(guard.tokens).toBe(8000);
+    expect(guard.tokens).toBe(512);
     expect(guard.shouldWarn).toBe(true);
     expect(guard.shouldBlock).toBe(true);
   });
@@ -64,7 +64,7 @@ describe("context-window-guard", () => {
                 reasoning: false,
                 input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 12_000,
+                contextWindow: 512,
                 maxTokens: 256,
               },
             ],
@@ -142,8 +142,45 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("does not warn when context window is explicitly configured via modelsConfig", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            apiKey: "x",
+            models: [
+              {
+                id: "qwen2.5:7b-2k",
+                name: "Qwen 2.5 7B 2k",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 2_048,
+                maxTokens: 2_048,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "ollama",
+      modelId: "qwen2.5:7b-2k",
+      modelContextWindow: undefined,
+      defaultTokens: 200_000,
+    });
+    const guard = evaluateContextWindowGuard({ info });
+    expect(info.source).toBe("modelsConfig");
+    expect(guard.tokens).toBe(2_048);
+    expect(guard.shouldWarn).toBe(false);
+    expect(guard.shouldBlock).toBe(true);
+  });
+
   it("exports thresholds as expected", () => {
-    expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
+    expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(1_024);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
   });
 });

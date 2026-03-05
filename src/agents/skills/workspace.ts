@@ -11,12 +11,13 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { shouldIncludeSkill } from "./config.js";
+import { resolveSkillConfig, shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
 import {
   parseFrontmatter,
   resolveOpenClawMetadata,
   resolveSkillInvocationPolicy,
+  resolveSkillKey,
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
@@ -224,6 +225,8 @@ function loadSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    /** When true, only load skills from the workspace dir (skip managed/bundled/extra). */
+    scopeToWorkspace?: boolean;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config);
@@ -321,8 +324,34 @@ function loadSkillEntries(
     return loadedSkills;
   };
 
+  const workspaceSkillsDir = path.join(workspaceDir, "skills");
+
+  // When scoped to workspace, only load skills from the workspace dir.
+  // This prevents managed/bundled skill paths from leaking into sandboxed
+  // agents where those paths are outside the sandbox root.
+  if (opts?.scopeToWorkspace) {
+    const workspaceSkills = loadSkills({
+      dir: workspaceSkillsDir,
+      source: "openclaw-workspace",
+    });
+    return workspaceSkills.map((skill) => {
+      let frontmatter: ParsedSkillFrontmatter = {};
+      try {
+        const raw = fs.readFileSync(skill.filePath, "utf-8");
+        frontmatter = parseFrontmatter(raw);
+      } catch {
+        // ignore malformed skills
+      }
+      return {
+        skill,
+        frontmatter,
+        metadata: resolveOpenClawMetadata(frontmatter),
+        invocation: resolveSkillInvocationPolicy(frontmatter),
+      };
+    });
+  }
+
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
-  const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
@@ -477,6 +506,8 @@ type WorkspaceSkillBuildOptions = {
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
+  /** When true, only load skills from the workspace dir (for sandboxed agents). */
+  scopeToWorkspace?: boolean;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -595,6 +626,7 @@ export async function syncSkillsToWorkspace(params: {
 }) {
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
+
   if (sourceDir === targetDir) {
     return;
   }
@@ -749,11 +781,18 @@ export function buildWorkspaceSkillCommandSpecs(
       return { kind: "tool", toolName, argMode: "raw" } as const;
     })();
 
+    const skillKey = resolveSkillKey(entry.skill, entry);
+    const skillConfig = resolveSkillConfig(opts?.config, skillKey);
+    const thinking = skillConfig?.thinking;
+    const model = skillConfig?.model;
+
     specs.push({
       name: unique,
       skillName: rawName,
       description,
       ...(dispatch ? { dispatch } : {}),
+      ...(thinking ? { thinking } : {}),
+      ...(model ? { model } : {}),
     });
   }
   return specs;

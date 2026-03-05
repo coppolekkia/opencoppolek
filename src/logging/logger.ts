@@ -12,7 +12,18 @@ import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 import { formatLocalIsoWithOffset } from "./timestamps.js";
 
-export const DEFAULT_LOG_DIR = resolvePreferredOpenClawTmpDir();
+// When running under vitest, isolate logs to avoid polluting production logs.
+function getDefaultLogDir(): string {
+  if (process.env.OPENCLAW_LOG_DIR) {
+    return process.env.OPENCLAW_LOG_DIR;
+  }
+  if (process.env.VITEST === "true") {
+    return "/tmp/openclaw-test";
+  }
+  return resolvePreferredOpenClawTmpDir();
+}
+
+export const DEFAULT_LOG_DIR = getDefaultLogDir();
 export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
 
 const LOG_PREFIX = "openclaw";
@@ -120,7 +131,7 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   if (settings.level === "silent") {
     return false;
   }
-  return levelToMinLevel(level) <= levelToMinLevel(settings.level);
+  return levelToMinLevel(level) >= levelToMinLevel(settings.level);
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
@@ -225,9 +236,11 @@ export function getChildLogger(
   const base = getLogger();
   const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
   const name = bindings ? JSON.stringify(bindings) : undefined;
+  // Only pass minLevel when explicitly set; spreading `minLevel: undefined`
+  // overwrites the parent logger's minLevel, disabling tslog's level filter.
   return base.getSubLogger({
     name,
-    minLevel,
+    ...(minLevel != null ? { minLevel } : {}),
     prefix: bindings ? [name ?? ""] : [],
   });
 }

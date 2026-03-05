@@ -1,0 +1,2642 @@
+/**
+ * Neo4j driver wrapper for memory-neo4j plugin.
+ *
+ * Handles connection management, index creation, CRUD operations,
+ * and the three search signals (vector, BM25, graph).
+ *
+ * Patterns adapted from ontology project Neo4j client
+ * with retry-on-transient and MERGE idempotency.
+ */
+
+import { randomUUID } from "node:crypto";
+import neo4j, { type Driver } from "neo4j-driver";
+import type { ExtractionConfig } from "./config.js";
+import { callOpenRouter } from "./llm-client.js";
+import type { ExtractionStatus, Logger, SearchSignalResult, StoreMemoryInput } from "./schema.js";
+import {
+  ALLOWED_RELATIONSHIP_TYPES,
+  escapeLucene,
+  makePairKey,
+  validateRelationshipType,
+} from "./schema.js";
+import { detectCredential } from "./sleep-cycle.js";
+
+// Strip markdown code fences from LLM output (some providers wrap JSON in ```)
+function stripCodeFences(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
+  return match ? match[1].trim() : trimmed;
+}
+
+// SAFETY: This pattern is built from the hardcoded ALLOWED_RELATIONSHIP_TYPES constant,
+// not from user input. It's used in Cypher variable-length path patterns like
+// (e1)-[:WORKS_AT|LIVES_AT|...*1..N]-(e2). Since the source is a compile-time
+// constant, there is no injection risk.
+const RELATIONSHIP_TYPE_PATTERN = [...ALLOWED_RELATIONSHIP_TYPES].join("|");
+
+// Retry configuration for transient Neo4j errors (deadlocks, etc.)
+const TRANSIENT_RETRY_ATTEMPTS = 3;
+const TRANSIENT_RETRY_BASE_DELAY_MS = 500;
+
+// ============================================================================
+// Neo4j Memory Client
+// ============================================================================
+
+export class Neo4jMemoryClient {
+  private driver: Driver | null = null;
+  private initPromise: Promise<void> | null = null;
+  private indexesReady = false;
+
+  constructor(
+    private readonly uri: string,
+    private readonly username: string,
+    private readonly password: string,
+    private readonly dimensions: number,
+    private readonly logger: Logger,
+  ) {}
+
+  // --------------------------------------------------------------------------
+  // Connection & Initialization
+  // --------------------------------------------------------------------------
+
+  async ensureInitialized(): Promise<void> {
+    if (this.driver && this.indexesReady) {
+      return;
+    }
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+    this.initPromise = this.doInitialize().catch((err) => {
+      // Reset so subsequent calls retry instead of returning cached rejection
+      this.initPromise = null;
+      throw err;
+    });
+    return this.initPromise;
+  }
+
+  private async doInitialize(): Promise<void> {
+    this.driver = neo4j.driver(this.uri, neo4j.auth.basic(this.username, this.password), {
+      disableLosslessIntegers: true,
+    });
+
+    // Verify connection
+    const session = this.driver.session();
+    try {
+      await session.run("RETURN 1");
+      const redactedUri = (() => {
+        try {
+          const u = new URL(this.uri);
+          if (u.password) u.password = "***";
+          return u.toString();
+        } catch {
+          return this.uri.replace(/:\/\/[^:]+:[^@]+@/, "://<redacted>@");
+        }
+      })();
+      this.logger.info(`memory-neo4j: connected to ${redactedUri}`);
+    } finally {
+      await session.close();
+    }
+
+    // Create indexes
+    await this.ensureIndexes();
+    this.indexesReady = true;
+
+    // Backfill temporal fields for pre-existing memories (idempotent)
+    await this.migrateTemporalFields();
+  }
+
+  private async ensureIndexes(): Promise<void> {
+    // Each DDL runs in its own session so they can be issued in parallel (OP-109).
+    await Promise.all([
+      // Uniqueness constraints (also create indexes implicitly)
+      this.runSafeOwn(
+        "CREATE CONSTRAINT memory_id_unique IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE",
+      ),
+      this.runSafeOwn(
+        "CREATE CONSTRAINT entity_id_unique IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE",
+      ),
+      this.runSafeOwn(
+        "CREATE CONSTRAINT tag_name_unique IF NOT EXISTS FOR (t:Tag) REQUIRE t.name IS UNIQUE",
+      ),
+
+      // Vector indexes
+      this.runSafeOwn(
+        `CREATE VECTOR INDEX memory_embedding_index IF NOT EXISTS
+        FOR (m:Memory) ON m.embedding
+        OPTIONS {indexConfig: {
+          \`vector.dimensions\`: ${this.dimensions},
+          \`vector.similarity_function\`: 'cosine'
+        }}`,
+      ),
+
+      // Full-text indexes (Lucene BM25)
+      this.runSafeOwn(
+        "CREATE FULLTEXT INDEX memory_fulltext_index IF NOT EXISTS FOR (m:Memory) ON EACH [m.text]",
+      ),
+      this.runSafeOwn(
+        "CREATE FULLTEXT INDEX entity_fulltext_index IF NOT EXISTS FOR (e:Entity) ON EACH [e.name]",
+      ),
+
+      // Property indexes for filtering
+      this.runSafeOwn(
+        "CREATE INDEX memory_agent_index IF NOT EXISTS FOR (m:Memory) ON (m.agentId)",
+      ),
+      this.runSafeOwn(
+        "CREATE INDEX memory_category_index IF NOT EXISTS FOR (m:Memory) ON (m.category)",
+      ),
+      this.runSafeOwn(
+        "CREATE INDEX memory_created_index IF NOT EXISTS FOR (m:Memory) ON (m.createdAt)",
+      ),
+      this.runSafeOwn(
+        "CREATE INDEX memory_retrieved_index IF NOT EXISTS FOR (m:Memory) ON (m.lastRetrievedAt)",
+      ),
+      this.runSafeOwn("CREATE INDEX entity_type_index IF NOT EXISTS FOR (e:Entity) ON (e.type)"),
+      this.runSafeOwn("CREATE INDEX entity_name_index IF NOT EXISTS FOR (e:Entity) ON (e.name)"),
+
+      // Composite index for queries that filter by both agentId and category
+      // (e.g. listByCategory)
+      this.runSafeOwn(
+        "CREATE INDEX memory_agent_category_index IF NOT EXISTS FOR (m:Memory) ON (m.agentId, m.category)",
+      ),
+
+      // Extraction status index for listPendingExtractions (sleep cycle)
+      this.runSafeOwn(
+        "CREATE INDEX memory_extraction_status_index IF NOT EXISTS FOR (m:Memory) ON (m.extractionStatus)",
+      ),
+
+      // Temporal index for efficient filtering of active vs. expired memories
+      this.runSafeOwn(
+        "CREATE INDEX memory_temporal IF NOT EXISTS FOR (m:Memory) ON (m.validUntil, m.validFrom)",
+      ),
+
+      // Index for task-scoped memory lookups (OP-108)
+      this.runSafeOwn(
+        "CREATE INDEX memory_task_id_index IF NOT EXISTS FOR (m:Memory) ON (m.taskId)",
+      ),
+
+      // Composite index for conflict/importance queries (OP-108/Perf-5)
+      this.runSafeOwn(
+        "CREATE INDEX memory_agent_category_importance IF NOT EXISTS FOR (m:Memory) ON (m.agentId, m.category, m.importance)",
+      ),
+    ]);
+
+    this.logger.info("memory-neo4j: indexes ensured");
+  }
+
+  /**
+   * Run a Cypher statement, logging but not throwing on error.
+   * Used for index creation where indexes may already exist with different config.
+   */
+  private async runSafe(session: ReturnType<Driver["session"]>, query: string): Promise<void> {
+    try {
+      await session.run(query);
+    } catch (err) {
+      this.logger.debug?.(`memory-neo4j: index/constraint statement skipped: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Open a dedicated session, run a DDL statement safely, then close the session.
+   * Used by ensureIndexes to run statements in parallel (each needs its own session).
+   */
+  private async runSafeOwn(query: string): Promise<void> {
+    const session = this.driver!.session();
+    try {
+      await this.runSafe(session, query);
+    } finally {
+      await session.close();
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.driver) {
+      await this.driver.close();
+      this.driver = null;
+      this.indexesReady = false;
+      this.initPromise = null;
+      this.logger.info("memory-neo4j: connection closed");
+    }
+  }
+
+  /**
+   * Run a raw Cypher query and return records as plain objects.
+   * Keys in the RETURN clause become object properties.
+   */
+  async runQuery<T extends Record<string, unknown>>(
+    cypher: string,
+    params: Record<string, unknown> = {},
+  ): Promise<T[]> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(cypher, params);
+      return result.records.map((r) => {
+        const obj: Record<string, unknown> = {};
+        for (const key of r.keys) {
+          obj[key as string] = r.get(key as string);
+        }
+        return obj as T;
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  async verifyConnection(): Promise<boolean> {
+    if (!this.driver) {
+      return false;
+    }
+    const session = this.driver.session();
+    try {
+      await session.run("RETURN 1");
+      return true;
+    } catch (err) {
+      this.logger.error(`memory-neo4j: connection verification failed: ${String(err)}`);
+      return false;
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Memory CRUD
+  // --------------------------------------------------------------------------
+
+  /**
+   * Persist a memory node to Neo4j.
+   *
+   * Returns the stored memory ID on success.
+   * If the text contains a credential-like pattern (OP-97), the memory is NOT
+   * stored and a sentinel ID of the form `"blocked:credential:<timestamp>"` is
+   * returned so callers do not crash. A warning is logged in this case.
+   */
+  async storeMemory(input: StoreMemoryInput): Promise<string> {
+    await this.ensureInitialized();
+    // OP-97: Write-time credential scan — reject storage of secrets
+    const credentialMatch = detectCredential(input.text);
+    if (credentialMatch !== null) {
+      this.logger.warn(
+        `memory-neo4j: storeMemory blocked — text contains a potential ${credentialMatch}. Refusing to persist.`,
+      );
+      // Return a sentinel ID so callers do not crash; the memory is not stored.
+      return `blocked:credential:${Date.now()}`;
+    }
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        const now = new Date().toISOString();
+        // Layer 3: taskId is optional — only set on the node when provided
+        const taskIdClause = input.taskId ? ", taskId: $taskId" : "";
+        const validFrom = input.validFrom ?? now;
+        const result = await session.run(
+          `CREATE (m:Memory {
+            id: $id, text: $text, embedding: $embedding,
+            importance: $importance, category: $category,
+            source: $source, extractionStatus: $extractionStatus,
+            agentId: $agentId, sessionKey: $sessionKey,
+            createdAt: $createdAt, updatedAt: $updatedAt,
+            originalCreatedAt: $originalCreatedAt,
+            retrievalCount: $retrievalCount, lastRetrievedAt: $lastRetrievedAt,
+            extractionRetries: $extractionRetries,
+            validFrom: $validFrom, validUntil: null, supersededBy: null${taskIdClause}
+          })
+          RETURN m.id AS id`,
+          {
+            ...input,
+            sessionKey: input.sessionKey ?? null,
+            taskId: input.taskId ?? null,
+            createdAt: now,
+            originalCreatedAt: now,
+            updatedAt: now,
+            retrievalCount: 0,
+            lastRetrievedAt: null,
+            extractionRetries: 0,
+            validFrom,
+          },
+        );
+        return result.records[0].get("id") as string;
+      } finally {
+        await session.close();
+      }
+    });
+  }
+
+  async deleteMemory(id: string, agentId?: string): Promise<boolean> {
+    await this.ensureInitialized();
+    // Validate UUID format to prevent injection
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      throw new Error(`Invalid memory ID format: ${id}`);
+    }
+
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        // Atomic: decrement mentionCount and delete in a single Cypher statement
+        // to prevent inconsistent state if a crash occurs between operations.
+        // When agentId is provided, scope the delete to that agent's memories
+        // to prevent cross-agent deletion.
+        const matchClause = agentId
+          ? "MATCH (m:Memory {id: $id, agentId: $agentId})"
+          : "MATCH (m:Memory {id: $id})";
+        const result = await session.run(
+          `${matchClause}
+           OPTIONAL MATCH (m)-[:MENTIONS]->(e:Entity)
+           SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END
+           WITH m, count(e) AS _
+           DETACH DELETE m
+           RETURN count(*) AS deleted`,
+          agentId ? { id, agentId } : { id },
+        );
+
+        const deleted =
+          result.records.length > 0 ? (result.records[0].get("deleted") as number) > 0 : false;
+        return deleted;
+      } finally {
+        await session.close();
+      }
+    });
+  }
+
+  async countMemories(agentId?: string): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const query = agentId
+        ? "MATCH (m:Memory {agentId: $agentId}) RETURN count(m) AS count"
+        : "MATCH (m:Memory) RETURN count(m) AS count";
+      const result = await session.run(query, agentId ? { agentId } : {});
+      return (result.records[0]?.get("count") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Get memory counts grouped by agentId and category.
+   * Returns stats for building a summary table.
+   */
+  async getMemoryStats(
+    agentId?: string,
+  ): Promise<Array<{ agentId: string; category: string; count: number; avgImportance: number }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `MATCH (m:Memory)
+        WHERE ($agentId IS NULL OR m.agentId = $agentId)
+        RETURN m.agentId AS agentId, m.category AS category,
+               count(m) AS count, avg(m.importance) AS avgImportance
+        ORDER BY agentId, category`,
+        { agentId: agentId ?? null },
+      );
+      return result.records.map((r) => {
+        const countVal = r.get("count");
+        const avgVal = r.get("avgImportance");
+        return {
+          agentId: (r.get("agentId") as string) ?? "default",
+          category: (r.get("category") as string) ?? "other",
+          count: typeof countVal === "number" ? countVal : Number(countVal),
+          avgImportance: typeof avgVal === "number" ? avgVal : Number(avgVal),
+        };
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * List memories by category, ordered by importance (descending).
+   * Used for loading core memories at session start.
+   */
+  async listByCategory(
+    category: string,
+    limit: number,
+    minImportance: number = 0,
+    agentId?: string,
+  ): Promise<{ id: string; text: string; category: string; importance: number }[]> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.category = $category AND m.importance >= $minImportance ${agentFilter}
+         RETURN m.id AS id, m.text AS text, m.category AS category, m.importance AS importance
+         ORDER BY m.importance DESC
+         LIMIT $limit`,
+        {
+          category,
+          minImportance,
+          limit: neo4j.int(Math.floor(limit)),
+          ...(agentId ? { agentId } : {}),
+        },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        category: r.get("category") as string,
+        importance: r.get("importance") as number,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Load all core memories for context injection.
+   *
+   * Core memories are user-curated (created via explicit "remember" requests)
+   * with importance locked at 1.0, so there is no meaningful ordering.
+   * All core memories are returned — the user manages the size.
+   */
+  async listCoreForInjection(
+    agentId?: string,
+  ): Promise<{ id: string; text: string; category: string; importance: number }[]> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.category = 'core' ${agentFilter}
+         RETURN m.id AS id, m.text AS text, m.category AS category, m.importance AS importance`,
+        agentId ? { agentId } : {},
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        category: r.get("category") as string,
+        importance: r.get("importance") as number,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Search Signals
+  // --------------------------------------------------------------------------
+
+  /**
+   * Signal 1: HNSW vector similarity search.
+   * Returns memories ranked by cosine similarity to the query embedding.
+   */
+  async vectorSearch(
+    embedding: number[],
+    limit: number,
+    minScore: number = 0.1,
+    agentId?: string,
+    includeExpired?: boolean,
+  ): Promise<SearchSignalResult[]> {
+    await this.ensureInitialized();
+    try {
+      return await this.retryOnTransient(async () => {
+        const session = this.driver!.session();
+        try {
+          const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
+          const expiredFilter = includeExpired ? "" : "AND node.validUntil IS NULL";
+          const result = await session.run(
+            `CALL db.index.vector.queryNodes('memory_embedding_index', $limit, $embedding)
+             YIELD node, score
+             WHERE score >= $minScore ${agentFilter} ${expiredFilter}
+             RETURN node.id AS id, node.text AS text, node.category AS category,
+                    node.importance AS importance, node.createdAt AS createdAt,
+                    node.taskId AS taskId,
+                    score AS similarity
+             ORDER BY score DESC`,
+            {
+              embedding,
+              limit: neo4j.int(Math.floor(limit)),
+              minScore,
+              ...(agentId ? { agentId } : {}),
+            },
+          );
+
+          return result.records.map((r) => ({
+            id: r.get("id") as string,
+            text: r.get("text") as string,
+            category: r.get("category") as string,
+            importance: r.get("importance") as number,
+            createdAt: String(r.get("createdAt") ?? ""),
+            score: r.get("similarity") as number,
+            taskId: (r.get("taskId") as string) ?? undefined,
+          }));
+        } finally {
+          await session.close();
+        }
+      });
+    } catch (err) {
+      // Graceful degradation: return empty if vector index isn't ready or all retries exhausted
+      this.logger.warn(`memory-neo4j: vector search failed: ${String(err)}`);
+      return [];
+    }
+  }
+
+  /**
+   * Signal 2: Lucene BM25 full-text keyword search.
+   * Returns memories ranked by BM25 relevance score.
+   */
+  async bm25Search(
+    query: string,
+    limit: number,
+    agentId?: string,
+    includeExpired?: boolean,
+  ): Promise<SearchSignalResult[]> {
+    await this.ensureInitialized();
+    const escaped = escapeLucene(query);
+    if (!escaped.trim()) {
+      return [];
+    }
+
+    try {
+      return await this.retryOnTransient(async () => {
+        const session = this.driver!.session();
+        try {
+          const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
+          const expiredFilter = includeExpired ? "" : "AND node.validUntil IS NULL";
+          const result = await session.run(
+            `CALL db.index.fulltext.queryNodes('memory_fulltext_index', $query)
+             YIELD node, score
+             WHERE true ${agentFilter} ${expiredFilter}
+             RETURN node.id AS id, node.text AS text, node.category AS category,
+                    node.importance AS importance, node.createdAt AS createdAt,
+                    node.taskId AS taskId,
+                    score AS bm25Score
+             ORDER BY score DESC
+             LIMIT $limit`,
+            {
+              query: escaped,
+              limit: neo4j.int(Math.floor(limit)),
+              ...(agentId ? { agentId } : {}),
+            },
+          );
+
+          // Normalize BM25 scores to 0-1 range (divide by max)
+          const records = result.records.map((r) => ({
+            id: r.get("id") as string,
+            text: r.get("text") as string,
+            category: r.get("category") as string,
+            importance: r.get("importance") as number,
+            createdAt: String(r.get("createdAt") ?? ""),
+            rawScore: r.get("bm25Score") as number,
+            taskId: (r.get("taskId") as string) ?? undefined,
+          }));
+
+          if (records.length === 0) {
+            return [];
+          }
+          // Min-max normalization with a floor: prevents a single weak BM25
+          // match from getting score 1.0 and inflating its RRF contribution.
+          const maxScore = records[0].rawScore;
+          const minScore = records[records.length - 1].rawScore;
+          const range = maxScore - minScore;
+          const FLOOR = 0.3; // Minimum normalized score for the lowest-ranked result
+          return records.map((r) => ({
+            ...r,
+            score: range > 0 ? FLOOR + ((1 - FLOOR) * (r.rawScore - minScore)) / range : 0.5, // Single result or identical scores → moderate 0.5 to avoid inflating weak matches
+          }));
+        } finally {
+          await session.close();
+        }
+      });
+    } catch (err) {
+      // Graceful degradation: return empty if all retries exhausted
+      this.logger.warn(`memory-neo4j: BM25 search failed: ${String(err)}`);
+      return [];
+    }
+  }
+
+  /**
+   * Signal 3: Graph traversal search.
+   *
+   * 1. Find entities matching the query via fulltext index
+   * 2. Find memories directly connected to those entities (MENTIONS)
+   * 3. 1-hop spreading activation through entity relationships
+   *
+   * Returns memories with graph-based relevance scores.
+   */
+  async graphSearch(
+    query: string,
+    limit: number,
+    firingThreshold: number = 0.3,
+    agentId?: string,
+    maxHops: number = 1,
+    includeExpired?: boolean,
+  ): Promise<SearchSignalResult[]> {
+    await this.ensureInitialized();
+    const escaped = escapeLucene(query);
+    if (!escaped.trim()) {
+      return [];
+    }
+
+    try {
+      return await this.retryOnTransient(async () => {
+        const session = this.driver!.session();
+        try {
+          // Single query: entity fulltext lookup → direct mentions + N-hop spreading activation
+          const agentFilterM = agentId ? "AND m.agentId = $agentId" : "";
+          const agentFilterM2 = agentId ? "AND m2.agentId = $agentId" : "";
+          const expiredFilterM = includeExpired ? "" : "AND m.validUntil IS NULL";
+          const expiredFilterM2 = includeExpired ? "" : "AND m2.validUntil IS NULL";
+          // Variable-length relationship pattern: 1..maxHops hops through entity relationships
+          const hopRange = `1..${Math.max(1, Math.min(3, maxHops))}`;
+          const result = await session.run(
+            `// Find matching entities via fulltext index (SINGLE lookup)
+             CALL db.index.fulltext.queryNodes('entity_fulltext_index', $query)
+             YIELD node AS entity, score
+             WHERE score >= 0.5
+             WITH entity
+             ORDER BY score DESC
+             LIMIT 5
+
+             // Collect direct mentions
+             OPTIONAL MATCH (entity)<-[rm:MENTIONS]-(m:Memory)
+             WHERE m IS NOT NULL ${agentFilterM} ${expiredFilterM}
+             WITH entity, collect({
+               id: m.id, text: m.text, category: m.category,
+               importance: m.importance, createdAt: m.createdAt,
+               taskId: m.taskId,
+               score: coalesce(rm.confidence, 1.0)
+             }) AS directResults
+
+             // N-hop spreading activation
+             OPTIONAL MATCH (entity)-[rels:${RELATIONSHIP_TYPE_PATTERN}*${hopRange}]-(e2:Entity)
+             WHERE ALL(r IN rels WHERE coalesce(r.confidence, 0.7) >= $firingThreshold)
+             OPTIONAL MATCH (e2)<-[rm2:MENTIONS]-(m2:Memory)
+             WHERE m2 IS NOT NULL ${agentFilterM2} ${expiredFilterM2}
+             WITH directResults, collect({
+               id: m2.id, text: m2.text, category: m2.category,
+               importance: m2.importance, createdAt: m2.createdAt,
+               taskId: m2.taskId,
+               score: reduce(s = 1.0, r IN rels | s * coalesce(r.confidence, 0.7)) * coalesce(rm2.confidence, 1.0)
+             }) AS hopResults
+
+             // Combine and return
+             UNWIND (directResults + hopResults) AS row
+             WITH row WHERE row.id IS NOT NULL
+             RETURN row.id AS id, row.text AS text, row.category AS category,
+                    row.importance AS importance, row.createdAt AS createdAt,
+                    row.taskId AS taskId,
+                    max(row.score) AS graphScore`,
+            { query: escaped, firingThreshold, ...(agentId ? { agentId } : {}) },
+          );
+
+          // Deduplicate by id, keeping highest score
+          const byId = new Map<string, SearchSignalResult>();
+          for (const record of result.records) {
+            const id = record.get("id") as string;
+            if (!id) {
+              continue;
+            }
+            const score = record.get("graphScore") as number;
+            const existing = byId.get(id);
+            if (!existing || score > existing.score) {
+              byId.set(id, {
+                id,
+                text: record.get("text") as string,
+                category: record.get("category") as string,
+                importance: record.get("importance") as number,
+                createdAt: String(record.get("createdAt") ?? ""),
+                score,
+                taskId: (record.get("taskId") as string) ?? undefined,
+              });
+            }
+          }
+
+          return Array.from(byId.values())
+            .sort((a, b) => b.score - a.score)
+            .slice(0, limit);
+        } finally {
+          await session.close();
+        }
+      });
+    } catch (err) {
+      // Graceful degradation: return empty if all retries exhausted
+      this.logger.warn(`memory-neo4j: graph search failed: ${String(err)}`);
+      return [];
+    }
+  }
+
+  /**
+   * Find similar memories by vector similarity. Used for deduplication.
+   * When agentId is provided, results are post-filtered to that agent
+   * (HNSW indexes don't support pre-filtering, so we fetch extra candidates).
+   */
+  async findSimilar(
+    embedding: number[],
+    threshold: number = 0.95,
+    limit: number = 1,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string; score: number }>> {
+    await this.ensureInitialized();
+    try {
+      return await this.retryOnTransient(async () => {
+        const session = this.driver!.session();
+        try {
+          // Fetch extra candidates when filtering by agentId since HNSW
+          // doesn't support pre-filtering; post-filter and trim to limit.
+          const fetchLimit = agentId ? limit * 3 : limit;
+          const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
+          const result = await session.run(
+            `CALL db.index.vector.queryNodes('memory_embedding_index', $limit, $embedding)
+             YIELD node, score
+             WHERE score >= $threshold ${agentFilter}
+             RETURN node.id AS id, node.text AS text, score AS similarity
+             ORDER BY score DESC`,
+            {
+              embedding,
+              limit: neo4j.int(fetchLimit),
+              threshold,
+              ...(agentId ? { agentId } : {}),
+            },
+          );
+
+          const results = result.records.map((r) => ({
+            id: r.get("id") as string,
+            text: r.get("text") as string,
+            score: r.get("similarity") as number,
+          }));
+          // Trim to requested limit after post-filtering
+          return agentId ? results.slice(0, limit) : results;
+        } finally {
+          await session.close();
+        }
+      });
+    } catch (err) {
+      // If vector index isn't ready or all retries exhausted, return no duplicates (allow store)
+      this.logger.debug?.(`memory-neo4j: similarity check failed: ${String(err)}`);
+      return [];
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Retrieval Tracking
+  // --------------------------------------------------------------------------
+
+  /**
+   * Record retrieval events for memories. Called after search/recall.
+   * Increments retrievalCount and updates lastRetrievedAt timestamp.
+   */
+  async recordRetrievals(memoryIds: string[]): Promise<void> {
+    if (memoryIds.length === 0) {
+      return;
+    }
+
+    await this.ensureInitialized();
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        await session.run(
+          `UNWIND $ids AS memId
+           MATCH (m:Memory {id: memId})
+           SET m.retrievalCount = coalesce(m.retrievalCount, 0) + 1,
+               m.lastRetrievedAt = $now,
+               m.importance = CASE WHEN coalesce(m.importance, 0.5) + 0.05 > 1.0 THEN 1.0 ELSE coalesce(m.importance, 0.5) + 0.05 END`,
+          { ids: memoryIds, now: new Date().toISOString() },
+        );
+      } finally {
+        await session.close();
+      }
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Layer 3: Task Metadata Operations
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find memories linked to a specific task ID.
+   * Used by recall filter and sleep cycle to identify task-related memories.
+   */
+  async findMemoriesByTaskId(
+    taskId: string,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string; category: string; importance: number }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.taskId = $taskId ${agentFilter}
+         RETURN m.id AS id, m.text AS text, m.category AS category, m.importance AS importance
+         ORDER BY m.createdAt ASC`,
+        { taskId, ...(agentId ? { agentId } : {}) },
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        category: r.get("category") as string,
+        importance: r.get("importance") as number,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Bulk-clear taskId from memories (e.g., when the task-memory link is no longer needed).
+   * Sets taskId to null rather than deleting the memory.
+   */
+  async clearTaskIdFromMemories(taskId: string, agentId?: string): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.taskId = $taskId ${agentFilter}
+         SET m.taskId = null
+         RETURN count(m) AS cleared`,
+        { taskId, ...(agentId ? { agentId } : {}) },
+      );
+      return (result.records[0]?.get("cleared") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Entity & Relationship Operations
+  // --------------------------------------------------------------------------
+
+  /**
+   * Update the extraction status of a Memory node.
+   * Optionally increments the extractionRetries counter (for transient failure tracking).
+   */
+  async updateExtractionStatus(
+    id: string,
+    status: ExtractionStatus,
+    options?: { incrementRetries?: boolean },
+  ): Promise<void> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const retryClause = options?.incrementRetries
+        ? ", m.extractionRetries = coalesce(m.extractionRetries, 0) + 1"
+        : "";
+      await session.run(
+        `MATCH (m:Memory {id: $id})
+         SET m.extractionStatus = $status, m.updatedAt = $now${retryClause}`,
+        { id, status, now: new Date().toISOString() },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Batch all entity operations from an extraction result into a single managed
+   * transaction. Replaces the previous pattern of N individual session-per-call
+   * operations with a single atomic write.
+   *
+   * Operations performed atomically:
+   * 1. MERGE all Entity nodes
+   * 2. Create MENTIONS relationships (Memory → Entity)
+   * 3. Create inter-Entity relationships (validated against allowlist)
+   * 4. MERGE Tag nodes and create TAGGED relationships
+   * 5. Update memory category (if classified and current is 'other')
+   * 6. Set extractionStatus to 'complete'
+   */
+  async batchEntityOperations(
+    memoryId: string,
+    entities: Array<{
+      id: string;
+      name: string;
+      type: string;
+      aliases?: string[];
+      description?: string;
+    }>,
+    relationships: Array<{
+      source: string;
+      target: string;
+      type: string;
+      confidence: number;
+    }>,
+    tags: Array<{ name: string; category: string }>,
+    category?: string,
+  ): Promise<void> {
+    await this.ensureInitialized();
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        await session.executeWrite(async (tx) => {
+          const now = new Date().toISOString();
+
+          // 1. MERGE all entities in one UNWIND
+          if (entities.length > 0) {
+            await tx.run(
+              `UNWIND $entities AS e
+               MERGE (n:Entity {name: e.name})
+               ON CREATE SET
+                 n.id = e.id, n.type = e.type, n.aliases = e.aliases,
+                 n.description = e.description,
+                 n.firstSeen = $now, n.lastSeen = $now, n.mentionCount = 1
+               ON MATCH SET
+                 n.type = COALESCE(e.type, n.type),
+                 n.description = COALESCE(e.description, n.description),
+                 n.lastSeen = $now,
+                 n.mentionCount = n.mentionCount + 1`,
+              {
+                entities: entities.map((e) => ({
+                  id: e.id,
+                  name: e.name.trim().toLowerCase(),
+                  type: e.type,
+                  aliases: e.aliases ?? [],
+                  description: e.description ?? null,
+                })),
+                now,
+              },
+            );
+
+            // 2. Create MENTIONS relationships in one UNWIND
+            await tx.run(
+              `UNWIND $entityNames AS eName
+               MATCH (m:Memory {id: $memoryId})
+               MATCH (e:Entity {name: eName})
+               MERGE (m)-[r:MENTIONS]->(e)
+               ON CREATE SET r.role = 'context', r.confidence = 1.0`,
+              {
+                memoryId,
+                entityNames: entities.map((e) => e.name.trim().toLowerCase()),
+              },
+            );
+          }
+
+          // 3. Create inter-Entity relationships (filter valid types)
+          const validRels = relationships.filter((r) => validateRelationshipType(r.type));
+          if (validRels.length > 0) {
+            // Group by relationship type since Cypher requires literal rel types
+            const byType = new Map<string, typeof validRels>();
+            for (const rel of validRels) {
+              const group = byType.get(rel.type) ?? [];
+              group.push(rel);
+              byType.set(rel.type, group);
+            }
+
+            for (const [relType, rels] of byType) {
+              await tx.run(
+                `UNWIND $rels AS r
+                 MATCH (e1:Entity {name: r.source})
+                 MATCH (e2:Entity {name: r.target})
+                 MERGE (e1)-[rel:${relType}]->(e2)
+                 ON CREATE SET rel.confidence = r.confidence, rel.createdAt = $now
+                 ON MATCH SET rel.confidence = CASE WHEN r.confidence > rel.confidence THEN r.confidence ELSE rel.confidence END`,
+                {
+                  rels: rels.map((r) => ({
+                    source: r.source.trim().toLowerCase(),
+                    target: r.target.trim().toLowerCase(),
+                    confidence: r.confidence,
+                  })),
+                  now,
+                },
+              );
+            }
+          }
+
+          // 4. MERGE Tags and create TAGGED relationships in one UNWIND
+          if (tags.length > 0) {
+            await tx.run(
+              `UNWIND $tags AS t
+               MERGE (tag:Tag {name: t.name})
+               ON CREATE SET tag.id = t.id, tag.category = t.category, tag.createdAt = $now
+               WITH tag, t
+               MATCH (m:Memory {id: $memoryId})
+               MERGE (m)-[r:TAGGED]->(tag)
+               ON CREATE SET r.confidence = 1.0`,
+              {
+                memoryId,
+                tags: tags.map((t) => ({
+                  name: t.name.trim().toLowerCase(),
+                  category: t.category,
+                  id: randomUUID(),
+                })),
+                now,
+              },
+            );
+          }
+
+          // 5. Update category + 6. Set extraction status (in one statement)
+          const categoryClause = category
+            ? ", m.category = CASE WHEN m.category = 'other' THEN $category ELSE m.category END"
+            : "";
+          await tx.run(
+            `MATCH (m:Memory {id: $memoryId})
+             SET m.extractionStatus = 'complete', m.updatedAt = $now${categoryClause}`,
+            { memoryId, now, ...(category ? { category } : {}) },
+          );
+        });
+      } finally {
+        await session.close();
+      }
+    });
+  }
+
+  /**
+   * List memories with pending extraction status.
+   * Used by the sleep cycle to batch-process extractions.
+   */
+  async listPendingExtractions(
+    limit: number = 100,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string; agentId: string; extractionRetries: number }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.extractionStatus IN ['pending', 'skipped'] ${agentFilter}
+         AND m.validUntil IS NULL
+         RETURN m.id AS id, m.text AS text, m.agentId AS agentId,
+                coalesce(m.extractionRetries, 0) AS extractionRetries
+         ORDER BY m.createdAt ASC
+         LIMIT $limit`,
+        { limit: neo4j.int(limit), ...(agentId ? { agentId } : {}) },
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        agentId: r.get("agentId") as string,
+        extractionRetries: r.get("extractionRetries") as number,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Count memories by extraction status.
+   * Used for sleep cycle progress reporting.
+   */
+  async countByExtractionStatus(agentId?: string): Promise<Record<ExtractionStatus, number>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         ${agentFilter}
+         RETURN m.extractionStatus AS status, count(m) AS count`,
+        agentId ? { agentId } : {},
+      );
+      const counts: Record<string, number> = {
+        pending: 0,
+        complete: 0,
+        failed: 0,
+        skipped: 0,
+      };
+      for (const record of result.records) {
+        const status = record.get("status") as string;
+        const count = (record.get("count") as number) ?? 0;
+        if (status in counts) {
+          counts[status] = count;
+        }
+      }
+      return counts as Record<ExtractionStatus, number>;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * List memories with completed extraction but no TAGGED relationships.
+   * Used by the retroactive tagging phase to find memories that need tags.
+   */
+  async listUntaggedMemories(
+    limit: number = 50,
+    agentId?: string,
+    maxRetries: number = 3,
+  ): Promise<Array<{ id: string; text: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.extractionStatus = 'complete' ${agentFilter}
+           AND NOT EXISTS { MATCH (m)-[:TAGGED]->(:Tag) }
+           AND coalesce(m.taggingRetries, 0) < $maxRetries
+         RETURN m.id AS id, m.text AS text
+         ORDER BY m.createdAt ASC
+         LIMIT $limit`,
+        {
+          limit: neo4j.int(limit),
+          maxRetries: neo4j.int(maxRetries),
+          ...(agentId ? { agentId } : {}),
+        },
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Increment the tagging retry counter for a memory that failed retroactive tagging.
+   * After maxRetries, listUntaggedMemories will skip it.
+   */
+  async incrementTaggingRetries(memoryId: string): Promise<void> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      await session.run(
+        `MATCH (m:Memory {id: $id})
+         SET m.taggingRetries = coalesce(m.taggingRetries, 0) + 1`,
+        { id: memoryId },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Sleep Cycle: Deduplication
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find clusters of near-duplicate memories by vector similarity.
+   * Returns groups where each group contains memories that are duplicates of each other.
+   *
+   * Algorithm (O(N log N) via HNSW index, replaces O(N²) Cartesian product):
+   * 1. Fetch all memory IDs and metadata
+   * 2. For each memory, query the vector index for nearest neighbors above threshold
+   * 3. Build clusters via union-find (transitive closure)
+   * 4. Return clusters with 2+ members
+   *
+   * @param threshold Minimum similarity score (0-1)
+   * @param agentId Optional agent filter
+   * @param returnSimilarities If true, includes pairwise similarity scores in the result
+   */
+  async findDuplicateClusters(
+    threshold: number = 0.95,
+    agentId?: string,
+    returnSimilarities: boolean = false,
+  ): Promise<
+    Array<{
+      memoryIds: string[];
+      texts: string[];
+      importances: number[];
+      similarities?: Map<string, number>;
+    }>
+  > {
+    await this.ensureInitialized();
+
+    // Step 1: Fetch only IDs and importance (not text) to reduce data transfer
+    const memoryMeta = new Map<string, { importance: number }>();
+    {
+      const session = this.driver!.session();
+      try {
+        const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
+        const allResult = await session.run(
+          `MATCH (m:Memory) ${agentFilter}
+           RETURN m.id AS id, m.importance AS importance`,
+          agentId ? { agentId } : {},
+        );
+
+        for (const r of allResult.records) {
+          memoryMeta.set(r.get("id") as string, {
+            importance: r.get("importance") as number,
+          });
+        }
+      } finally {
+        await session.close();
+      }
+    }
+
+    if (memoryMeta.size < 2) {
+      return [];
+    }
+
+    // Step 2: For each memory, find near-duplicates via HNSW vector index
+    // Each query uses a fresh short-lived session via retryOnTransient to
+    // avoid a single long-lived session that could expire mid-operation.
+    // Each query is O(log N) vs O(N) for brute-force, total O(N log N)
+    const parent = new Map<string, string>();
+    // Capture pairwise similarities if requested (for sleep cycle optimization)
+    const pairwiseSimilarities = returnSimilarities ? new Map<string, number>() : null;
+
+    const find = (x: string): string => {
+      if (!parent.has(x)) {
+        parent.set(x, x);
+      }
+      if (parent.get(x) !== x) {
+        parent.set(x, find(parent.get(x)!));
+      }
+      return parent.get(x)!;
+    };
+
+    const union = (x: string, y: string): void => {
+      const px = find(x);
+      const py = find(y);
+      if (px !== py) {
+        parent.set(px, py);
+      }
+    };
+
+    // Process vector queries in concurrent batches to avoid overwhelming Neo4j
+    // while still being much faster than fully sequential execution.
+    const DEDUP_CONCURRENCY = 8;
+    let pairsFound = 0;
+    const allIds = [...memoryMeta.keys()];
+
+    for (let batchStart = 0; batchStart < allIds.length; batchStart += DEDUP_CONCURRENCY) {
+      if (pairsFound > 2000) {
+        this.logger.warn(
+          `memory-neo4j: findDuplicateClusters hit safety bound (2000 pairs) — some duplicates may not be detected. Consider running with a higher threshold.`,
+        );
+        break;
+      }
+
+      const batch = allIds.slice(batchStart, batchStart + DEDUP_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map((id) =>
+          this.retryOnTransient(async () => {
+            const session = this.driver!.session();
+            try {
+              return await session.run(
+                `MATCH (src:Memory {id: $id})
+                 CALL db.index.vector.queryNodes('memory_embedding_index', $k, src.embedding)
+                 YIELD node, score
+                 WHERE node.id <> $id AND score >= $threshold
+                 RETURN node.id AS matchId, score`,
+                { id, k: neo4j.int(10), threshold },
+              );
+            } finally {
+              await session.close();
+            }
+          }),
+        ),
+      );
+
+      for (let idx = 0; idx < batch.length; idx++) {
+        const id = batch[idx];
+        const similar = results[idx];
+
+        for (const r of similar.records) {
+          const matchId = r.get("matchId") as string;
+          if (memoryMeta.has(matchId)) {
+            union(id, matchId);
+            pairsFound++;
+
+            // Capture similarity score if requested
+            if (pairwiseSimilarities) {
+              const score = r.get("score") as number;
+              const pairKey = makePairKey(id, matchId);
+              // Keep the highest score if we see this pair multiple times
+              const existing = pairwiseSimilarities.get(pairKey);
+              if (existing === undefined || score > existing) {
+                pairwiseSimilarities.set(pairKey, score);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Step 3: Group by root
+    const clusters = new Map<string, string[]>();
+    for (const id of memoryMeta.keys()) {
+      if (!parent.has(id)) {
+        continue;
+      }
+      const root = find(id);
+      if (!clusters.has(root)) {
+        clusters.set(root, []);
+      }
+      clusters.get(root)!.push(id);
+    }
+
+    // Step 4: Fetch text only for memories that are in clusters (not all memories)
+    const duplicateClusters = Array.from(clusters.values()).filter((ids) => ids.length >= 2);
+    const clusteredIds = new Set<string>();
+    for (const ids of duplicateClusters) {
+      for (const id of ids) clusteredIds.add(id);
+    }
+
+    const textMap = new Map<string, string>();
+    if (clusteredIds.size > 0) {
+      const session = this.driver!.session();
+      try {
+        const result = await session.run(
+          `UNWIND $ids AS memId
+           MATCH (m:Memory {id: memId})
+           RETURN m.id AS id, m.text AS text`,
+          { ids: [...clusteredIds] },
+        );
+        for (const r of result.records) {
+          textMap.set(r.get("id") as string, r.get("text") as string);
+        }
+      } finally {
+        await session.close();
+      }
+    }
+
+    // Return clusters with 2+ members
+    return duplicateClusters.map((ids) => {
+      const cluster: {
+        memoryIds: string[];
+        texts: string[];
+        importances: number[];
+        similarities?: Map<string, number>;
+      } = {
+        memoryIds: ids,
+        texts: ids.map((id) => textMap.get(id) ?? ""),
+        importances: ids.map((id) => memoryMeta.get(id)!.importance),
+      };
+
+      // Include similarities for this cluster if requested
+      if (pairwiseSimilarities) {
+        const clusterSims = new Map<string, number>();
+        for (let i = 0; i < ids.length - 1; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const pairKey = makePairKey(ids[i], ids[j]);
+            const score = pairwiseSimilarities.get(pairKey);
+            if (score !== undefined) {
+              clusterSims.set(pairKey, score);
+            }
+          }
+        }
+        cluster.similarities = clusterSims;
+      }
+
+      return cluster;
+    });
+  }
+
+  /**
+   * Merge duplicate memories by keeping the one with highest importance
+   * and deleting the rest. Transfers MENTIONS relationships to the survivor.
+   */
+  async mergeMemoryCluster(
+    memoryIds: string[],
+    importances: number[],
+  ): Promise<{ survivorId: string; deletedCount: number }> {
+    await this.ensureInitialized();
+
+    // Find the survivor (highest importance)
+    let survivorIdx = 0;
+    for (let i = 1; i < importances.length; i++) {
+      if (importances[i] > importances[survivorIdx]) {
+        survivorIdx = i;
+      }
+    }
+    const survivorId = memoryIds[survivorIdx];
+    const toDelete = memoryIds.filter((_, i) => i !== survivorIdx);
+
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        // Execute verify + transfer + delete in a single write transaction
+        // to prevent TOCTOU races (member deleted between verify and merge)
+        const deletedCount = await session.executeWrite(async (tx) => {
+          // Verify all cluster members still exist
+          const verifyResult = await tx.run(
+            `UNWIND $ids AS memId
+             OPTIONAL MATCH (m:Memory {id: memId})
+             RETURN memId, m IS NOT NULL AS exists`,
+            { ids: memoryIds },
+          );
+
+          const missingIds: string[] = [];
+          for (const r of verifyResult.records) {
+            if (!r.get("exists")) {
+              missingIds.push(r.get("memId") as string);
+            }
+          }
+
+          if (missingIds.length > 0) {
+            this.logger.warn(
+              `memory-neo4j: skipping cluster merge — ${missingIds.length} member(s) no longer exist: ${missingIds.join(", ")}`,
+            );
+            return 0;
+          }
+
+          // Transfer MENTIONS relationships from deleted memories to survivor
+          await tx.run(
+            `UNWIND $toDelete AS deadId
+             MATCH (dead:Memory {id: deadId})-[r:MENTIONS]->(e:Entity)
+             MATCH (survivor:Memory {id: $survivorId})
+             MERGE (survivor)-[:MENTIONS]->(e)
+             DELETE r`,
+            { toDelete, survivorId },
+          );
+
+          // Transfer TAGGED relationships from deleted memories to survivor
+          await tx.run(
+            `UNWIND $toDelete AS deadId
+             MATCH (dead:Memory {id: deadId})-[r:TAGGED]->(t:Tag)
+             MATCH (survivor:Memory {id: $survivorId})
+             MERGE (survivor)-[:TAGGED]->(t)
+             DELETE r`,
+            { toDelete, survivorId },
+          );
+
+          // Preserve the oldest originalCreatedAt on the survivor
+          // so temporal staleness can track the true age of the information
+          await tx.run(
+            `MATCH (m:Memory) WHERE m.id IN $allIds
+             WITH min(COALESCE(m.originalCreatedAt, m.createdAt)) AS oldest
+             MATCH (survivor:Memory {id: $survivorId})
+             SET survivor.originalCreatedAt = oldest`,
+            { allIds: memoryIds, survivorId },
+          );
+
+          // Delete the duplicate memories
+          await tx.run(
+            `UNWIND $toDelete AS deadId
+             MATCH (m:Memory {id: deadId})
+             DETACH DELETE m`,
+            { toDelete },
+          );
+
+          return toDelete.length;
+        });
+
+        return { survivorId, deletedCount };
+      } finally {
+        await session.close();
+      }
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Sleep Cycle: Decay & Pruning
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find memories that have decayed below the retention threshold.
+   *
+   * Decay formula (Ebbinghaus-inspired):
+   *   decay_score = importance × e^(-age_days / half_life)
+   *
+   * Where half_life scales with importance:
+   *   half_life = baseHalfLifeDays × (1 + importance × importanceMultiplier)
+   *
+   * A memory with importance=1.0 decays slower than one with importance=0.3.
+   *
+   * IMPORTANT: Core memories (category='core') and user-pinned memories
+   * are EXEMPT from decay. They persist indefinitely regardless of age.
+   */
+  async findDecayedMemories(
+    options: {
+      retentionThreshold?: number; // Below this score, memory is pruned (default: 0.1)
+      baseHalfLifeDays?: number; // Base half-life for decay (default: 30)
+      importanceMultiplier?: number; // How much importance extends half-life (default: 2)
+      /** Per-category half-life overrides. Categories not listed use baseHalfLifeDays. */
+      decayCurves?: Record<string, { halfLifeDays: number }>;
+      agentId?: string;
+      limit?: number;
+    } = {},
+  ): Promise<
+    Array<{ id: string; text: string; importance: number; ageDays: number; decayScore: number }>
+  > {
+    const {
+      retentionThreshold = 0.1,
+      baseHalfLifeDays = 30,
+      importanceMultiplier = 2,
+      decayCurves,
+      agentId,
+      limit = 500,
+    } = options;
+
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+
+      // Build per-category half-life using parameterized map lookup instead of
+      // string interpolation, avoiding any injection risk from category names.
+      const curveEntries = decayCurves ? Object.entries(decayCurves) : [];
+      const hasCurves = curveEntries.length > 0;
+
+      // Pass category→halfLife mapping as a Cypher map parameter
+      const curveMap: Record<string, number> = {};
+      for (const [cat, { halfLifeDays }] of curveEntries) {
+        curveMap[cat] = halfLifeDays;
+      }
+
+      const halfLifeExpr = hasCurves
+        ? "CASE WHEN $curveMap[m.category] IS NOT NULL THEN $curveMap[m.category] ELSE $baseHalfLife END"
+        : "$baseHalfLife";
+
+      // Decay formula uses retrieval reinforcement: memories that are frequently
+      // accessed decay slower. The effective age is anchored to the most recent
+      // of createdAt or lastRetrievedAt, so recently recalled memories get a
+      // recency boost even if they were created long ago.
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.createdAt IS NOT NULL
+           AND m.category <> 'core'
+           ${agentFilter}
+         WITH m,
+              duration.between(datetime(m.createdAt), datetime()).days AS ageDays,
+              CASE
+                WHEN m.lastRetrievedAt IS NOT NULL
+                THEN duration.between(datetime(m.lastRetrievedAt), datetime()).days
+                ELSE duration.between(datetime(m.createdAt), datetime()).days
+              END AS effectiveAgeDays,
+              m.importance AS importance,
+              coalesce(m.retrievalCount, 0) AS retrievalCount
+         WITH m, ageDays, effectiveAgeDays, importance, retrievalCount,
+              ${halfLifeExpr} * (1.0 + importance * $importanceMult) * (1.0 + log(1.0 + retrievalCount) * 0.2) AS halfLife
+         WITH m, ageDays, importance, halfLife,
+              importance * exp(-1.0 * effectiveAgeDays / halfLife) AS decayScore
+         WHERE decayScore < $threshold
+         RETURN m.id AS id, m.text AS text, importance, ageDays, decayScore
+         ORDER BY decayScore ASC
+         LIMIT $limit`,
+        {
+          threshold: retentionThreshold,
+          baseHalfLife: baseHalfLifeDays,
+          importanceMult: importanceMultiplier,
+          curveMap,
+          agentId,
+          limit: neo4j.int(limit),
+        },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        importance: r.get("importance") as number,
+        ageDays: r.get("ageDays") as number,
+        decayScore: r.get("decayScore") as number,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Delete decayed memories and decrement entity mention counts.
+   */
+  async pruneMemories(memoryIds: string[]): Promise<number> {
+    if (memoryIds.length === 0) {
+      return 0;
+    }
+
+    await this.ensureInitialized();
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        // Atomic: decrement mentionCount and delete in a single Cypher statement
+        // to prevent inconsistent state if a crash occurs between operations
+        const result = await session.run(
+          `UNWIND $ids AS memId
+           MATCH (m:Memory {id: memId})
+           OPTIONAL MATCH (m)-[:MENTIONS]->(e:Entity)
+           SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END
+           WITH m, count(e) AS _
+           DETACH DELETE m
+           RETURN count(*) AS deleted`,
+          { ids: memoryIds },
+        );
+
+        return (result.records[0]?.get("deleted") as number) ?? 0;
+      } finally {
+        await session.close();
+      }
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Sleep Cycle: Orphan Cleanup
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find orphaned Entity nodes (no MENTIONS relationships from any Memory).
+   */
+  async findOrphanEntities(
+    limit: number = 500,
+  ): Promise<Array<{ id: string; name: string; type: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      // Use EXISTS check as the authoritative source — mentionCount can go
+      // stale if crashes occur between decrement and delete operations.
+      const result = await session.run(
+        `MATCH (e:Entity)
+         WHERE NOT EXISTS { MATCH (:Memory)-[:MENTIONS]->(e) }
+         RETURN e.id AS id, e.name AS name, e.type AS type
+         LIMIT $limit`,
+        { limit: neo4j.int(limit) },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        name: r.get("name") as string,
+        type: r.get("type") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Delete orphaned entities and their relationships.
+   */
+  async deleteOrphanEntities(entityIds: string[]): Promise<number> {
+    if (entityIds.length === 0) {
+      return 0;
+    }
+
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `UNWIND $ids AS entId
+         MATCH (e:Entity {id: entId})
+         DETACH DELETE e
+         RETURN count(*) AS deleted`,
+        { ids: entityIds },
+      );
+
+      return (result.records[0]?.get("deleted") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Find orphaned Tag nodes (no TAGGED relationships from any Memory).
+   */
+  async findOrphanTags(limit: number = 500): Promise<Array<{ id: string; name: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `MATCH (t:Tag)
+         WHERE NOT EXISTS { MATCH (:Memory)-[:TAGGED]->(t) }
+         RETURN t.id AS id, t.name AS name
+         LIMIT $limit`,
+        { limit: neo4j.int(limit) },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        name: r.get("name") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Delete orphaned tags.
+   */
+  async deleteOrphanTags(tagIds: string[]): Promise<number> {
+    if (tagIds.length === 0) {
+      return 0;
+    }
+
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `UNWIND $ids AS tagId
+         MATCH (t:Tag {id: tagId})
+         DETACH DELETE t
+         RETURN count(*) AS deleted`,
+        { ids: tagIds },
+      );
+
+      return (result.records[0]?.get("deleted") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Find tags with exactly 1 TAGGED relationship, older than minAgeDays.
+   * Single-use tags add noise without providing useful cross-memory connections.
+   * Only prunes tags that have had enough time to accrue additional references.
+   */
+  async findSingleUseTags(
+    minAgeDays: number = 14,
+    limit: number = 500,
+  ): Promise<Array<{ id: string; name: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const cutoffDate = new Date(Date.now() - minAgeDays * 24 * 60 * 60 * 1000).toISOString();
+      const result = await session.run(
+        `MATCH (t:Tag)
+         WHERE t.createdAt < $cutoffDate
+         WITH t
+         MATCH (t)<-[:TAGGED]-(m:Memory)
+         WITH t, count(m) AS usageCount
+         WHERE usageCount = 1
+         RETURN t.id AS id, t.name AS name
+         LIMIT $limit`,
+        { cutoffDate, limit: neo4j.int(limit) },
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        name: r.get("name") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Sleep Cycle: Conflict Detection
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find memory pairs that share at least one entity (via MENTIONS relationships).
+   * These are candidates for conflict resolution — the LLM decides if they truly conflict.
+   * Excludes core memories (those are user-curated).
+   */
+  async findConflictingMemories(agentId?: string): Promise<
+    Array<{
+      memoryA: { id: string; text: string; importance: number; createdAt: string };
+      memoryB: { id: string; text: string; importance: number; createdAt: string };
+    }>
+  > {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m1.agentId = $agentId AND m2.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m1:Memory)-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(m2:Memory)
+         WHERE m1.id < m2.id ${agentFilter}
+         AND m1.validUntil IS NULL AND m2.validUntil IS NULL
+         AND m1.category <> 'core' AND m2.category <> 'core'
+         WITH m1, m2, count(e) AS sharedEntities
+         WHERE sharedEntities >= 1
+         RETURN DISTINCT m1.id AS m1Id, m1.text AS m1Text, m1.importance AS m1Importance, m1.createdAt AS m1CreatedAt,
+                m2.id AS m2Id, m2.text AS m2Text, m2.importance AS m2Importance, m2.createdAt AS m2CreatedAt
+         LIMIT 50`,
+        agentId ? { agentId } : {},
+      );
+
+      return result.records.map((r) => ({
+        memoryA: {
+          id: r.get("m1Id"),
+          text: r.get("m1Text"),
+          importance: r.get("m1Importance"),
+          createdAt: String(r.get("m1CreatedAt") ?? ""),
+        },
+        memoryB: {
+          id: r.get("m2Id"),
+          text: r.get("m2Text"),
+          importance: r.get("m2Importance"),
+          createdAt: String(r.get("m2CreatedAt") ?? ""),
+        },
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Invalidate a memory by setting its importance to near-zero.
+   * Used by conflict resolution to effectively retire the losing memory
+   * without deleting it (it will be pruned naturally by the decay phase).
+   */
+  async invalidateMemory(id: string): Promise<void> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      await session.run(
+        `MATCH (m:Memory {id: $id})
+         SET m.importance = 0.01, m.updatedAt = $now`,
+        { id, now: new Date().toISOString() },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Batch-invalidate multiple memories in a single Cypher query.
+   * Prefer this over sequential invalidateMemory calls when retiring a list of IDs.
+   */
+  async invalidateMemories(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      await session.run(
+        `UNWIND $ids AS id
+         MATCH (m:Memory {id: id})
+         SET m.importance = 0.01, m.updatedAt = $now`,
+        { ids, now: new Date().toISOString() },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Temporal Memory Operations
+  // --------------------------------------------------------------------------
+
+  /**
+   * Supersede a memory: set its validUntil to now and record which memory
+   * replaced it. Used by conflict detection when a newer memory updates/
+   * contradicts an existing one.
+   *
+   * @param oldId  ID of the memory being superseded
+   * @param newId  ID of the replacement memory
+   */
+  async supersedeMemory(oldId: string, newId: string): Promise<void> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const now = new Date().toISOString();
+      await session.run(
+        `MATCH (m:Memory {id: $oldId})
+         SET m.validUntil = $now, m.supersededBy = $newId, m.updatedAt = $now`,
+        { oldId, newId, now },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Migrate existing memories to include temporal fields.
+   * Sets validFrom = COALESCE(originalCreatedAt, createdAt) and
+   * validUntil = null, supersededBy = null for memories that lack these fields.
+   *
+   * @returns Number of memories updated
+   */
+  async migrateTemporalFields(): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.validFrom IS NULL
+         SET m.validFrom = COALESCE(m.originalCreatedAt, m.createdAt),
+             m.validUntil = null,
+             m.supersededBy = null
+         RETURN count(m) AS updated`,
+      );
+      const updated = result.records[0]?.get("updated");
+      return typeof updated === "number" ? updated : Number(updated ?? 0);
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Detect conflicts between a newly stored memory and existing memories.
+   * Uses vector similarity search to find candidates, then LLM to classify.
+   * Supersedes any existing memories that the new memory replaces.
+   *
+   * @param newMemoryId     ID of the newly stored memory
+   * @param newMemoryText   Text of the new memory
+   * @param newEmbedding    Embedding of the new memory
+   * @param agentId         Agent scope for the search
+   * @param config          Extraction config for LLM calls
+   * @param options         Conflict detection options (threshold, maxCandidates)
+   * @returns Number of memories superseded
+   */
+  async detectConflicts(
+    newMemoryId: string,
+    newMemoryText: string,
+    newEmbedding: number[],
+    agentId: string,
+    config: ExtractionConfig,
+    options?: {
+      similarityThreshold?: number;
+      maxCandidates?: number;
+    },
+  ): Promise<number> {
+    if (!config.enabled) {
+      return 0;
+    }
+
+    const threshold = options?.similarityThreshold ?? 0.82;
+    const maxCandidates = options?.maxCandidates ?? 5;
+
+    // Find existing non-expired memories similar to the new one (excluding itself)
+    let candidates: Array<{ id: string; text: string; score: number }>;
+    try {
+      candidates = await this.findSimilar(newEmbedding, threshold, maxCandidates + 1, agentId);
+    } catch {
+      return 0;
+    }
+
+    // Exclude the new memory itself from candidates
+    const filtered = candidates.filter((c) => c.id !== newMemoryId).slice(0, maxCandidates);
+    if (filtered.length === 0) {
+      return 0;
+    }
+
+    let supersededCount = 0;
+    for (const candidate of filtered) {
+      try {
+        const content = await callOpenRouter(config, [
+          {
+            role: "system",
+            content: `Given two memories about potentially the same topic, classify their relationship.
+
+- SUPERSEDES: the NEW memory replaces/updates/contradicts the EXISTING one (the existing is now outdated)
+- COMPLEMENTS: the new memory adds detail; both remain valid
+- UNRELATED: different topics despite textual similarity
+
+Return JSON: {"classification": "SUPERSEDES"|"COMPLEMENTS"|"UNRELATED"}`,
+          },
+          {
+            role: "user",
+            content: `EXISTING: "${candidate.text}"\n\nNEW: "${newMemoryText}"`,
+          },
+        ]);
+
+        if (!content) continue;
+
+        const parsed = JSON.parse(stripCodeFences(content)) as { classification?: string };
+        if (parsed.classification === "SUPERSEDES") {
+          await this.supersedeMemory(candidate.id, newMemoryId);
+          supersededCount++;
+          this.logger.info(
+            `memory-neo4j: conflict detected — superseded ${candidate.id.slice(0, 8)} with ${newMemoryId.slice(0, 8)}`,
+          );
+        }
+      } catch (err) {
+        // Non-fatal: log and continue with remaining candidates
+        this.logger.debug?.(`memory-neo4j: conflict classification failed: ${String(err)}`);
+      }
+    }
+
+    return supersededCount;
+  }
+
+  /**
+   * Fetch non-superseded memories for the retroactive conflict scan (Phase 3c).
+   * Returns memories with their embeddings for batch conflict detection.
+   *
+   * @param minAgeDays Minimum age in days (skip brand-new memories)
+   * @param limit      Maximum number of memories to return per batch
+   * @param agentId    Optional agent filter
+   */
+  async fetchMemoriesForRetroactiveConflictScan(
+    minAgeDays: number = 7,
+    limit: number = 50,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string; embedding: number[] | null; category: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.validUntil IS NULL
+           AND m.category <> 'core'
+           AND m.createdAt IS NOT NULL
+           AND duration.between(datetime(m.createdAt), datetime()).days >= $minAgeDays
+           ${agentFilter}
+         RETURN m.id AS id, m.text AS text, m.embedding AS embedding, m.category AS category
+         ORDER BY m.createdAt ASC
+         LIMIT $limit`,
+        {
+          minAgeDays: neo4j.int(minAgeDays),
+          limit: neo4j.int(limit),
+          ...(agentId ? { agentId } : {}),
+        },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        embedding: r.get("embedding") as number[] | null,
+        category: r.get("category") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Get a single field value from a Memory node.
+   * Returns undefined if the memory or field doesn't exist.
+   */
+  async getMemoryField(id: string, field: string): Promise<string | undefined> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(`MATCH (m:Memory {id: $id}) RETURN m[$field] AS value`, {
+        id,
+        field,
+      });
+      const record = result.records[0];
+      if (!record) return undefined;
+      const value = record.get("value");
+      return value != null ? String(value) : undefined;
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Reindex: re-embed all Memory and Entity nodes
+  // --------------------------------------------------------------------------
+
+  /**
+   * Re-embed all Memory nodes with a new embedding model.
+   *
+   * Steps:
+   * 1. Drop old vector index (dimensions may have changed)
+   * 2. Fetch all Memory nodes and re-embed their text
+   * 3. Recreate vector index with current dimensions
+   *
+   * Entities and tags are not affected — they use fulltext search
+   * and graph traversal, not vector embeddings.
+   *
+   * Used after changing the embedding model/provider in config.
+   */
+  async reindex(
+    embedFn: (texts: string[]) => Promise<number[][]>,
+    options?: {
+      batchSize?: number;
+      onProgress?: (phase: string, done: number, total: number) => void;
+      agentId?: string;
+    },
+  ): Promise<{ memories: number }> {
+    const batchSize = options?.batchSize ?? 50;
+    const progress = options?.onProgress ?? (() => {});
+    const agentId = options?.agentId;
+
+    await this.ensureInitialized();
+
+    // Step 1: Drop old vector index
+    progress("drop-indexes", 0, 1);
+    const dropSession = this.driver!.session();
+    try {
+      await this.runSafe(dropSession, "DROP INDEX memory_embedding_index IF EXISTS");
+    } finally {
+      await dropSession.close();
+    }
+    progress("drop-indexes", 1, 1);
+
+    // Step 2: Fetch and re-embed memories
+    const fetchSession = this.driver!.session();
+    let memories: Array<{ id: string; text: string }>;
+    try {
+      const result = await fetchSession.run(
+        `MATCH (m:Memory)
+         WHERE ($agentId IS NULL OR m.agentId = $agentId)
+         RETURN m.id AS id, m.text AS text ORDER BY m.createdAt ASC`,
+        { agentId: agentId ?? null },
+      );
+      memories = result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
+    } finally {
+      await fetchSession.close();
+    }
+    progress("memories", 0, memories.length);
+
+    for (let i = 0; i < memories.length; i += batchSize) {
+      const batch = memories.slice(i, i + batchSize);
+      const vectors = await embedFn(batch.map((m) => m.text));
+
+      // Build items array for batch UNWIND update
+      const items: Array<{ id: string; embedding: number[] }> = [];
+      for (let j = 0; j < batch.length; j++) {
+        if (vectors[j] && vectors[j].length > 0) {
+          items.push({ id: batch[j].id, embedding: vectors[j] });
+        }
+      }
+      if (items.length > 0) {
+        const session = this.driver!.session();
+        try {
+          await session.run(
+            `UNWIND $items AS item
+             MATCH (m:Memory {id: item.id})
+             SET m.embedding = item.embedding`,
+            { items },
+          );
+        } finally {
+          await session.close();
+        }
+      }
+      progress("memories", Math.min(i + batchSize, memories.length), memories.length);
+    }
+
+    // Step 3: Recreate vector index with current dimensions
+    progress("create-indexes", 0, 1);
+    const indexSession = this.driver!.session();
+    try {
+      await this.runSafe(
+        indexSession,
+        `CREATE VECTOR INDEX memory_embedding_index IF NOT EXISTS
+         FOR (m:Memory) ON m.embedding
+         OPTIONS {indexConfig: {
+           \`vector.dimensions\`: ${this.dimensions},
+           \`vector.similarity_function\`: 'cosine'
+         }}`,
+      );
+    } finally {
+      await indexSession.close();
+    }
+    progress("create-indexes", 1, 1);
+
+    return { memories: memories.length };
+  }
+
+  // --------------------------------------------------------------------------
+  // Retry Logic
+  // --------------------------------------------------------------------------
+
+  /**
+   * Retry an operation on transient Neo4j errors (deadlocks, connection blips, etc.)
+   * with exponential backoff. Adapted from ontology project.
+   */
+  private async retryOnTransient<T>(
+    fn: () => Promise<T>,
+    maxAttempts: number = TRANSIENT_RETRY_ATTEMPTS,
+    baseDelay: number = TRANSIENT_RETRY_BASE_DELAY_MS,
+  ): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastError = err;
+        // Check for Neo4j transient errors (deadlocks, connection blips, service unavailable)
+        const errCode =
+          err instanceof Error
+            ? ((err as unknown as Record<string, unknown>).code as string | undefined)
+            : undefined;
+        const isTransient =
+          err instanceof Error &&
+          (err.message.includes("DeadlockDetected") ||
+            err.message.includes("TransientError") ||
+            err.message.includes("ServiceUnavailable") ||
+            err.message.includes("SessionExpired") ||
+            err.message.includes("ConnectionRefused") ||
+            err.message.includes("connection terminated") ||
+            (err.constructor.name === "Neo4jError" &&
+              typeof errCode === "string" &&
+              (errCode.startsWith("Neo.TransientError.") ||
+                errCode === "ServiceUnavailable" ||
+                errCode === "SessionExpired")));
+
+        if (!isTransient || attempt >= maxAttempts - 1) {
+          throw err;
+        }
+
+        const delay = baseDelay * Math.pow(2, attempt);
+        this.logger.warn(
+          `memory-neo4j: transient error, retrying (${attempt + 1}/${maxAttempts}): ${String(err)}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError;
+  }
+
+  // --------------------------------------------------------------------------
+  // Health & Stats Queries
+  // --------------------------------------------------------------------------
+
+  /**
+   * Get entity graph statistics: entity count, mention count, and density.
+   * Density = mentionCount / max(entityCount, 1).
+   */
+  async getEntityGraphStats(
+    agentId?: string,
+  ): Promise<{ entityCount: number; mentionCount: number; density: number }> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      // When agentId is provided, only count entities connected to that agent's memories
+      const query = agentId
+        ? `OPTIONAL MATCH (m:Memory {agentId: $agentId})-[r:MENTIONS]->(e:Entity)
+           WITH collect(DISTINCT e) AS entities, count(r) AS mentionCount
+           RETURN size(entities) AS entityCount, mentionCount`
+        : `OPTIONAL MATCH (e:Entity)
+           WITH count(DISTINCT e) AS entityCount
+           OPTIONAL MATCH ()-[r:MENTIONS]->()
+           RETURN entityCount, count(r) AS mentionCount`;
+
+      const result = await session.run(query, agentId ? { agentId } : {});
+      const entityCount = (result.records[0]?.get("entityCount") as number) ?? 0;
+      const mentionCount = (result.records[0]?.get("mentionCount") as number) ?? 0;
+      return {
+        entityCount,
+        mentionCount,
+        density: mentionCount / Math.max(entityCount, 1),
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Get decay score distribution bucketed into health categories.
+   * Computes decay scores server-side and buckets them.
+   */
+  async getDecayDistribution(agentId?: string): Promise<Array<{ bucket: string; count: number }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.createdAt IS NOT NULL AND m.category <> 'core' ${agentFilter}
+         WITH m,
+              m.importance AS importance,
+              CASE
+                WHEN m.lastRetrievedAt IS NOT NULL
+                THEN duration.between(datetime(m.lastRetrievedAt), datetime()).days
+                ELSE duration.between(datetime(m.createdAt), datetime()).days
+              END AS effectiveAgeDays,
+              coalesce(m.retrievalCount, 0) AS retrievalCount
+         WITH m, importance,
+              30.0 * (1.0 + importance * 2.0) * (1.0 + log(1.0 + retrievalCount) * 0.2) AS halfLife,
+              effectiveAgeDays
+         WITH CASE
+           WHEN importance * exp(-1.0 * effectiveAgeDays / halfLife) >= 0.8 THEN 'healthy'
+           WHEN importance * exp(-1.0 * effectiveAgeDays / halfLife) >= 0.5 THEN 'moderate'
+           WHEN importance * exp(-1.0 * effectiveAgeDays / halfLife) >= 0.2 THEN 'fading'
+           ELSE 'near-pruning'
+         END AS bucket
+         RETURN bucket, count(*) AS cnt
+         ORDER BY CASE bucket
+           WHEN 'healthy' THEN 1
+           WHEN 'moderate' THEN 2
+           WHEN 'fading' THEN 3
+           WHEN 'near-pruning' THEN 4
+         END`,
+        agentId ? { agentId } : {},
+      );
+      return result.records.map((r) => ({
+        bucket: r.get("bucket") as string,
+        count: (r.get("cnt") as number) ?? 0,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Sleep Cycle: Entity Deduplication
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find entity pairs that are likely duplicates based on name containment.
+   * Returns pairs where one entity name is a substring of another (same type),
+   * which catches the most common dedup patterns:
+   *   - "fish speech" → "fish speech s1 mini"
+   *   - "aaditya" → "aaditya sukhani"
+   *   - "abundent" → "abundent academy"
+   */
+  async findDuplicateEntityPairs(
+    agentId?: string,
+    limit: number = 200,
+  ): Promise<
+    Array<{
+      keepId: string;
+      keepName: string;
+      removeId: string;
+      removeName: string;
+      keepMentions: number;
+      removeMentions: number;
+    }>
+  > {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      // Find pairs where one name contains the other (same type),
+      // OR one entity's alias matches the other's name.
+      // Keep the entity with more mentions, or the shorter/more canonical name
+      // if mention counts are equal.
+      // Use fulltext index pre-filter to avoid O(N²) Cartesian product.
+      // For each entity e1, db.index.fulltext.queryNodes uses the Lucene BM25
+      // index to find a small candidate set e2, reducing complexity from
+      // O(N²) to O(N × k) where k is the average candidate set size (~2–10).
+      const result = await session.run(
+        `MATCH (e1:Entity)
+         WHERE size(e1.name) > 2
+         CALL db.index.fulltext.queryNodes('entity_fulltext_index', e1.name) YIELD node AS e2
+         WHERE e2.id <> e1.id
+           AND e1.name < e2.name
+           AND e1.type = e2.type
+           AND size(e2.name) > 2
+           AND (
+             e1.name CONTAINS e2.name
+             OR e2.name CONTAINS e1.name
+             OR ANY(alias IN coalesce(e1.aliases, []) WHERE toLower(alias) = e2.name)
+             OR ANY(alias IN coalesce(e2.aliases, []) WHERE toLower(alias) = e1.name)
+           )
+         WITH e1, e2,
+              coalesce(e1.mentionCount, 0) AS mc1,
+              coalesce(e2.mentionCount, 0) AS mc2
+         RETURN e1.id AS id1, e1.name AS name1, mc1,
+                e2.id AS id2, e2.name AS name2, mc2
+         LIMIT $limit`,
+        { limit: neo4j.int(limit) },
+      );
+
+      return result.records.map((r) => {
+        const name1 = r.get("name1") as string;
+        const name2 = r.get("name2") as string;
+        const mc1 = (r.get("mc1") as number) ?? 0;
+        const mc2 = (r.get("mc2") as number) ?? 0;
+        const id1 = r.get("id1") as string;
+        const id2 = r.get("id2") as string;
+
+        // Keep the entity with more mentions; if tied, keep the shorter (more canonical) name
+        const keepFirst = mc1 > mc2 || (mc1 === mc2 && name1.length <= name2.length);
+        return {
+          keepId: keepFirst ? id1 : id2,
+          keepName: keepFirst ? name1 : name2,
+          removeId: keepFirst ? id2 : id1,
+          removeName: keepFirst ? name2 : name1,
+          keepMentions: keepFirst ? mc1 : mc2,
+          removeMentions: keepFirst ? mc2 : mc1,
+        };
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Merge two entities: transfer MENTIONS relationships from source to target,
+   * update mention count, then delete the source entity.
+   * Inter-entity relationships on the source are dropped (they'll be
+   * re-created by future extractions against the canonical entity).
+   */
+  async mergeEntityPair(keepId: string, removeId: string): Promise<boolean> {
+    await this.ensureInitialized();
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        const result = await session.executeWrite(async (tx) => {
+          // Transfer MENTIONS relationships from removed entity to kept entity
+          const transferred = await tx.run(
+            `MATCH (remove:Entity {id: $removeId})<-[r:MENTIONS]-(m:Memory)
+             MATCH (keep:Entity {id: $keepId})
+             MERGE (m)-[:MENTIONS]->(keep)
+             DELETE r
+             RETURN count(*) AS transferred`,
+            { removeId, keepId },
+          );
+          const transferCount = (transferred.records[0]?.get("transferred") as number) ?? 0;
+
+          // Update kept entity's mention count
+          if (transferCount > 0) {
+            await tx.run(
+              `MATCH (e:Entity {id: $keepId})
+               SET e.mentionCount = coalesce(e.mentionCount, 0) + $count,
+                   e.lastSeen = $now`,
+              { keepId, count: neo4j.int(transferCount), now: new Date().toISOString() },
+            );
+          }
+
+          // Delete the removed entity (DETACH removes all remaining relationships)
+          await tx.run(`MATCH (e:Entity {id: $removeId}) DETACH DELETE e`, { removeId });
+
+          return transferCount;
+        });
+
+        return true;
+      } catch {
+        return false;
+      } finally {
+        await session.close();
+      }
+    });
+  }
+
+  /**
+   * Delete non-core, non-pinned memories matching a regex pattern.
+   * Used by the sleep cycle noise pattern cleanup.
+   *
+   * @returns Number of memories deleted
+   */
+  async deleteMemoriesByPattern(pattern: string, agentId?: string, limit = 100): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.text =~ $pattern
+           AND m.category <> 'core'
+           ${agentFilter}
+         WITH m LIMIT $limit
+         DETACH DELETE m
+         RETURN count(*) AS removed`,
+        { pattern, agentId, limit: neo4j.int(limit) },
+      );
+      return (result.records[0]?.get("removed") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Fetch a paginated batch of memories (id + text) for credential scanning.
+   * Used by the sleep cycle credential scanner — scans every memory
+   * including core, since credentials must never be persisted regardless
+   * of category or pin status.
+   *
+   * Uses ORDER BY m.createdAt ASC for a stable cursor across pages.
+   */
+  async fetchMemoriesForCredentialScan(
+    offset: number,
+    limit: number,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE ($agentId IS NULL OR m.agentId = $agentId)
+         RETURN m.id AS id, m.text AS text
+         ORDER BY m.createdAt ASC
+         SKIP $offset
+         LIMIT $limit`,
+        { agentId: agentId ?? null, offset, limit },
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * @deprecated Use fetchMemoriesForCredentialScan with pagination instead.
+   * Fetch all memories (id + text) for a given agent, or all agents.
+   */
+  async fetchAllMemoriesForScan(agentId?: string): Promise<Array<{ id: string; text: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         ${agentFilter}
+         RETURN m.id AS id, m.text AS text`,
+        agentId ? { agentId } : {},
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Fetch non-core memories older than minAgeDays for temporal staleness checking.
+   * Only returns memories that contain date-like patterns to avoid wasting LLM calls
+   * on memories that have no temporal component.
+   */
+  async fetchMemoriesForTemporalCheck(
+    minAgeDays: number = 3,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      // Use originalCreatedAt (true information age) with createdAt as fallback
+      // Expanded regex to catch more temporal patterns:
+      //   - "Feb 13", "Mar 20" (abbreviated month + day without ordinal)
+      //   - "February 13", "March 20-25" (full month + day/range)
+      //   - Original patterns: HH:MM, AM/PM, tomorrow/today, ordinal+month, ISO dates, etc.
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.category <> 'core'
+           AND m.validUntil IS NULL
+           AND COALESCE(m.originalCreatedAt, m.createdAt) IS NOT NULL
+           AND duration.between(datetime(COALESCE(m.originalCreatedAt, m.createdAt)), datetime()).days >= $minAgeDays
+           AND (m.text =~ '(?i).*(\\d{1,2}[:/]\\d{2}|\\d{1,2}\\s*(am|pm)|tomorrow|today|tonight|this morning|this afternoon|this evening|yesterday|last night|next week|\\d{1,2}(st|nd|rd|th)?\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\\s+\\d{1,2}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}/\\d{1,2}/\\d{2,4}|at \\d+%|progress|downloading|in progress|pending|waiting for).*')
+           ${agentFilter}
+         RETURN m.id AS id, m.text AS text
+         ORDER BY COALESCE(m.originalCreatedAt, m.createdAt) ASC
+         LIMIT 200`,
+        { minAgeDays: neo4j.int(minAgeDays), agentId },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Delete memories by IDs (DETACH DELETE).
+   * Used by the sleep cycle credential scanner.
+   *
+   * @returns Number of memories deleted
+   */
+  async deleteMemoriesByIds(ids: string[]): Promise<number> {
+    if (ids.length === 0) {
+      return 0;
+    }
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `UNWIND $ids AS id
+         MATCH (m:Memory {id: id})
+         DETACH DELETE m
+         RETURN count(*) AS removed`,
+        { ids },
+      );
+      return (result.records[0]?.get("removed") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Search memories by keywords using the fulltext (BM25) index.
+   * Returns memories whose text matches any of the given keywords.
+   * Used by the sleep cycle task-memory cleanup phase to find memories
+   * related to completed tasks.
+   */
+  async searchMemoriesByKeywords(
+    keywords: string[],
+    limit: number = 50,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string; category: string }>> {
+    if (keywords.length === 0) {
+      return [];
+    }
+
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      // Build a Lucene OR query from the keywords
+      const escaped = keywords.map((k) => escapeLucene(k.trim())).filter((k) => k.length > 0);
+      if (escaped.length === 0) {
+        return [];
+      }
+      const query = escaped.join(" OR ");
+      const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
+      const result = await session.run(
+        `CALL db.index.fulltext.queryNodes('memory_fulltext_index', $query)
+         YIELD node, score
+         WHERE true ${agentFilter}
+         RETURN node.id AS id, node.text AS text, node.category AS category
+         ORDER BY score DESC
+         LIMIT $limit`,
+        {
+          query,
+          limit: neo4j.int(Math.floor(limit)),
+          ...(agentId ? { agentId } : {}),
+        },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        category: r.get("category") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Reconcile mentionCount for all entities by counting actual MENTIONS relationships.
+   * Fixes entities with NULL or stale mentionCount values (e.g., entities created
+   * before mentionCount tracking was added).
+   *
+   * @returns Number of entities updated
+   */
+  async reconcileEntityMentionCounts(): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `MATCH (e:Entity)
+         WHERE e.mentionCount IS NULL
+         OPTIONAL MATCH (m:Memory)-[:MENTIONS]->(e)
+         WITH e, count(m) AS actual
+         SET e.mentionCount = actual
+         RETURN count(e) AS updated`,
+      );
+      return (result.records[0]?.get("updated") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+}
