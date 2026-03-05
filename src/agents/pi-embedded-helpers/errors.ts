@@ -143,6 +143,12 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (isRateLimitErrorMessage(errorMessage)) {
     return false;
   }
+  // Billing errors (e.g. OpenRouter 402 "requires more credits, or fewer max_tokens")
+  // contain token/limit language that matches CONTEXT_OVERFLOW_HINT_RE.
+  // Exclude them to prevent futile auto-compaction retries that drain remaining credits.
+  if (isBillingErrorMessage(errorMessage)) {
+    return false;
+  }
   if (isContextOverflowError(errorMessage)) {
     return true;
   }
