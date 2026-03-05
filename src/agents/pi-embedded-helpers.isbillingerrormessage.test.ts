@@ -467,6 +467,11 @@ describe("image dimension errors", () => {
 describe("classifyFailoverReason", () => {
   it("returns a stable reason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        '401 {"type":"error","error":{"type":"authentication_error","message":"Unauthorized: quota check failed"}}',
+      ),
+    ).toBe("auth");
     expect(classifyFailoverReason("no credentials found")).toBe("auth");
     expect(classifyFailoverReason("no api key found")).toBe("auth");
     expect(

@@ -113,6 +113,15 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
 
+  it("prefers auth copy over rate-limit copy when both hints appear", () => {
+    const msg = makeAssistantError(
+      '401 {"type":"error","error":{"type":"authentication_error","message":"Unauthorized: your quota check failed"}}',
+    );
+    const text = formatAssistantErrorText(msg);
+    expect(text).toContain("HTTP 401");
+    expect(text).not.toContain("API rate limit reached");
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");

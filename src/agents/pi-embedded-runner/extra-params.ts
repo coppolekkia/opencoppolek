@@ -423,13 +423,69 @@ function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
 }
 
+function getHeaderValue(
+  headers: Record<string, string> | undefined,
+  key: string,
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const direct = headers[key];
+  if (typeof direct === "string" && direct.trim()) {
+    return direct;
+  }
+  const lowerKey = key.toLowerCase();
+  const matchedKey = Object.keys(headers).find((candidate) => candidate.toLowerCase() === lowerKey);
+  if (!matchedKey) {
+    return undefined;
+  }
+  const value = headers[matchedKey];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function parseBearerToken(authorizationHeader: string | undefined): string | undefined {
+  if (!authorizationHeader) {
+    return undefined;
+  }
+  const match = authorizationHeader.match(/^bearer\s+(.+)$/i);
+  if (!match) {
+    return undefined;
+  }
+  const token = match[1]?.trim();
+  return token ? token : undefined;
+}
+
+function resolveAnthropicApiKeyFromCall(
+  model: { apiKey?: unknown; headers?: Record<string, string> },
+  options: SimpleStreamOptions | undefined,
+): unknown {
+  if (options?.apiKey) {
+    return options.apiKey;
+  }
+
+  if (model.apiKey) {
+    return model.apiKey;
+  }
+
+  const optionBearer = parseBearerToken(getHeaderValue(options?.headers, "authorization"));
+  if (optionBearer) {
+    return optionBearer;
+  }
+
+  return parseBearerToken(getHeaderValue(model.headers, "authorization"));
+}
+
 function createAnthropicBetaHeadersWrapper(
   baseStreamFn: StreamFn | undefined,
   betas: string[],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
+    const apiKey = resolveAnthropicApiKeyFromCall(
+      model as { apiKey?: unknown; headers?: Record<string, string> },
+      options,
+    );
+    const isOauth = isAnthropicOAuthApiKey(apiKey);
     const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
     const effectiveBetas =
       isOauth && requestedContext1m
@@ -448,6 +504,11 @@ function createAnthropicBetaHeadersWrapper(
       ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
       : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
     const allBetas = [...new Set([...piAiBetas, ...effectiveBetas])];
+
+    if (!isOauth && effectiveBetas.length === 0) {
+      return underlying(model, context, options);
+    }
+
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
@@ -894,11 +955,13 @@ export function applyExtraParamsToAgent(
     agent.streamFn = wrappedStreamFn;
   }
 
-  const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
-  if (anthropicBetas?.length) {
-    log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
-    );
+  const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId) ?? [];
+  if (provider === "anthropic") {
+    if (anthropicBetas.length) {
+      log.debug(
+        `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+      );
+    }
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
   }
 

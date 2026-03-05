@@ -1001,6 +1001,62 @@ describe("applyExtraParamsToAgent", () => {
     expect(betaHeader).not.toContain("context-1m-2025-08-07");
   });
 
+  it("injects OAuth-required betas when OAuth token is on model.apiKey", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      apiKey: "sk-ant-oat01-test-oauth-token",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
+
+    expect(calls).toHaveLength(1);
+    const betaHeader = calls[0]?.headers?.["anthropic-beta"] as string;
+    expect(betaHeader).toContain("oauth-2025-04-20");
+    expect(betaHeader).toContain("claude-code-20250219");
+    expect(calls[0]?.headers?.["X-Custom"]).toBe("1");
+  });
+
+  it("injects OAuth-required betas when bearer token is only in Authorization header", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      headers: {
+        Authorization: "Bearer sk-ant-oat01-test-oauth-token",
+      },
+    });
+
+    expect(calls).toHaveLength(1);
+    const betaHeader = calls[0]?.headers?.["anthropic-beta"] as string;
+    expect(betaHeader).toContain("oauth-2025-04-20");
+    expect(betaHeader).toContain("claude-code-20250219");
+  });
+
   it("merges existing anthropic-beta headers with configured betas", () => {
     const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-5", {
       context1m: true,

@@ -43,6 +43,11 @@ const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+  // Auth errors can include quota/rate wording in provider payloads.
+  // Keep authentication copy authoritative for 401/403-style failures.
+  if (isAuthPermanentErrorMessage(raw) || isAuthErrorMessage(raw)) {
+    return undefined;
+  }
   if (isRateLimitErrorMessage(raw)) {
     return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
@@ -797,6 +802,12 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";
   }
+  if (isAuthPermanentErrorMessage(raw)) {
+    return "auth_permanent";
+  }
+  if (isAuthErrorMessage(raw)) {
+    return "auth";
+  }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
   }
@@ -811,12 +822,6 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";
-  }
-  if (isAuthPermanentErrorMessage(raw)) {
-    return "auth_permanent";
-  }
-  if (isAuthErrorMessage(raw)) {
-    return "auth";
   }
   return null;
 }
