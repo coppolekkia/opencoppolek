@@ -223,6 +223,32 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
+  it("does not mark models on other providers as selected when model IDs collide", () => {
+    // When two providers expose the same model id (e.g. "claude-opus-4-6"),
+    // only the page whose provider matches the currentModel prefix should
+    // show a ✓ (#35476).
+    const currentModel = "nexus-d/claude-opus-4-6";
+
+    const nexusDResult = buildModelsKeyboard({
+      provider: "nexus-d",
+      models: ["claude-opus-4-6"],
+      currentModel,
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(nexusDResult[0]?.[0]?.text).toBe("claude-opus-4-6 ✓");
+
+    // A different provider with the same model id should NOT show a checkmark.
+    const yunYiResult = buildModelsKeyboard({
+      provider: "yunyi-claude",
+      models: ["claude-opus-4-6"],
+      currentModel,
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(yunYiResult[0]?.[0]?.text).toBe("claude-opus-4-6");
+  });
+
   it("renders pagination controls for first, middle, and last pages", () => {
     const cases = [
       {

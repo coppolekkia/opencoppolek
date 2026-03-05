@@ -195,6 +195,12 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const pageModels = models.slice(startIndex, endIndex);
 
   // Model buttons - one per row
+  // When currentModel carries a provider prefix (e.g. "nexus-d/claude-opus-4-6"),
+  // also match on provider so that models with identical IDs across different
+  // providers aren't all marked as selected (#35476).
+  const currentProviderPrefix = currentModel?.includes("/")
+    ? currentModel.split("/")[0]
+    : undefined;
   const currentModelId = currentModel?.includes("/")
     ? currentModel.split("/").slice(1).join("/")
     : currentModel;
@@ -206,7 +212,9 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
+    const isCurrentModel =
+      model === currentModelId &&
+      (currentProviderPrefix === undefined || currentProviderPrefix === provider);
     const displayText = truncateModelId(model, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
