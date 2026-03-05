@@ -7,10 +7,12 @@ vi.mock("../pi-model-discovery.js", () => ({
 
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
+  GOOGLE_GEMINI_CLI_25_FLASH_TEMPLATE_MODEL,
   buildOpenAICodexForwardCompatExpectation,
   GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
   GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
   makeModel,
+  mockGoogleGeminiCli25FlashTemplateModel,
   mockGoogleGeminiCliFlashTemplateModel,
   mockGoogleGeminiCliProTemplateModel,
   mockOpenAICodexTemplateModel,
@@ -65,6 +67,18 @@ describe("pi embedded model e2e smoke", () => {
       id: "gemini-3.1-pro-preview",
       name: "gemini-3.1-pro-preview",
       reasoning: true,
+    });
+  });
+
+  it("builds a google-gemini-cli forward-compat fallback for gemini-2.5-flash-lite", () => {
+    mockGoogleGeminiCli25FlashTemplateModel();
+
+    const result = resolveModel("google-gemini-cli", "gemini-2.5-flash-lite", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...GOOGLE_GEMINI_CLI_25_FLASH_TEMPLATE_MODEL,
+      id: "gemini-2.5-flash-lite",
+      name: "gemini-2.5-flash-lite",
     });
   });
 
