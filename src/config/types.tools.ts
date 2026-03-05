@@ -372,6 +372,7 @@ export type MemorySearchConfig = {
   };
   /** Chunking configuration. */
   chunking?: {
+    strategy?: "token" | "section";
     tokens?: number;
     overlap?: number;
   };
