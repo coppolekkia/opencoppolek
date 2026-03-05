@@ -70,7 +70,7 @@ const asFiniteNumber = (value: unknown): number | undefined => {
   if (typeof value !== "number") {
     return undefined;
   }
-  if (!Number.isFinite(value)) {
+  if (!Number.isFinite(value) || value < 0) {
     return undefined;
   }
   return value;

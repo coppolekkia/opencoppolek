@@ -128,6 +128,21 @@ describe("normalizeUsage", () => {
     const usage = normalizeUsage(undefined);
     expect(usage).toBeUndefined();
   });
+
+  it("discards negative token counts", () => {
+    const usage = normalizeUsage({
+      input: -100,
+      output: 500,
+      cacheRead: -50,
+    });
+    expect(usage).toEqual({
+      input: undefined,
+      output: 500,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
 });
 
 describe("hasNonzeroUsage", () => {
