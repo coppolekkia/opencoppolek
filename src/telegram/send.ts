@@ -742,6 +742,28 @@ export async function sendMessageTelegram(
     throw new Error("Message must be non-empty for Telegram sends");
   }
 
+  // When textMode is "html", the caller already pre-rendered and pre-chunked the
+  // text as HTML. Skip markdownToTelegramChunks which would corrupt HTML tags by
+  // escaping angle brackets and could split tags across chunk boundaries.
+  if (textMode === "html") {
+    const htmlParams =
+      hasThreadParams || replyMarkup
+        ? {
+            ...threadParams,
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          }
+        : undefined;
+    const res = await sendTelegramText(text, htmlParams, opts.plainText);
+    const messageId = resolveTelegramMessageIdOrThrow(res, "html text send");
+    recordSentMessage(chatId, messageId);
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
+    return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+  }
+
   const textChunks = markdownToTelegramChunks(text, 4000, { tableMode });
   if (textChunks.length > 1) {
     let lastMessageId = "";
