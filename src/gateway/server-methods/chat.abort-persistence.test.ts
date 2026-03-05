@@ -273,6 +273,71 @@ describe("chat abort transcript persistence", () => {
     });
   });
 
+  it("accepts mixed-case session keys for run-scoped chat.abort", async () => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-abort-case-run-");
+    const runId = "idem-abort-case-run-1";
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", sessionId)]]),
+      chatRunBuffers: new Map([[runId, "Partial from run abort"]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+    });
+
+    await invokeChatAbort(context, { sessionKey: "Main", runId }, respond);
+
+    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ aborted: true, runIds: [runId] });
+  });
+
+  it("accepts mixed-case session keys for /stop abort", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture("openclaw-chat-stop-case-");
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-case-1", createActiveRun("main", sessionId)]]),
+      chatRunBuffers: new Map([["run-stop-case-1", "Partial from /stop"]]),
+      chatDeltaSentAt: new Map([["run-stop-case-1", Date.now()]]),
+      removeChatRun: vi
+        .fn()
+        .mockReturnValue({ sessionKey: "main", clientRunId: "client-stop-case-1" }),
+      agentRunSeq: new Map<string, number>([["run-stop-case-1", 1]]),
+      dedupe: {
+        get: vi.fn(),
+      },
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "Main",
+        message: "/stop",
+        idempotencyKey: "idem-stop-case-req",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ aborted: true, runIds: ["run-stop-case-1"] });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const persisted = lines
+      .map((line) => line.message)
+      .find((message) => message?.idempotencyKey === "run-stop-case-1:assistant");
+
+    expect(persisted).toMatchObject({
+      idempotencyKey: "run-stop-case-1:assistant",
+      openclawAbort: {
+        aborted: true,
+        origin: "stop-command",
+        runId: "run-stop-case-1",
+      },
+    });
+  });
+
   it("skips run-scoped transcript persistence when partial text is blank", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture(
       "openclaw-chat-abort-run-blank-",
