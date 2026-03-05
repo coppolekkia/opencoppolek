@@ -21,13 +21,22 @@ export async function handleSlackMessageAction(params: {
   includeReadThreadId?: boolean;
 }): Promise<AgentToolResult<unknown>> {
   const { providerId, ctx, invoke, normalizeChannelId, includeReadThreadId = false } = params;
-  const { action, cfg, params: actionParams } = ctx;
+  const { action, cfg, params: actionParams, toolContext } = ctx;
   const accountId = ctx.accountId ?? undefined;
   const resolveChannelId = () => {
+    // First try explicit channelId param, then try to/from params
     const channelId =
       readStringParam(actionParams, "channelId") ??
-      readStringParam(actionParams, "to", { required: true });
-    return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
+      readStringParam(actionParams, "to") ??
+      readStringParam(actionParams, "from");
+    if (channelId) {
+      return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
+    }
+    // Fall back to currentChannelId from toolContext (contains actual Slack channel ID for DMs)
+    if (toolContext?.currentChannelId) {
+      return toolContext.currentChannelId;
+    }
+    throw new Error("Channel ID is required (use channelId, to, or from parameter).");
   };
 
   if (action === "send") {

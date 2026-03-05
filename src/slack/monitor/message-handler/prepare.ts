@@ -689,6 +689,7 @@ export async function prepareSlackMessage(params: {
     BodyForCommands: commandBody,
     From: slackFrom,
     To: slackTo,
+    Channel: message.channel,
     SessionKey: sessionKey,
     AccountId: route.accountId,
     ChatType: isDirectMessage ? "direct" : "channel",

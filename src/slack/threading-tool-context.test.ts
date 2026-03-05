@@ -144,4 +144,40 @@ describe("buildSlackThreadingToolContext", () => {
     });
     expect(result.replyToMode).toBe("off");
   });
+
+  it("extracts currentChannelId from To when it starts with channel:", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { To: "channel:C12345678" },
+    });
+    expect(result.currentChannelId).toBe("C12345678");
+  });
+
+  it("falls back to Channel field when To does not start with channel:", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { To: "user:U8SUVSVGS", Channel: "D8SRXRDNF" },
+    });
+    expect(result.currentChannelId).toBe("D8SRXRDNF");
+  });
+
+  it("returns undefined currentChannelId when To is user: format and Channel is not set", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { To: "user:U8SUVSVGS" },
+    });
+    expect(result.currentChannelId).toBeUndefined();
+  });
+
+  it("uses Channel field when To is not a channel target", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { To: "group:G12345678", Channel: "G12345678" },
+    });
+    expect(result.currentChannelId).toBe("G12345678");
+  });
 });
