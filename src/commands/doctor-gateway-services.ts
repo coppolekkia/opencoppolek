@@ -51,8 +51,13 @@ function findGatewayEntrypoint(programArguments?: string[]): string | null {
   return programArguments[gatewayIndex - 1] ?? null;
 }
 
-function normalizeExecutablePath(value: string): string {
-  return path.resolve(value);
+async function normalizeExecutablePath(value: string): Promise<string> {
+  const resolvedPath = path.isAbsolute(value) ? value : path.resolve(value);
+  try {
+    return await fs.realpath(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
 }
 
 function resolveGatewayAuthToken(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string | undefined {
@@ -254,10 +259,16 @@ export async function maybeRepairGatewayServiceConfig(
   });
   const expectedEntrypoint = findGatewayEntrypoint(programArguments);
   const currentEntrypoint = findGatewayEntrypoint(command.programArguments);
+  const normalizedExpectedEntrypoint = expectedEntrypoint
+    ? await normalizeExecutablePath(expectedEntrypoint)
+    : null;
+  const normalizedCurrentEntrypoint = currentEntrypoint
+    ? await normalizeExecutablePath(currentEntrypoint)
+    : null;
   if (
-    expectedEntrypoint &&
-    currentEntrypoint &&
-    normalizeExecutablePath(expectedEntrypoint) !== normalizeExecutablePath(currentEntrypoint)
+    normalizedExpectedEntrypoint &&
+    normalizedCurrentEntrypoint &&
+    normalizedExpectedEntrypoint !== normalizedCurrentEntrypoint
   ) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
