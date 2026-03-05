@@ -124,7 +124,7 @@ export const registerTelegramHandlers = ({
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
-    Number.isFinite(opts.testTimings.textFragmentGapMs)
+      Number.isFinite(opts.testTimings.textFragmentGapMs)
       ? Math.max(10, Math.floor(opts.testTimings.textFragmentGapMs))
       : DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS;
   const TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP = 1;
@@ -132,7 +132,7 @@ export const registerTelegramHandlers = ({
   const TELEGRAM_TEXT_FRAGMENT_MAX_TOTAL_CHARS = 50_000;
   const mediaGroupTimeoutMs =
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
-    Number.isFinite(opts.testTimings.mediaGroupFlushMs)
+      Number.isFinite(opts.testTimings.mediaGroupFlushMs)
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
       : MEDIA_GROUP_TIMEOUT_MS;
 
@@ -920,7 +920,7 @@ export const registerTelegramHandlers = ({
         const entry: TextFragmentEntry = {
           key,
           messages: [{ msg, ctx, receivedAtMs: nowMs }],
-          timer: setTimeout(() => {}, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
+          timer: setTimeout(() => { }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
         };
         textFragmentBuffer.set(key, entry);
         scheduleTextFragmentFlush(entry);
@@ -976,7 +976,7 @@ export const registerTelegramHandlers = ({
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
                 reply_to_message_id: msg.message_id,
               }),
-          }).catch(() => {});
+          }).catch(() => { });
         }
         logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
         return;
@@ -989,7 +989,7 @@ export const registerTelegramHandlers = ({
           bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
             reply_to_message_id: msg.message_id,
           }),
-      }).catch(() => {});
+      }).catch(() => { });
       return;
     }
 
@@ -1003,12 +1003,12 @@ export const registerTelegramHandlers = ({
 
     const allMedia = media
       ? [
-          {
-            path: media.path,
-            contentType: media.contentType,
-            stickerMetadata: media.stickerMetadata,
-          },
-        ]
+        {
+          path: media.path,
+          contentType: media.contentType,
+          stickerMetadata: media.stickerMetadata,
+        },
+      ]
       : [];
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const conversationThreadId = resolvedThreadId ?? dmThreadId;
@@ -1045,7 +1045,7 @@ export const registerTelegramHandlers = ({
       operation: "answerCallbackQuery",
       runtime,
       fn: answerCallbackQuery,
-    }).catch(() => {});
+    }).catch(() => { });
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
@@ -1161,8 +1161,8 @@ export const registerTelegramHandlers = ({
         const keyboard =
           result.totalPages > 1
             ? buildInlineKeyboard(
-                buildCommandsPaginationKeyboard(result.currentPage, result.totalPages, agentId),
-              )
+              buildCommandsPaginationKeyboard(result.currentPage, result.totalPages, agentId),
+            )
             : undefined;
 
         try {
@@ -1194,7 +1194,7 @@ export const registerTelegramHandlers = ({
             if (errStr.includes("no text in the message")) {
               try {
                 await deleteCallbackMessage();
-              } catch {}
+              } catch { }
               await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard } : undefined);
             } else if (!errStr.includes("message is not modified")) {
               throw editErr;
@@ -1499,17 +1499,17 @@ export const registerTelegramHandlers = ({
     const chatId = post.chat.id;
     const syntheticFrom = post.sender_chat
       ? {
-          id: post.sender_chat.id,
-          is_bot: true as const,
-          first_name: post.sender_chat.title || "Channel",
-          username: post.sender_chat.username,
-        }
+        id: post.sender_chat.id,
+        is_bot: true as const,
+        first_name: post.sender_chat.title || "Channel",
+        username: post.sender_chat.username,
+      }
       : {
-          id: chatId,
-          is_bot: true as const,
-          first_name: post.chat.title || "Channel",
-          username: post.chat.username,
-        };
+        id: chatId,
+        is_bot: true as const,
+        first_name: post.chat.title || "Channel",
+        username: post.chat.username,
+      };
     const syntheticMsg: Message = {
       ...post,
       from: post.from ?? syntheticFrom,

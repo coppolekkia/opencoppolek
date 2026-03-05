@@ -401,6 +401,7 @@ export const OpenClawSchema = z
           .object({
             ttlMinutes: z.number().int().positive().optional(),
             installCommand: z.string().optional(),
+            permissionProfile: z.string().optional(),
           })
           .strict()
           .optional(),
