@@ -106,17 +106,23 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelMaxTokens?: number,
 ): StreamFn | undefined {
-  if (!extraParams || Object.keys(extraParams).length === 0) {
+  if (
+    (!extraParams || Object.keys(extraParams).length === 0) &&
+    !(typeof modelMaxTokens === "number" && modelMaxTokens > 0)
+  ) {
     return undefined;
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
-  if (typeof extraParams.temperature === "number") {
+  if (typeof extraParams?.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
-  if (typeof extraParams.maxTokens === "number") {
+  if (typeof extraParams?.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
+  } else if (typeof modelMaxTokens === "number" && modelMaxTokens > 0) {
+    streamParams.maxTokens = modelMaxTokens;
   }
   const transport = extraParams.transport;
   if (transport === "sse" || transport === "websocket" || transport === "auto") {
@@ -141,8 +147,8 @@ function createStreamFnWithExtraParams(
   // data_collection, ignore, sort, quantizations, etc.
   const providerRouting =
     provider === "openrouter" &&
-    extraParams.provider != null &&
-    typeof extraParams.provider === "object"
+    extraParams?.provider != null &&
+    typeof extraParams?.provider === "object"
       ? (extraParams.provider as Record<string, unknown>)
       : undefined;
 
@@ -866,6 +872,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  modelMaxTokens?: number,
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
@@ -887,7 +894,12 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, extraParams, override);
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    agent.streamFn,
+    merged,
+    provider,
+    modelMaxTokens,
+  );
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
