@@ -651,3 +651,39 @@ Key options:
 - ✅ Files
 - ✅ Audio
 - ⚠️ Rich text (partial support)
+
+## Testing Reaction Tool
+
+After enabling the reaction tool, you can test it with these examples:
+
+### Add a thumbs up reaction
+
+```bash
+openclaw agent --message "React to message msg_123 with thumbs up"
+```
+
+### List all reactions on a message
+
+```bash
+openclaw agent --message "Show me all reactions on message msg_123"
+```
+
+### Remove a reaction
+
+```bash
+openclaw agent --message "Remove the heart reaction from message msg_123"
+```
+
+## Troubleshooting
+
+### Bot doesn't respond to messages
+
+- Check if the bot is added to the chat
+- Verify `allowFrom` includes the chat ID or user
+- Check gateway logs: `openclaw logs --follow`
+
+### Reaction tool not available
+
+- Ensure `tools.reaction: true` in Feishu config
+- Check that the Feishu app has required permissions
+- Verify the message ID is valid
