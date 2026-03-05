@@ -221,7 +221,24 @@ function evaluateSegments(
       candidatePath && segment.resolution
         ? { ...segment.resolution, resolvedPath: candidatePath }
         : segment.resolution;
-    const match = matchAllowlist(params.allowlist, candidateResolution);
+    let match = matchAllowlist(params.allowlist, candidateResolution);
+    
+    // Bug fix for #35024: When bash script.sh is executed (not -c), 
+    // also check if the script path is in the allowlist.
+    if (!match && isShellWrapperSegment(segment)) {
+      const inlineCommand = extractShellWrapperInlineCommand(segment.argv);
+      if (!inlineCommand) {
+        // No inline command means this is "bash script.sh" form
+        const scriptArg = segment.argv.slice(1).find((arg) => !arg.startsWith("-"));
+        if (scriptArg && segment.resolution) {
+          const baseCwd = params.cwd && params.cwd.trim() ? params.cwd.trim() : process.cwd();
+          const scriptPath = path.isAbsolute(scriptArg) ? scriptArg : path.resolve(baseCwd, scriptArg);
+          const scriptResolution = { ...segment.resolution, resolvedPath: scriptPath };
+          match = matchAllowlist(params.allowlist, scriptResolution);
+        }
+      }
+    }
+    
     if (match) {
       matches.push(match);
     }
@@ -382,6 +399,15 @@ function collectAllowAlwaysPatterns(params: {
   }
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
+    // Bug fix for #35024: When bash is followed by a script path (not -c),
+    // add the script file path to the allowlist, not the shell binary itself.
+    // Skip leading option flags (e.g., -e, -x) to find the actual script path.
+    const scriptArg = params.segment.argv.slice(1).find((arg) => !arg.startsWith("-"));
+    if (scriptArg) {
+      const baseCwd = params.cwd && params.cwd.trim() ? params.cwd.trim() : process.cwd();
+      const scriptPath = path.isAbsolute(scriptArg) ? scriptArg : path.resolve(baseCwd, scriptArg);
+      params.out.add(scriptPath);
+    }
     return;
   }
   const nested = analyzeShellCommand({
