@@ -768,3 +768,84 @@ describe("role-based agent routing", () => {
     });
   });
 });
+
+describe("mention-based explicit routing", () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      list: [
+        { id: "main", default: true },
+        { id: "tim", name: "Tim" },
+        { id: "steve", name: "Steve" },
+        { id: "project-manager", name: "Project Manager" },
+      ],
+    },
+    bindings: [
+      {
+        agentId: "tim",
+        match: {
+          channel: "discord",
+          peer: { kind: "channel", id: "c-tim" },
+        },
+      },
+    ],
+  };
+
+  test("@agent mention overrides peer binding", () => {
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "@steve please check this",
+    });
+    expect(route.agentId).toBe("steve");
+    expect(route.matchedBy).toBe("mention");
+    expect(route.sessionKey).toBe("agent:steve:discord:channel:c-tim");
+  });
+
+  test("unknown mention falls back to normal binding resolution", () => {
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "@unknown check this",
+    });
+    expect(route.agentId).toBe("tim");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("display name alias works without spaces", () => {
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "@projectmanager please join",
+    });
+    expect(route.agentId).toBe("project-manager");
+    expect(route.matchedBy).toBe("mention");
+  });
+
+  test("mention routes do not poison cache for subsequent plain messages", () => {
+    const mentioned = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "@steve ping",
+    });
+    expect(mentioned.agentId).toBe("steve");
+    expect(mentioned.matchedBy).toBe("mention");
+
+    const plain = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "plain message",
+    });
+    expect(plain.agentId).toBe("tim");
+    expect(plain.matchedBy).toBe("binding.peer");
+  });
+});
