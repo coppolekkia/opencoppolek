@@ -258,7 +258,14 @@ export abstract class MemoryManagerSyncOps {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
-    return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    const db = new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    // WAL journal mode survives SIGTERM/SIGKILL mid-write; the default
+    // "delete" mode can leave a corrupted database on unclean shutdown.
+    const row = db.prepare("PRAGMA journal_mode=WAL").get() as { journal_mode: string } | undefined;
+    if (row?.journal_mode !== "wal") {
+      log.warn(`failed to enable WAL journal mode (got ${row?.journal_mode ?? "unknown"})`);
+    }
+    return db;
   }
 
   private seedEmbeddingCache(sourceDb: DatabaseSync): void {
