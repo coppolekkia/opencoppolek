@@ -17,6 +17,13 @@ const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const assessGatewayStartupMemory = vi.fn(async () => ({
+  status: "ok" as const,
+  effectiveMemoryBytes: 4 * 1024 ** 3,
+  source: "host" as const,
+}));
+const formatGatewayMemoryError = vi.fn((_assessment: unknown) => "memory error");
+const formatGatewayMemoryWarning = vi.fn((_assessment: unknown) => "memory warning");
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -56,6 +63,12 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 vi.mock("../../infra/ports.js", () => ({
   formatPortDiagnostics: () => [],
   inspectPortUsage: async () => ({ status: "free" }),
+}));
+
+vi.mock("../../infra/startup-memory.js", () => ({
+  assessGatewayStartupMemory: () => assessGatewayStartupMemory(),
+  formatGatewayMemoryError: (assessment: unknown) => formatGatewayMemoryError(assessment),
+  formatGatewayMemoryWarning: (assessment: unknown) => formatGatewayMemoryWarning(assessment),
 }));
 
 vi.mock("../../logging/console.js", () => ({
@@ -113,6 +126,9 @@ describe("gateway run option collisions", () => {
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    assessGatewayStartupMemory.mockClear();
+    formatGatewayMemoryError.mockClear();
+    formatGatewayMemoryWarning.mockClear();
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -189,5 +205,21 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors).toContain(
       'Invalid --auth (use "none", "token", "password", or "trusted-proxy")',
     );
+  });
+
+  it("fails early with a clear message when startup memory is insufficient", async () => {
+    assessGatewayStartupMemory.mockResolvedValueOnce({
+      status: "error",
+      effectiveMemoryBytes: 900 * 1024 ** 2,
+      source: "cgroup",
+    });
+    formatGatewayMemoryError.mockReturnValueOnce("Insufficient memory to start gateway safely.");
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toContain("Insufficient memory to start gateway safely.");
+    expect(startGatewayServer).not.toHaveBeenCalled();
   });
 });

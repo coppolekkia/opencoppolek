@@ -16,6 +16,11 @@ import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
+import {
+  assessGatewayStartupMemory,
+  formatGatewayMemoryError,
+  formatGatewayMemoryWarning,
+} from "../../infra/startup-memory.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -173,6 +178,16 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
+  }
+
+  const memoryAssessment = await assessGatewayStartupMemory();
+  if (memoryAssessment.status === "error") {
+    defaultRuntime.error(formatGatewayMemoryError(memoryAssessment));
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (memoryAssessment.status === "warn") {
+    gatewayLog.warn(formatGatewayMemoryWarning(memoryAssessment));
   }
 
   const cfg = loadConfig();
