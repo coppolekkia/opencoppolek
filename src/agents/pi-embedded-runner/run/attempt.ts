@@ -58,6 +58,7 @@ import {
   resolveBootstrapTotalMaxChars,
   validateAnthropicTurns,
   validateGeminiTurns,
+  sanitizeThinkingForRecovery,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
@@ -86,6 +87,7 @@ import { normalizeToolName } from "../../tool-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
+import { wrapAnthropicStreamWithRecovery } from "../anthropic.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
@@ -1158,6 +1160,12 @@ export async function runEmbeddedAttempt(
         allowedToolNames,
       );
 
+      if (params.provider === "anthropic") {
+        activeSession.agent.streamFn = wrapAnthropicStreamWithRecovery(
+          activeSession.agent.streamFn,
+          { id: activeSession.sessionId },
+        );
+      }
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -1165,6 +1173,24 @@ export async function runEmbeddedAttempt(
       }
 
       try {
+        if (params.provider === "anthropic") {
+          const originalMessageCount = activeSession.messages.length;
+          const { messages, prefill } = sanitizeThinkingForRecovery(activeSession.messages);
+          if (messages !== activeSession.messages) {
+            activeSession.agent.replaceMessages(messages);
+          }
+          if (messages.length !== originalMessageCount) {
+            log.warn(
+              `[session-recovery] Dropped last assistant message with incomplete thinking: sessionId=${params.sessionId}`,
+            );
+          }
+          if (prefill) {
+            log.warn(
+              `[session-recovery] Last assistant message has signed thinking but incomplete text; retaining for recovery: sessionId=${params.sessionId}`,
+            );
+          }
+        }
+
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
           modelApi: params.model.api,
