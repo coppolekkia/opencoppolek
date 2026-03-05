@@ -10,6 +10,7 @@ import { runWithReconnect } from "./reconnect.js";
 class FakeWebSocket implements MattermostWebSocketLike {
   public readonly sent: string[] = [];
   public closeCalls = 0;
+  public closeError: unknown = null;
   public terminateCalls = 0;
   private openListeners: Array<() => void> = [];
   private messageListeners: Array<(data: Buffer) => void | Promise<void>> = [];
@@ -42,6 +43,9 @@ class FakeWebSocket implements MattermostWebSocketLike {
 
   close(): void {
     this.closeCalls++;
+    if (this.closeError !== null) {
+      throw this.closeError;
+    }
   }
 
   terminate(): void {
@@ -104,6 +108,32 @@ describe("mattermost websocket monitor", () => {
     await expect(failure).rejects.toMatchObject({
       message: "websocket closed before open (code 1006)",
     });
+  });
+
+  it("logs close failures when websocket is already in an error path", async () => {
+    const socket = new FakeWebSocket();
+    socket.closeError = new Error("close failed");
+    const runtime = testRuntime();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+    });
+
+    queueMicrotask(() => {
+      socket.emitError(new Error("boom"));
+      socket.emitClose(1006, "connection refused");
+    });
+
+    const failure = connectOnce();
+    await expect(failure).rejects.toBeInstanceOf(WebSocketClosedBeforeOpenError);
+    expect(runtime.error).toHaveBeenCalledWith("mattermost websocket error: Error: boom");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost websocket close() after error failed: Error: close failed",
+    );
   });
 
   it("retries when first attempt errors before open and next attempt succeeds", async () => {

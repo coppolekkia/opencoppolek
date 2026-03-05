@@ -201,7 +201,11 @@ export function createMattermostConnectOnce(
           });
           try {
             ws.close();
-          } catch {}
+          } catch (closeErr) {
+            opts.runtime.error?.(
+              `mattermost websocket close() after error failed: ${String(closeErr)}`,
+            );
+          }
         });
       });
     } finally {
