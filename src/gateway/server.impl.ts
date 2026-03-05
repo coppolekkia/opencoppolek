@@ -62,6 +62,7 @@ import {
   prepareSecretsRuntimeSnapshot,
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { setGlobalUPCManager, UPCManager } from "../security/upc-manager.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -718,6 +719,14 @@ export async function startGatewayServer(
   }
 
   const execApprovalManager = new ExecApprovalManager();
+  const upcConfig = (cfgAtStart as { upc?: { enabled?: boolean; credential?: string } }).upc;
+  const upcManager = new UPCManager();
+  if (upcConfig?.enabled && typeof upcConfig.credential === "string") {
+    upcManager.setUPC(upcConfig.credential);
+  } else if (upcConfig?.enabled) {
+    upcManager.importConfig({ enabled: true });
+  }
+  setGlobalUPCManager(upcManager);
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
@@ -775,6 +784,7 @@ export async function startGatewayServer(
       cron,
       cronStorePath,
       execApprovalManager,
+      upcManager,
       loadGatewayModelCatalog,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshot,
