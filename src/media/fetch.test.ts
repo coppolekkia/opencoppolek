@@ -54,6 +54,26 @@ describe("fetchRemoteMedia", () => {
     ).rejects.toThrow("exceeds maxBytes");
   });
 
+  it("rejects response body that is literal JSON null", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = async () =>
+      new Response(makeStream([new TextEncoder().encode("null")]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    await expect(
+      fetchRemoteMedia({
+        url: "https://cdn.discordapp.com/attachments/expired.pdf",
+        fetchImpl,
+        maxBytes: 1024,
+        lookupFn,
+      }),
+    ).rejects.toThrow('literal "null"');
+  });
+
   it("blocks private IP literals before fetching", async () => {
     const fetchImpl = vi.fn();
     await expect(
