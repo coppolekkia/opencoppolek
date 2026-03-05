@@ -52,6 +52,8 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
+  /** If true, bot replies are posted in a new thread spawned from the triggering message. */
+  autoThread?: boolean;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
