@@ -121,3 +121,6 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+# Windows ADS metadata artifacts
+**/*:Zone.Identifier
