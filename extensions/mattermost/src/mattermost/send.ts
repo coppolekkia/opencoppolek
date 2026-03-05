@@ -6,6 +6,7 @@ import {
   createMattermostDirectChannel,
   createMattermostPost,
   fetchMattermostMe,
+  fetchMattermostPost,
   fetchMattermostUserByUsername,
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
@@ -140,6 +141,31 @@ async function resolveTargetChannelId(params: {
   return channel.id;
 }
 
+async function resolveThreadRootId(
+  client: ReturnType<typeof createMattermostClient>,
+  replyToId: string | undefined,
+  logger: { debug?: (...args: unknown[]) => void },
+): Promise<string | undefined> {
+  if (!replyToId) {
+    return undefined;
+  }
+  try {
+    const post = await fetchMattermostPost(client, replyToId);
+    if (post.root_id) {
+      logger.debug?.(
+        `mattermost send: replyToId ${replyToId} is a threaded reply, resolved root to ${post.root_id}`,
+      );
+      return post.root_id;
+    }
+    return replyToId;
+  } catch (err) {
+    logger.debug?.(
+      `mattermost send: failed to fetch post ${replyToId}, using as-is: ${String(err)}`,
+    );
+    return replyToId;
+  }
+}
+
 export async function sendMessageMattermost(
   to: string,
   text: string,
@@ -216,10 +242,11 @@ export async function sendMessageMattermost(
     throw new Error("Mattermost message is empty");
   }
 
+  const rootId = await resolveThreadRootId(client, opts.replyToId, logger);
   const post = await createMattermostPost(client, {
     channelId,
     message,
-    rootId: opts.replyToId,
+    rootId,
     fileIds,
   });
 
