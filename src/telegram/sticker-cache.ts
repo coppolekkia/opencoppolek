@@ -16,6 +16,8 @@ import { resolveAutoImageModel } from "../media-understanding/runner.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
+const DEFAULT_MAX_STICKER_ENTRIES = 5000;
+const STICKER_CACHE_MAX_ENV = "OPENCLAW_TELEGRAM_STICKER_CACHE_MAX";
 
 export interface CachedSticker {
   fileId: string;
@@ -49,6 +51,30 @@ function saveCache(cache: StickerCache): void {
   saveJsonFile(CACHE_FILE, cache);
 }
 
+function resolveMaxStickerEntries(): number {
+  const raw = process.env[STICKER_CACHE_MAX_ENV];
+  if (!raw) {
+    return DEFAULT_MAX_STICKER_ENTRIES;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_MAX_STICKER_ENTRIES;
+  }
+  return parsed;
+}
+
+function trimCacheToLimit(cache: StickerCache): void {
+  const maxEntries = resolveMaxStickerEntries();
+  const ids = Object.keys(cache.stickers);
+  const overflow = ids.length - maxEntries;
+  if (overflow <= 0) {
+    return;
+  }
+  for (const id of ids.slice(0, overflow)) {
+    delete cache.stickers[id];
+  }
+}
+
 /**
  * Get a cached sticker by its unique ID.
  */
@@ -62,7 +88,11 @@ export function getCachedSticker(fileUniqueId: string): CachedSticker | null {
  */
 export function cacheSticker(sticker: CachedSticker): void {
   const cache = loadCache();
+  if (Object.prototype.hasOwnProperty.call(cache.stickers, sticker.fileUniqueId)) {
+    delete cache.stickers[sticker.fileUniqueId];
+  }
   cache.stickers[sticker.fileUniqueId] = sticker;
+  trimCacheToLimit(cache);
   saveCache(cache);
 }
 

@@ -34,6 +34,7 @@ describe("sticker-cache", () => {
     if (fs.existsSync(TEST_CACHE_FILE)) {
       fs.unlinkSync(TEST_CACHE_FILE);
     }
+    vi.unstubAllEnvs();
   });
 
   describe("getCachedSticker", () => {
@@ -112,6 +113,89 @@ describe("sticker-cache", () => {
       const result = getCachedSticker("unique789");
       expect(result?.description).toBe("Updated description");
       expect(result?.fileId).toBe("file789-new");
+    });
+  });
+
+  describe("cache limits", () => {
+    it("evicts oldest stickers when cache exceeds configured max entries", () => {
+      vi.stubEnv("OPENCLAW_TELEGRAM_STICKER_CACHE_MAX", "2");
+
+      cacheSticker({
+        fileId: "file-a",
+        fileUniqueId: "unique-a",
+        description: "A",
+        cachedAt: "2026-01-26T10:00:00.000Z",
+      });
+      cacheSticker({
+        fileId: "file-b",
+        fileUniqueId: "unique-b",
+        description: "B",
+        cachedAt: "2026-01-26T11:00:00.000Z",
+      });
+      cacheSticker({
+        fileId: "file-c",
+        fileUniqueId: "unique-c",
+        description: "C",
+        cachedAt: "2026-01-26T12:00:00.000Z",
+      });
+
+      expect(getCachedSticker("unique-a")).toBeNull();
+      expect(getCachedSticker("unique-b")?.description).toBe("B");
+      expect(getCachedSticker("unique-c")?.description).toBe("C");
+      expect(getAllCachedStickers()).toHaveLength(2);
+    });
+
+    it("treats updated stickers as most recent when trimming", () => {
+      vi.stubEnv("OPENCLAW_TELEGRAM_STICKER_CACHE_MAX", "2");
+
+      cacheSticker({
+        fileId: "file-a",
+        fileUniqueId: "unique-a",
+        description: "A",
+        cachedAt: "2026-01-26T10:00:00.000Z",
+      });
+      cacheSticker({
+        fileId: "file-b",
+        fileUniqueId: "unique-b",
+        description: "B",
+        cachedAt: "2026-01-26T11:00:00.000Z",
+      });
+
+      cacheSticker({
+        fileId: "file-a-2",
+        fileUniqueId: "unique-a",
+        description: "A refreshed",
+        cachedAt: "2026-01-26T13:00:00.000Z",
+      });
+      cacheSticker({
+        fileId: "file-c",
+        fileUniqueId: "unique-c",
+        description: "C",
+        cachedAt: "2026-01-26T14:00:00.000Z",
+      });
+
+      expect(getCachedSticker("unique-b")).toBeNull();
+      expect(getCachedSticker("unique-a")?.description).toBe("A refreshed");
+      expect(getCachedSticker("unique-c")?.description).toBe("C");
+    });
+
+    it("falls back to default max when env value is invalid", () => {
+      vi.stubEnv("OPENCLAW_TELEGRAM_STICKER_CACHE_MAX", "not-a-number");
+
+      cacheSticker({
+        fileId: "file-a",
+        fileUniqueId: "unique-a",
+        description: "A",
+        cachedAt: "2026-01-26T10:00:00.000Z",
+      });
+      cacheSticker({
+        fileId: "file-b",
+        fileUniqueId: "unique-b",
+        description: "B",
+        cachedAt: "2026-01-26T11:00:00.000Z",
+      });
+
+      expect(getAllCachedStickers()).toHaveLength(2);
     });
   });
 

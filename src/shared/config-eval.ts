@@ -147,7 +147,26 @@ function windowsPathExtensions(): string[] {
 
 let cachedHasBinaryPath: string | undefined;
 let cachedHasBinaryPathExt: string | undefined;
+const HAS_BINARY_CACHE_MAX_ENTRIES = 256;
 const hasBinaryCache = new Map<string, boolean>();
+
+function setHasBinaryCacheEntry(bin: string, value: boolean): void {
+  if (hasBinaryCache.has(bin)) {
+    hasBinaryCache.delete(bin);
+  } else if (hasBinaryCache.size >= HAS_BINARY_CACHE_MAX_ENTRIES) {
+    const oldest = hasBinaryCache.keys().next().value;
+    if (oldest !== undefined) {
+      hasBinaryCache.delete(oldest);
+    }
+  }
+  hasBinaryCache.set(bin, value);
+}
+
+export function resetHasBinaryCacheForTest(): void {
+  cachedHasBinaryPath = undefined;
+  cachedHasBinaryPathExt = undefined;
+  hasBinaryCache.clear();
+}
 
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
@@ -158,7 +177,9 @@ export function hasBinary(bin: string): boolean {
     hasBinaryCache.clear();
   }
   if (hasBinaryCache.has(bin)) {
-    return hasBinaryCache.get(bin)!;
+    const cached = hasBinaryCache.get(bin)!;
+    setHasBinaryCacheEntry(bin, cached);
+    return cached;
   }
 
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
@@ -168,13 +189,13 @@ export function hasBinary(bin: string): boolean {
       const candidate = path.join(part, bin + ext);
       try {
         fs.accessSync(candidate, fs.constants.X_OK);
-        hasBinaryCache.set(bin, true);
+        setHasBinaryCacheEntry(bin, true);
         return true;
       } catch {
         // keep scanning
       }
     }
   }
-  hasBinaryCache.set(bin, false);
+  setHasBinaryCacheEntry(bin, false);
   return false;
 }
