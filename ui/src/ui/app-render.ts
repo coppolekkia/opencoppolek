@@ -67,7 +67,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { resolveConfiguredCronModelSuggestions, sortLocaleStrings } from "./views/agents-utils.ts";
-import { renderAgents } from "./views/agents.ts";
+import { renderAgents, renderAddAgentModal, type AgentAddState } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderConfig } from "./views/config.ts";
@@ -219,6 +219,85 @@ export function renderApp(state: AppViewState) {
     state.cronForm.deliveryMode === "webhook"
       ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
       : rawDeliveryToSuggestions;
+
+  // Agent add modal props — extracted here so the modal can be rendered at
+  // the shell level (outside .content) to avoid overflow-x: hidden clipping.
+  const agentAddModalProps = {
+    agentAdd: {
+      open: state.agentAddOpen,
+      submitting: state.agentAddSubmitting,
+      error: state.agentAddError,
+      name: state.agentAddName,
+      copyAuth: state.agentAddCopyAuth,
+      provider: state.agentAddProvider,
+      authMethod: state.agentAddAuthMethod,
+      apiKey: state.agentAddApiKey,
+      useEnvVar: state.agentAddUseEnvVar,
+      providers: state.agentAddProviders,
+    },
+    onAddAgentClose: () => {
+      state.agentAddOpen = false;
+      state.agentAddError = null;
+    },
+    onAddAgentFieldChange: (field: keyof AgentAddState, value: unknown) => {
+      const key = `agentAdd${field.charAt(0).toUpperCase()}${field.slice(1)}`;
+      (state as Record<string, unknown>)[key] = value;
+      if (field === "provider" && typeof value === "string") {
+        const providerEntry = state.agentAddProviders?.find((p) => p.id === value);
+        if (providerEntry && providerEntry.methods.length === 1) {
+          state.agentAddAuthMethod = providerEntry.methods[0].id;
+        } else {
+          state.agentAddAuthMethod = "";
+        }
+        state.agentAddApiKey = "";
+        state.agentAddUseEnvVar = false;
+      }
+    },
+    onAddAgentSubmit: async () => {
+      const name = state.agentAddName.trim();
+      if (!name || state.agentAddSubmitting || !state.client) {
+        return;
+      }
+      state.agentAddSubmitting = true;
+      state.agentAddError = null;
+      try {
+        const createResult = await state.client.request<{
+          ok: boolean;
+          agentId: string;
+        }>("agents.create", {
+          name,
+          ...(state.agentAddCopyAuth ? { copyAuthFromDefault: true } : {}),
+        });
+        if (!createResult?.ok) {
+          throw new Error("Failed to create agent");
+        }
+        if (state.agentAddAuthMethod) {
+          await state.client.request("agents.auth.set", {
+            agentId: createResult.agentId,
+            authChoice: state.agentAddAuthMethod,
+            ...(state.agentAddApiKey ? { apiKey: state.agentAddApiKey } : {}),
+            ...(state.agentAddUseEnvVar ? { useEnvVar: true } : {}),
+          });
+        }
+        state.agentAddOpen = false;
+        state.agentAddError = null;
+        // Retry until the new agent appears in the list (gateway config reload is async).
+        const newId = createResult.agentId;
+        for (let attempt = 0; attempt < 8; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          await loadAgents(state);
+          if (state.agentsList?.agents.some((a) => a.id === newId)) {
+            break;
+          }
+        }
+        state.agentsSelectedId = newId;
+      } catch (err) {
+        state.agentAddError = err instanceof Error ? err.message : "Failed to create agent.";
+      } finally {
+        state.agentAddSubmitting = false;
+      }
+    },
+  };
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
@@ -893,6 +972,29 @@ export function renderApp(state: AppViewState) {
                     : { fallbacks: normalized };
                   updateConfigFormValue(state, basePath, next);
                 },
+                ...agentAddModalProps,
+                onAddAgentOpen: async () => {
+                  state.agentAddOpen = true;
+                  state.agentAddName = "";
+                  state.agentAddCopyAuth = false;
+                  state.agentAddProvider = "";
+                  state.agentAddAuthMethod = "";
+                  state.agentAddApiKey = "";
+                  state.agentAddUseEnvVar = false;
+                  state.agentAddError = null;
+                  if (!state.agentAddProviders && state.client) {
+                    try {
+                      const result = await state.client.request<{
+                        providers: typeof state.agentAddProviders;
+                      }>("agents.auth.providers", {});
+                      if (result) {
+                        state.agentAddProviders = result.providers;
+                      }
+                    } catch {
+                      // Non-fatal: providers stay null, user can still create agent without auth.
+                    }
+                  }
+                },
               })
             : nothing
         }
@@ -1163,6 +1265,7 @@ export function renderApp(state: AppViewState) {
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
+      ${state.agentAddOpen ? renderAddAgentModal(agentAddModalProps) : nothing}
     </div>
   `;
 }
