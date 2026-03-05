@@ -165,7 +165,13 @@ export function createSlackMessageHandler(params: {
     ) {
       return;
     }
-    if (ctx.markMessageSeen(message.channel, message.ts)) {
+    // Skip dedup check for app_mention events. Slack delivers both `message`
+    // and `app_mention` for the same @mention with no guaranteed order, sharing
+    // the same channelId:ts key. If `message` arrives first in a requireMention
+    // channel it gets dropped (no mention flag) but poisons the dedup cache,
+    // causing the subsequent `app_mention` to be silently swallowed.
+    // The downstream debouncer already deduplicates at flush time via buildKey.
+    if (opts.source !== "app_mention" && ctx.markMessageSeen(message.channel, message.ts)) {
       return;
     }
     trackEvent?.();
