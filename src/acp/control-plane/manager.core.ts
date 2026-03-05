@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveAcpAgent } from "../agent-resolution.js";
 import {
   AcpRuntimeError,
   toAcpRuntimeError,
@@ -215,7 +215,11 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    const agent = normalizeAgentId(input.agent);
+    const resolvedAgent = resolveAcpAgent(
+      input.agent,
+      input.cfg.acp?.defaultAgent,
+      input.cfg.agents?.list ?? [],
+    );
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
     return await this.withSessionActor(sessionKey, async () => {
       const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
@@ -230,7 +234,7 @@ export class AcpSessionManager {
         run: async () =>
           await runtime.ensureSession({
             sessionKey,
-            agent,
+            agent: resolvedAgent.runtimeId,
             mode: input.mode,
             cwd: requestedCwd,
           }),
@@ -260,7 +264,8 @@ export class AcpSessionManager {
         } as const);
       const meta: SessionAcpMeta = {
         backend: handle.backend || backend.id,
-        agent,
+        agent: resolvedAgent.logicalId,
+        runtimeAgent: resolvedAgent.runtimeId,
         runtimeSessionName: handle.runtimeSessionName,
         identity: initializedIdentity,
         mode: input.mode,
@@ -301,7 +306,8 @@ export class AcpSessionManager {
         runtime,
         handle,
         backend: handle.backend || backend.id,
-        agent,
+        agent: resolvedAgent.logicalId,
+        runtimeAgent: resolvedAgent.runtimeId,
         mode: input.mode,
         cwd: effectiveCwd,
       });
@@ -958,7 +964,8 @@ export class AcpSessionManager {
     meta: SessionAcpMeta;
   }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
     const agent =
-      params.meta.agent?.trim() || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
+      (params.meta.runtimeAgent ?? params.meta.agent)?.trim() ||
+      resolveAcpAgentFromSessionKey(params.sessionKey, "main");
     const mode = params.meta.mode;
     const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
     const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
@@ -966,7 +973,8 @@ export class AcpSessionManager {
     const cached = this.getCachedRuntimeState(params.sessionKey);
     if (cached) {
       const backendMatches = !configuredBackend || cached.backend === configuredBackend;
-      const agentMatches = cached.agent === agent;
+      // Compare using logical agent ID (fleet name) for cache validity; runtimeAgent may differ.
+      const agentMatches = cached.agent === params.meta.agent;
       const modeMatches = cached.mode === mode;
       const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
       if (backendMatches && agentMatches && modeMatches && cwdMatches) {
@@ -1061,7 +1069,8 @@ export class AcpSessionManager {
       runtime,
       handle: nextHandle,
       backend: ensured.backend || backend.id,
-      agent,
+      agent: params.meta.agent,
+      runtimeAgent: agent,
       mode,
       cwd: effectiveCwd,
       appliedControlSignature: undefined,

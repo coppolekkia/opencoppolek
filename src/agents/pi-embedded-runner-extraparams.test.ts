@@ -671,6 +671,12 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-responses",
       provider: "openai",
       id: "gpt-5",
+      name: "gpt-5",
+      reasoning: false,
+      input: ["text"] as ("text" | "image")[],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 16384,
     } as Model<"openai-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
