@@ -85,6 +85,26 @@ type TelegramCommandAuthResult = {
   commandAuthorized: boolean;
 };
 
+function dedupeSkillCommandsForTelegram(
+  skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
+) {
+  const seen = new Set<string>();
+  const deduped: ReturnType<typeof listSkillCommandsForAgents> = [];
+  for (const command of skillCommands) {
+    const key = command.skillName.trim().toLowerCase();
+    if (!key) {
+      deduped.push(command);
+      continue;
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(command);
+  }
+  return deduped;
+}
+
 export type RegisterTelegramHandlerParams = {
   cfg: OpenClawConfig;
   accountId: string;
@@ -331,7 +351,9 @@ export const registerTelegramNativeCommands = ({
   }
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled && boundRoute
-      ? listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
+      ? dedupeSkillCommandsForTelegram(
+          listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] }),
+        )
       : [];
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, {

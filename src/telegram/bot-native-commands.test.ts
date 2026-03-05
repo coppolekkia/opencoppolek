@@ -173,6 +173,34 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredHandlers).not.toContain("export-session");
   });
 
+  it("deduplicates skill commands by skillName for Telegram menu registration (#35285)", async () => {
+    listSkillCommandsForAgents.mockReturnValue([
+      { name: "weather", skillName: "weather", description: "Weather" },
+      { name: "weather_2", skillName: "weather", description: "Weather duplicate" },
+      { name: "github", skillName: "github", description: "GitHub" },
+      { name: "github_2", skillName: "github", description: "GitHub duplicate" },
+    ]);
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    const names = registeredCommands.map((entry) => entry.command);
+    expect(names).toContain("weather");
+    expect(names).toContain("github");
+    expect(names).not.toContain("weather_2");
+    expect(names).not.toContain("github_2");
+  });
+
   it("registers only Telegram-safe command names across native, custom, and plugin sources", async () => {
     const setMyCommands = vi.fn().mockResolvedValue(undefined);
 
