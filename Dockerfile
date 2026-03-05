@@ -19,16 +19,37 @@ ENV PATH="/root/.bun/bin:${PATH}"
 
 RUN corepack enable
 
+ENV PNPM_HOME=/home/node/.local/share/pnpm
+ENV NPM_CONFIG_PREFIX=/home/node/.npm-global
+ENV GOPATH=/home/node/go
+ENV PATH="${PNPM_HOME}:${NPM_CONFIG_PREFIX}/bin:${GOPATH}/bin:${PATH}"
+RUN mkdir -p "${PNPM_HOME}" "${NPM_CONFIG_PREFIX}/bin" "${GOPATH}/bin" && \
+  chown -R node:node /home/node/.local /home/node/.npm-global /home/node/go
+
 WORKDIR /app
 RUN chown node:node /app
 
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
-RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && \
-      apt-get clean && \
-      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
+# Always install baseline packages needed for Docker runtime reliability.
+# Extra packages can still be provided via OPENCLAW_DOCKER_APT_PACKAGES.
+RUN set -eux; \
+  BASE_APT_PACKAGES="\
+cron gosu \
+git curl wget ca-certificates jq unzip ripgrep procps file \
+python3 python3-pip python3-venv \
+xvfb xauth \
+libgbm1 libnss3 libasound2 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxss1 libgtk-3-0"; \
+  EXTRA_APT_PACKAGES=""; \
+  for pkg in $OPENCLAW_DOCKER_APT_PACKAGES; do \
+    case " ${BASE_APT_PACKAGES} " in \
+      *" ${pkg} "*) ;; \
+      *) EXTRA_APT_PACKAGES="${EXTRA_APT_PACKAGES} ${pkg}" ;; \
+    esac; \
+  done; \
+  apt-get update; \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${BASE_APT_PACKAGES} ${EXTRA_APT_PACKAGES}; \
+  apt-get clean; \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
@@ -47,15 +68,71 @@ RUN NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 USER root
 ARG OPENCLAW_INSTALL_BROWSER=""
 RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      mkdir -p /home/node/.cache/ms-playwright && \
-      PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
-      node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node /home/node/.cache/ms-playwright && \
-      apt-get clean && \
-      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
+  mkdir -p /home/node/.cache/ms-playwright && \
+  PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
+  node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
+  chown -R node:node /home/node/.cache/ms-playwright && \
+  apt-get clean; \
+  fi
+
+# ---- Install Go (official) ----
+# Fetch the latest stable version from go.dev and install the correct arch.
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "$arch" in \
+  amd64) GOARCH=amd64 ;; \
+  arm64) GOARCH=arm64 ;; \
+  *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
+  esac; \
+  GOVERSION="$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r 'map(select(.stable==true)) | .[0].version')" ; \
+  echo "Installing Go ${GOVERSION} for linux-${GOARCH}"; \
+  curl -fsSL "https://go.dev/dl/${GOVERSION}.linux-${GOARCH}.tar.gz" -o /tmp/go.tgz; \
+  rm -rf /usr/local/go; \
+  tar -C /usr/local -xzf /tmp/go.tgz; \
+  rm -f /tmp/go.tgz; \
+  /usr/local/go/bin/go version
+
+# Ensure Go is first in PATH (no old go ahead of it)
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# ---- Install gog (gogcli) ----
+# Pin version by setting GOGCLI_TAG at build time.
+# Default stays pinned for reproducible CI builds.
+ARG GOGCLI_TAG=v0.11.0
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "$arch" in \
+  amd64) GOGARCH=amd64 ;; \
+  arm64) GOGARCH=arm64 ;; \
+  *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
+  esac; \
+  tag="$GOGCLI_TAG"; \
+  if [ "$tag" = "latest" ]; then \
+  tag="$(curl -fsSI -H 'User-Agent: openclaw-docker-build' https://github.com/steipete/gogcli/releases/latest | awk 'tolower($1)==\"location:\" {print $2}' | tr -d '\r' | awk -F/ '{print $NF}' | tail -n1)"; \
+  if [ -z "$tag" ]; then \
+    echo "WARN: Failed to resolve gogcli latest release tag; falling back to v0.11.0" >&2; \
+    tag="v0.11.0"; \
+  fi; \
+  fi; \
+  ver="${tag#v}"; \
+  url="https://github.com/steipete/gogcli/releases/download/$tag/gogcli_${ver}_linux_${GOGARCH}.tar.gz"; \
+  echo "Downloading: $url"; \
+  curl -fsSL "$url" -o /tmp/gogcli.tgz; \
+  tar -xzf /tmp/gogcli.tgz -C /tmp; \
+  install -m 0755 /tmp/gog /usr/local/bin/gog; \
+  rm -f /tmp/gog /tmp/gogcli.tgz; \
+  gog --help >/dev/null
+
+# Install Linuxbrew in a node-writable prefix so brew installs work at runtime.
+ENV HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew
+ENV HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar
+ENV HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew
+RUN set -eux; \
+  mkdir -p "${HOMEBREW_REPOSITORY}" "${HOMEBREW_CELLAR}" "${HOMEBREW_PREFIX}/bin"; \
+  curl -fsSL https://github.com/Homebrew/brew/tarball/master | tar xz --strip-components=1 -C "${HOMEBREW_REPOSITORY}"; \
+  ln -sf ../Homebrew/bin/brew "${HOMEBREW_PREFIX}/bin/brew"; \
+  chown -R node:node /home/linuxbrew
+ENV PATH="${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/sbin:${PATH}"
 
 # Optionally install Docker CLI for sandbox container management.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
@@ -90,6 +167,7 @@ RUN if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
     fi
 
 USER node
+RUN brew --version
 COPY --chown=node:node . .
 # Normalize copied plugin/agent paths so plugin safety checks do not reject
 # world-writable directories inherited from source file modes.
@@ -99,6 +177,7 @@ RUN for dir in /app/extensions /app/.agent /app/.agents; do \
         find "$dir" -type f -exec chmod 644 {} +; \
       fi; \
     done
+RUN chmod +x scripts/docker/gateway-entrypoint.sh
 RUN pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
