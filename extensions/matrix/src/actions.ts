@@ -54,7 +54,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     return { to };
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
-    const { action, params, cfg } = ctx;
+    const { action, params, cfg, mediaLocalRoots } = ctx;
     const resolveRoomId = () =>
       readStringParam(params, "roomId") ??
       readStringParam(params, "channelId") ??
@@ -75,6 +75,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           to,
           content,
           mediaUrl: mediaUrl ?? undefined,
+          mediaLocalRoots,
           replyToId: replyTo ?? undefined,
           threadId: threadId ?? undefined,
         },

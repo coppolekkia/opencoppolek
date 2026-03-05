@@ -118,6 +118,21 @@ describe("sendMessageMatrix media", () => {
     expect(content.url).toBe("mxc://example/file");
   });
 
+  it("passes mediaLocalRoots to loadWebMedia for local file access", async () => {
+    const { client } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "caption", {
+      client,
+      mediaUrl: "file:///tmp/photo.png",
+      mediaLocalRoots: ["/tmp/agent-root"],
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", {
+      maxBytes: resolveMediaMaxBytes(undefined, {}),
+      localRoots: ["/tmp/agent-root"],
+    });
+  });
+
   it("uploads encrypted media with file payloads", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
     (client as { crypto?: object }).crypto = {

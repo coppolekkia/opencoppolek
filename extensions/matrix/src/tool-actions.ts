@@ -37,6 +37,17 @@ function readRoomId(params: Record<string, unknown>, required = true): string {
   return readStringParam(params, "to", { required: true });
 }
 
+function readMediaLocalRoots(params: Record<string, unknown>): readonly string[] | undefined {
+  const raw = params.mediaLocalRoots;
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const roots = raw.filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+  );
+  return roots.length > 0 ? roots : undefined;
+}
+
 export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
@@ -79,11 +90,13 @@ export async function handleMatrixAction(
           allowEmpty: true,
         });
         const mediaUrl = readStringParam(params, "mediaUrl");
+        const mediaLocalRoots = readMediaLocalRoots(params);
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
         const threadId = readStringParam(params, "threadId");
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
+          mediaLocalRoots,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
         });
