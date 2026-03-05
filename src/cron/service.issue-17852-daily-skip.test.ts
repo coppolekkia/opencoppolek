@@ -46,6 +46,7 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
     const job = createDailyThreeAmJob(threeAM);
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    // Default call (no recomputeExpired) — used in post-execution path
     recomputeNextRunsForMaintenance(state);
 
     // Maintenance should NOT touch existing past-due nextRunAtMs.
@@ -53,16 +54,18 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
     expect(job.state.nextRunAtMs).toBe(threeAM);
   });
 
-  it("recomputeNextRunsForMaintenance can advance expired nextRunAtMs on recovery path when slot already executed", () => {
+  it("recomputeNextRunsForMaintenance with recomputeExpired should advance past-due nextRunAtMs (#34432)", () => {
+    // After gateway restart, jobs with expired nextRunAtMs that are not
+    // running should be rescheduled to the next future occurrence.
     const threeAM = Date.parse("2026-02-16T03:00:00.000Z");
     const now = threeAM + 1_000; // 3:00:01
 
     const job = createDailyThreeAmJob(threeAM);
-    job.state.lastRunAtMs = threeAM + 1;
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
 
+    // With recomputeExpired, the expired nextRunAtMs should be advanced.
     const tomorrowThreeAM = threeAM + DAY_MS;
     expect(job.state.nextRunAtMs).toBe(tomorrowThreeAM);
   });

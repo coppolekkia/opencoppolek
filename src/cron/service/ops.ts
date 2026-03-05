@@ -438,6 +438,10 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     // Manual runs should not advance other due jobs without executing them.
     // Use maintenance-only recompute to repair missing values while
     // preserving existing past-due nextRunAtMs entries for future timer ticks.
+    // Use recomputeExpiredExecutedOnly so stale past-due slots that have
+    // already been executed get a fresh future nextRunAtMs, but pending due
+    // slots (lastRunAtMs < nextRunAtMs) are left intact for the timer tick
+    // to pick up via findDueJobs (#34432, #13992).
     const postRunSnapshot = shouldDelete
       ? null
       : {
@@ -455,7 +459,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       snapshot: postRunSnapshot,
       removed: postRunRemoved,
     });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    recomputeNextRunsForMaintenance(state, { recomputeExpiredExecutedOnly: true });
     await persist(state);
     armTimer(state);
   });

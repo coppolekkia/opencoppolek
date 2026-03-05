@@ -21,7 +21,7 @@ function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {})
 }
 
 describe("issue #13992 regression - cron jobs skip execution", () => {
-  it("should NOT recompute nextRunAtMs for past-due jobs by default", () => {
+  it("should NOT recompute nextRunAtMs for past-due jobs that are currently running", () => {
     const now = Date.now();
     const pastDue = now - 60_000; // 1 minute ago
 
@@ -29,14 +29,75 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
-        nextRunAtMs: pastDue, // This is in the past and should NOT be recomputed
+        nextRunAtMs: pastDue, // Past-due but currently running
+        runningAtMs: now - 30_000, // Started 30s ago (not stuck)
       },
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
-    // Should not have changed the past-due nextRunAtMs
+    // Should not have changed the past-due nextRunAtMs because job is running
+    expect(job.state.nextRunAtMs).toBe(pastDue);
+  });
+
+  it("should NOT recompute past-due nextRunAtMs by default (post-execution safety)", () => {
+    const now = Date.now();
+    const pastDue = now - 60_000; // 1 minute ago
+
+    const job = createCronSystemEventJob(now, {
+      createdAtMs: now - 3600_000,
+      updatedAtMs: now - 3600_000,
+      state: {
+        nextRunAtMs: pastDue, // Past-due but no recomputeExpired flag
+      },
+    });
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    // Default call without recomputeExpired
+    recomputeNextRunsForMaintenance(state);
+
+    // Should not have changed — the job should be picked up by findDueJobs
+    expect(job.state.nextRunAtMs).toBe(pastDue);
+  });
+
+  it("should recompute past-due nextRunAtMs with recomputeExpired (#34432)", () => {
+    const now = Date.now();
+    const pastDue = now - 60_000; // 1 minute ago
+
+    const job = createCronSystemEventJob(now, {
+      createdAtMs: now - 3600_000,
+      updatedAtMs: now - 3600_000,
+      state: {
+        nextRunAtMs: pastDue, // Past-due and not running — should be recomputed
+      },
+    });
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+
+    // Should have recomputed nextRunAtMs to a future value
+    expect(typeof job.state.nextRunAtMs).toBe("number");
+    expect(job.state.nextRunAtMs).toBeGreaterThan(now);
+  });
+
+  it("should NOT recompute past-due nextRunAtMs for running jobs even with recomputeExpired (#13992)", () => {
+    const now = Date.now();
+    const pastDue = now - 60_000; // 1 minute ago
+
+    const job = createCronSystemEventJob(now, {
+      createdAtMs: now - 3600_000,
+      updatedAtMs: now - 3600_000,
+      state: {
+        nextRunAtMs: pastDue,
+        runningAtMs: now - 30_000, // Currently running
+      },
+    });
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+
+    // Should NOT recompute — job is currently running
     expect(job.state.nextRunAtMs).toBe(pastDue);
   });
 
@@ -155,7 +216,9 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     const now = Date.now();
     const pastDue = now - 1_000;
 
-    const dueJob: CronJob = {
+    // This job has a past-due nextRunAtMs and is currently running,
+    // so maintenance should NOT recompute it.
+    const runningDueJob: CronJob = {
       id: "due-job",
       name: "due job",
       enabled: true,
@@ -167,6 +230,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       updatedAtMs: now - 3600_000,
       state: {
         nextRunAtMs: pastDue,
+        runningAtMs: now - 500, // currently running
       },
     };
 
@@ -185,10 +249,11 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       },
     };
 
-    const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
+    const state = createMockCronStateForJobs({ jobs: [runningDueJob, malformedJob], nowMs: now });
 
     expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
-    expect(dueJob.state.nextRunAtMs).toBe(pastDue);
+    // Running job should keep its past-due nextRunAtMs
+    expect(runningDueJob.state.nextRunAtMs).toBe(pastDue);
     expect(malformedJob.state.nextRunAtMs).toBeUndefined();
     expect(malformedJob.state.scheduleErrorCount).toBe(1);
     expect(malformedJob.state.lastError).toMatch(/^schedule error:/);

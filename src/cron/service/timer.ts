@@ -579,6 +579,9 @@ export async function onTimer(state: CronServiceState) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
+        // Enable recomputeExpired so that jobs with expired nextRunAtMs that were
+        // not picked up by findDueJobs (e.g. after gateway restart) get a fresh
+        // future nextRunAtMs instead of being stuck forever (#34432).
         const changed = recomputeNextRunsForMaintenance(state, {
           recomputeExpired: true,
           nowMs: dueCheckNow,
