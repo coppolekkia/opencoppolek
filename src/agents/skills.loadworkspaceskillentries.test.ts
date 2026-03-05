@@ -79,6 +79,27 @@ async function setupWorkspaceWithDiffsPlugin() {
 }
 
 describe("loadWorkspaceSkillEntries", () => {
+  it("coerces non-string frontmatter names to strings", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const skillsDir = path.join(workspaceDir, "skills", "train");
+
+    await fs.mkdir(skillsDir, { recursive: true });
+    await fs.mkdir(managedDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillsDir, "SKILL.md"),
+      `---\nname: 12306\ndescription: test\n---\n`,
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("12306");
+  });
+
   it("handles an empty managed skills dir without throwing", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const managedDir = path.join(workspaceDir, ".managed");
