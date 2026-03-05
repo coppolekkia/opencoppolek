@@ -3,6 +3,7 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -16,6 +17,8 @@ import {
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  stripDowngradedToolCallText,
+  stripMinimaxToolCallXml,
 } from "./pi-embedded-utils.js";
 
 const stripTrailingDirective = (text: string): string => {
@@ -31,6 +34,20 @@ const stripTrailingDirective = (text: string): string => {
     return text;
   }
   return text.slice(0, openIndex);
+};
+
+const areMediaUrlsEqual = (left?: string[], right?: string[]): boolean => {
+  const leftList = left ?? [];
+  const rightList = right ?? [];
+  if (leftList.length !== rightList.length) {
+    return false;
+  }
+  for (let i = 0; i < leftList.length; i += 1) {
+    if (leftList[i] !== rightList[i]) {
+      return false;
+    }
+  }
+  return true;
 };
 
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
@@ -54,6 +71,45 @@ export function resolveSilentReplyFallbackText(params: {
     return params.text;
   }
   return fallback;
+}
+
+function syncSnapshotIntoTextBuffers(ctx: EmbeddedPiSubscribeContext, snapshot: string) {
+  if (!snapshot || snapshot === ctx.state.deltaBuffer) {
+    return;
+  }
+
+  if (snapshot.startsWith(ctx.state.deltaBuffer)) {
+    const missing = snapshot.slice(ctx.state.deltaBuffer.length);
+    if (!missing) {
+      return;
+    }
+    ctx.state.deltaBuffer += missing;
+    if (ctx.blockChunker) {
+      ctx.blockChunker.append(missing);
+    } else {
+      ctx.state.blockBuffer += missing;
+    }
+    return;
+  }
+
+  ctx.state.deltaBuffer = snapshot;
+  if (ctx.blockChunker) {
+    ctx.blockChunker.reset();
+    ctx.blockChunker.append(snapshot);
+  } else {
+    ctx.state.blockBuffer = snapshot;
+  }
+}
+
+function extractAssistantRawSnapshotText(msg: AgentMessage): string {
+  const content = (msg as { content?: unknown }).content;
+  return (
+    extractTextFromChatContent(content, {
+      sanitizeText: (text) => stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+      joinWith: "\n",
+      normalizeText: (text) => text,
+    }) ?? ""
+  );
 }
 
 export function handleMessageStart(
@@ -124,6 +180,81 @@ export function handleMessageUpdate(
   }
 
   if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
+    // Some providers emit non-text assistant update events (for example
+    // toolcall/start markers) while still mutating the partial assistant text.
+    // Fall back to diffing the current assistant snapshot so channel preview
+    // streaming continues to receive incremental updates.
+    if (evtType) {
+      const rawAssistantText = extractAssistantRawSnapshotText(msg);
+      const snapshotRaw = ctx.stripBlockTags(rawAssistantText, {
+        thinking: false,
+        final: false,
+        inlineCode: createInlineCodeState(),
+      });
+      const snapshot = snapshotRaw.trim();
+      if (!snapshot) {
+        return;
+      }
+
+      const parsedSnapshot = parseReplyDirectives(stripTrailingDirective(snapshot));
+      const cleanedText = parsedSnapshot.text;
+      const mediaUrls = parsedSnapshot.mediaUrls;
+      const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+      const hasAudio = Boolean(parsedSnapshot.audioAsVoice);
+      const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+      const previousSnapshot = ctx.state.lastStreamedAssistant?.trim();
+      const previousParsed = previousSnapshot
+        ? parseReplyDirectives(stripTrailingDirective(previousSnapshot))
+        : null;
+      const mediaChanged = !areMediaUrlsEqual(mediaUrls, previousParsed?.mediaUrls);
+      const audioChanged = hasAudio !== Boolean(previousParsed?.audioAsVoice);
+
+      let shouldEmit = false;
+      let deltaText = "";
+      if (!cleanedText && !hasMedia && !hasAudio) {
+        shouldEmit = false;
+      } else if (previousCleaned && !cleanedText.startsWith(previousCleaned)) {
+        shouldEmit = false;
+      } else {
+        deltaText = cleanedText.slice(previousCleaned.length);
+        shouldEmit = Boolean(deltaText || mediaChanged || audioChanged);
+      }
+
+      if (shouldEmit) {
+        if (cleanedText) {
+          // In strict final-tag mode, keep <final> markers in buffers so later
+          // text_delta updates continue parsing inside the same final block.
+          const snapshotBuffer = ctx.params.enforceFinalTag ? rawAssistantText : snapshotRaw;
+          syncSnapshotIntoTextBuffers(ctx, snapshotBuffer);
+        }
+        ctx.state.lastStreamedAssistant = snapshotRaw;
+        ctx.state.lastStreamedAssistantCleaned = cleanedText;
+        emitAgentEvent({
+          runId: ctx.params.runId,
+          stream: "assistant",
+          data: {
+            text: cleanedText,
+            delta: deltaText,
+            mediaUrls: hasMedia ? mediaUrls : undefined,
+          },
+        });
+        void ctx.params.onAgentEvent?.({
+          stream: "assistant",
+          data: {
+            text: cleanedText,
+            delta: deltaText,
+            mediaUrls: hasMedia ? mediaUrls : undefined,
+          },
+        });
+        ctx.state.emittedAssistantUpdate = true;
+        if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
+          void ctx.params.onPartialReply({
+            text: cleanedText,
+            mediaUrls: hasMedia ? mediaUrls : undefined,
+          });
+        }
+      }
+    }
     return;
   }
 
@@ -287,12 +418,14 @@ export function handleMessageEnd(
   let cleanedText = parsedText?.text ?? "";
   let mediaUrls = parsedText?.mediaUrls;
   let hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+  let finalSnapshot = trimmedText;
 
   if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
     const rawTrimmed = rawText.trim();
     const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
     const rawCandidate = rawStrippedFinal || rawTrimmed;
     if (rawCandidate) {
+      finalSnapshot = rawCandidate;
       const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
       cleanedText = parsedFallback.text ?? rawCandidate;
       mediaUrls = parsedFallback.mediaUrls;
@@ -300,13 +433,45 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  const previousSnapshot = ctx.state.lastStreamedAssistant?.trim();
+  const previousParsed = previousSnapshot
+    ? parseReplyDirectives(stripTrailingDirective(previousSnapshot))
+    : null;
+  const previousCleaned = previousParsed?.text ?? ctx.state.lastStreamedAssistantCleaned;
+  const previousMediaUrls = previousParsed?.mediaUrls;
+  const hasPreviousAssistantSnapshot = Boolean(
+    ctx.state.emittedAssistantUpdate ||
+    previousSnapshot ||
+    ctx.state.lastStreamedAssistantCleaned !== undefined,
+  );
+  const sameMediaUrls = areMediaUrlsEqual(mediaUrls, previousMediaUrls);
+  const mediaChanged = !sameMediaUrls;
+  const sameAssistantPayload =
+    hasPreviousAssistantSnapshot && cleanedText === (previousCleaned ?? "") && sameMediaUrls;
+  let shouldEmitFinalAssistant = false;
+  let finalDeltaText = cleanedText;
+  if ((cleanedText || hasMedia || mediaChanged) && !sameAssistantPayload) {
+    const previousCleanedValue = previousCleaned ?? "";
+    if (!ctx.state.emittedAssistantUpdate || !hasPreviousAssistantSnapshot) {
+      shouldEmitFinalAssistant = true;
+      finalDeltaText = cleanedText;
+    } else if (cleanedText.startsWith(previousCleanedValue)) {
+      finalDeltaText = cleanedText.slice(previousCleanedValue.length);
+      shouldEmitFinalAssistant = Boolean(finalDeltaText || mediaChanged);
+    } else if (cleanedText !== previousCleanedValue) {
+      // When providers rewrite earlier text, emit the full reconciled text.
+      finalDeltaText = cleanedText;
+      shouldEmitFinalAssistant = true;
+    }
+  }
+
+  if (shouldEmitFinalAssistant) {
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "assistant",
       data: {
         text: cleanedText,
-        delta: cleanedText,
+        delta: finalDeltaText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
@@ -314,11 +479,13 @@ export function handleMessageEnd(
       stream: "assistant",
       data: {
         text: cleanedText,
-        delta: cleanedText,
+        delta: finalDeltaText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
     ctx.state.emittedAssistantUpdate = true;
+    ctx.state.lastStreamedAssistant = finalSnapshot || cleanedText;
+    ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }
 
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
@@ -418,7 +585,7 @@ export function handleMessageEnd(
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;
   ctx.state.blockState.inlineCode = createInlineCodeState();
-  ctx.state.lastStreamedAssistant = undefined;
-  ctx.state.lastStreamedAssistantCleaned = undefined;
+  // Keep last streamed assistant snapshots until the next message_start reset so
+  // duplicate/late message_end events can still be reconciled safely.
   ctx.state.reasoningStreamOpen = false;
 }

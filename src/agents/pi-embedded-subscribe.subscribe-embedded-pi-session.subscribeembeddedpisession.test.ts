@@ -279,6 +279,370 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads[1]?.delta).toBe(" world");
   });
 
+  it("emits partial updates from non-text assistant update snapshots", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+      },
+      assistantMessageEvent: { type: "toolcall_delta", delta: '{"path":"README.md"}' },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads[0]?.text).toBe("Hello");
+    expect(payloads[0]?.delta).toBe("Hello");
+    expect(payloads[1]?.text).toBe("Hello world");
+    expect(payloads[1]?.delta).toBe(" world");
+
+    expect(onPartialReply).toHaveBeenNthCalledWith(1, {
+      text: "Hello",
+      mediaUrls: undefined,
+    });
+    expect(onPartialReply).toHaveBeenNthCalledWith(2, {
+      text: "Hello world",
+      mediaUrls: undefined,
+    });
+  });
+
+  it("keeps text_delta updates monotonic after a non-text snapshot update", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    // Non-text snapshot fallback should not break later text_delta append behavior.
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: " world" },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads[0]?.text).toBe("Hello");
+    expect(payloads[0]?.delta).toBe("Hello");
+    expect(payloads[1]?.text).toBe("Hello world");
+    expect(payloads[1]?.delta).toBe(" world");
+  });
+
+  it("preserves snapshot trailing whitespace for subsequent text_delta composition", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello " }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "world" },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads[0]?.text).toBe("Hello");
+    expect(payloads[0]?.delta).toBe("Hello");
+    expect(payloads[1]?.text).toBe("Hello world");
+    expect(payloads[1]?.delta).toBe(" world");
+  });
+
+  it("emits final assistant payload on message_end after snapshot-only updates", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+      },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("Hello");
+    expect(payloads[1]?.text).toBe("Hello world");
+    expect(payloads[1]?.delta).toBe(" world");
+  });
+
+  it("does not duplicate message_end assistant payload when snapshot already matches", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Hello");
+    expect(payloads[0]?.delta).toBe("Hello");
+  });
+
+  it("reconciles rewritten non-text snapshots at message_end", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "abc" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "axc" }],
+      },
+      assistantMessageEvent: { type: "toolcall_delta", delta: '{"tool":"rewrite"}' },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "axc" }],
+      },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({ text: "abc", delta: "abc" });
+    expect(payloads[1]).toMatchObject({ text: "axc", delta: "axc" });
+  });
+
+  it("does not re-emit media-only snapshots on message_end", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    const mediaOnlyMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "MEDIA: https://example.com/a.png" }],
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: mediaOnlyMessage,
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({ type: "message_end", message: mediaOnlyMessage });
+    emit({ type: "message_end", message: mediaOnlyMessage });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      text: "",
+      delta: "",
+      mediaUrls: ["https://example.com/a.png"],
+    });
+  });
+
+  it("emits a final assistant update when message_end removes streamed media", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello\nMEDIA: https://example.com/a.png" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({
+      text: "Hello",
+      delta: "Hello",
+      mediaUrls: ["https://example.com/a.png"],
+    });
+    expect(payloads[1]).toMatchObject({
+      text: "Hello",
+      delta: "",
+      mediaUrls: undefined,
+    });
+  });
+
+  it("does not emit duplicate non-text snapshot events when payload is unchanged", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    const mediaOnlyMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "MEDIA: https://example.com/a.png" }],
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: mediaOnlyMessage,
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_update",
+      message: mediaOnlyMessage,
+      assistantMessageEvent: { type: "toolcall_delta", delta: '{"tool":"noop"}' },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      text: "",
+      delta: "",
+      mediaUrls: ["https://example.com/a.png"],
+    });
+  });
+
+  it("emits non-text partial updates when only audio_as_voice is present", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "[[audio_as_voice]]" }],
+      },
+      assistantMessageEvent: { type: "toolcall_delta", delta: '{"tool":"say"}' },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("");
+    expect(payloads[0]?.delta).toBe("");
+    expect(payloads[0]?.mediaUrls).toBeUndefined();
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith({
+      text: "",
+      mediaUrls: undefined,
+    });
+  });
+
   it("emits agent events on message_end for non-streaming assistant text", () => {
     const { session, emit } = createStubSessionHarness();
 
