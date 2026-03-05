@@ -79,6 +79,21 @@ describe("sdNotifyReady", () => {
     stderrSpy.mockRestore();
   });
 
+  it("sanitizes control characters in warning messages", () => {
+    process.env.NOTIFY_SOCKET = "/run/user/1000/systemd/notify";
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: object, cb: (err: Error | null) => void) => {
+        cb(new Error("spawn failed\nforged\rline\u0000"));
+      },
+    );
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    sdNotifyReady();
+    const written = String(stderrSpy.mock.calls[0]?.[0] ?? "");
+    expect(written).toContain("spawn failed\\nforged\\rline");
+    expect(written).not.toContain("spawn failed\nforged");
+    stderrSpy.mockRestore();
+  });
+
   it("warns once and no-ops when systemd-notify binary is unavailable", () => {
     process.env.NOTIFY_SOCKET = "/run/user/1000/systemd/notify";
     accessSyncMock.mockImplementation(() => {
@@ -372,6 +387,19 @@ describe("startWatchdogHeartbeat", () => {
     expect(startWatchdogHeartbeat()).toBeUndefined();
     expect(execFileMock).not.toHaveBeenCalled();
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("outside supported range"));
+
+    stderrSpy.mockRestore();
+  });
+
+  it("sanitizes WATCHDOG_USEC value in interval warning logs", () => {
+    process.env.NOTIFY_SOCKET = "/run/user/1000/systemd/notify";
+    process.env.WATCHDOG_USEC = "2000\nforged";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    expect(startWatchdogHeartbeat()).toBeUndefined();
+    const written = String(stderrSpy.mock.calls[0]?.[0] ?? "");
+    expect(written).toContain("WATCHDOG_USEC=2000\\nforged");
+    expect(written).not.toContain("WATCHDOG_USEC=2000\nforged");
 
     stderrSpy.mockRestore();
   });

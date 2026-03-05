@@ -8,9 +8,31 @@ let resolvedSystemdNotifyPath: string | null | undefined;
 let warnedSystemdNotifyMissing = false;
 let warnedWatchdogIntervalInvalid = false;
 
+function sanitizeForLog(value: string): string {
+  let sanitized = "";
+  for (const ch of value) {
+    if (ch === "\r") {
+      sanitized += "\\r";
+      continue;
+    }
+    if (ch === "\n") {
+      sanitized += "\\n";
+      continue;
+    }
+    const code = ch.charCodeAt(0);
+    if ((code >= 0 && code <= 0x1f) || code === 0x7f) {
+      continue;
+    }
+    sanitized += ch;
+  }
+  return sanitized;
+}
+
 function warnNotify(message: string, error: Error): void {
   try {
-    process.stderr.write(`sd-notify: ${message}: ${error.message}\n`);
+    process.stderr.write(
+      `sd-notify: ${sanitizeForLog(message)}: ${sanitizeForLog(String(error.message))}\n`,
+    );
   } catch {
     // stderr may be closed (EPIPE) when the service runs with stdio detached.
   }
@@ -18,7 +40,7 @@ function warnNotify(message: string, error: Error): void {
 
 function warnNotifyText(message: string): void {
   try {
-    process.stderr.write(`sd-notify: ${message}\n`);
+    process.stderr.write(`sd-notify: ${sanitizeForLog(message)}\n`);
   } catch {
     // stderr may be closed (EPIPE) when the service runs with stdio detached.
   }

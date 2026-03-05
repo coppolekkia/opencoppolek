@@ -321,6 +321,68 @@ describe("systemd unit file safety guards", () => {
   });
 });
 
+describe("systemd install migration behavior", () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+  });
+
+  it("disables previous gateway unit before restarting renamed unit", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-migrate-"));
+    try {
+      const calls: string[][] = [];
+      execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
+        calls.push(args);
+        cb(null, "", "");
+      });
+
+      await installSystemdService({
+        env: { HOME: home, OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom" },
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      });
+
+      const render = (args: string[]) => args.join(" ");
+      const disableIndex = calls.findIndex(
+        (args) => render(args) === "--user disable --now openclaw-gateway.service",
+      );
+      const restartIndex = calls.findIndex(
+        (args) => render(args) === "--user restart openclaw-gateway-custom.service",
+      );
+      expect(disableIndex).toBeGreaterThanOrEqual(0);
+      expect(restartIndex).toBeGreaterThanOrEqual(0);
+      expect(disableIndex).toBeLessThan(restartIndex);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("allows symlinked config path when resolved unit directory stays inside home", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-configlink-"));
+    try {
+      const realConfig = path.join(home, "real-config");
+      await fs.mkdir(realConfig, { recursive: true });
+      await fs.symlink(realConfig, path.join(home, ".config"));
+
+      await expect(
+        installSystemdService({
+          env: { HOME: home },
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        }),
+      ).resolves.toEqual({
+        unitPath: `${home}/.config/systemd/user/openclaw-gateway.service`,
+      });
+
+      await expect(
+        fs.access(path.join(realConfig, "systemd", "user", "openclaw-gateway.service")),
+      ).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("splitArgsPreservingQuotes", () => {
   it("splits on whitespace outside quotes", () => {
     expect(splitArgsPreservingQuotes('/usr/bin/openclaw gateway start --name "My Bot"')).toEqual([

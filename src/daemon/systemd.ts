@@ -88,10 +88,20 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
 }
 
 async function assertDirectoryResolvesWithoutSymlink(
+  env: GatewayServiceEnv,
   directoryPath: string,
   label: string,
 ): Promise<void> {
   const expected = path.posix.resolve(directoryPath);
+  const declaredHome = path.posix.resolve(toPosixPath(resolveHomeDir(env)));
+  let resolvedHome = declaredHome;
+  try {
+    resolvedHome = path.posix.resolve(await fs.realpath(declaredHome));
+  } catch (error) {
+    if (!(isErrnoException(error) && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
   let resolved: string;
   try {
     resolved = path.posix.resolve(await fs.realpath(expected));
@@ -101,15 +111,23 @@ async function assertDirectoryResolvesWithoutSymlink(
     }
     throw error;
   }
-  if (resolved !== expected) {
+  const insideHome = resolved === resolvedHome || resolved.startsWith(`${resolvedHome}/`);
+  if (!insideHome) {
     throw new Error(
-      `${label} resolves through a symlink and is unsafe: ${expected} -> ${resolved}`,
+      `${label} resolves outside the configured home boundary and is unsafe: ${expected} -> ${resolved}`,
     );
   }
 }
 
-async function readSafeSystemdUnitFileForBackup(unitPath: string): Promise<string | null> {
-  await assertDirectoryResolvesWithoutSymlink(path.dirname(unitPath), "Systemd unit directory");
+async function readSafeSystemdUnitFileForBackup(
+  env: GatewayServiceEnv,
+  unitPath: string,
+): Promise<string | null> {
+  await assertDirectoryResolvesWithoutSymlink(
+    env,
+    path.dirname(unitPath),
+    "Systemd unit directory",
+  );
   let stats: Awaited<ReturnType<typeof fs.lstat>>;
   try {
     stats = await fs.lstat(unitPath);
@@ -131,8 +149,16 @@ async function readSafeSystemdUnitFileForBackup(unitPath: string): Promise<strin
   return await fs.readFile(unitPath, "utf8");
 }
 
-async function writeSystemdUnitFileSafely(unitPath: string, content: string): Promise<void> {
-  await assertDirectoryResolvesWithoutSymlink(path.dirname(unitPath), "Systemd unit directory");
+async function writeSystemdUnitFileSafely(
+  env: GatewayServiceEnv,
+  unitPath: string,
+  content: string,
+): Promise<void> {
+  await assertDirectoryResolvesWithoutSymlink(
+    env,
+    path.dirname(unitPath),
+    "Systemd unit directory",
+  );
   const handle = await fs.open(unitPath, SYSTEMD_NOFOLLOW_OPEN_FLAGS, 0o600);
   try {
     const stats = await handle.stat();
@@ -149,8 +175,15 @@ async function writeSystemdUnitFileSafely(unitPath: string, content: string): Pr
   }
 }
 
-async function unlinkSystemdUnitFileSafely(unitPath: string): Promise<boolean> {
-  await assertDirectoryResolvesWithoutSymlink(path.dirname(unitPath), "Systemd unit directory");
+async function unlinkSystemdUnitFileSafely(
+  env: GatewayServiceEnv,
+  unitPath: string,
+): Promise<boolean> {
+  await assertDirectoryResolvesWithoutSymlink(
+    env,
+    path.dirname(unitPath),
+    "Systemd unit directory",
+  );
   let stats: Awaited<ReturnType<typeof fs.lstat>>;
   try {
     stats = await fs.lstat(unitPath);
@@ -481,14 +514,18 @@ export async function installSystemdService({
   const unitName = `${serviceName}.service`;
   const unitPath = resolveSystemdUnitPathForName(env, serviceName);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
-  await assertDirectoryResolvesWithoutSymlink(path.dirname(unitPath), "Systemd unit directory");
+  await assertDirectoryResolvesWithoutSymlink(
+    env,
+    path.dirname(unitPath),
+    "Systemd unit directory",
+  );
 
   // Preserve user customizations: back up existing unit file before overwriting.
   let backedUp = false;
-  const existingUnit = await readSafeSystemdUnitFileForBackup(unitPath);
+  const existingUnit = await readSafeSystemdUnitFileForBackup(env, unitPath);
   if (existingUnit !== null) {
     const backupPath = `${unitPath}.bak`;
-    await writeSystemdUnitFileSafely(backupPath, existingUnit);
+    await writeSystemdUnitFileSafely(env, backupPath, existingUnit);
     backedUp = true;
   }
 
@@ -500,7 +537,15 @@ export async function installSystemdService({
     environment,
     watchdog,
   });
-  await writeSystemdUnitFileSafely(unitPath, unit);
+  await writeSystemdUnitFileSafely(env, unitPath, unit);
+
+  // Stop any previous default gateway unit before restart to avoid
+  // lock/port conflicts during OPENCLAW_SYSTEMD_UNIT rename migrations.
+  const previousGatewayUnit = resolvePreviousGatewayUnitNameForCleanup(env, serviceName);
+  if (previousGatewayUnit) {
+    const prevUnit = `${previousGatewayUnit}.service`;
+    await execSystemctlUser(env, ["disable", "--now", prevUnit]);
+  }
 
   const reload = await execSystemctlUser(env, ["daemon-reload"]);
   if (reload.code !== 0) {
@@ -517,14 +562,11 @@ export async function installSystemdService({
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
   }
 
-  // When OPENCLAW_SYSTEMD_UNIT overrides the name, disable the previous
-  // profile-based unit so two units don't compete for the same gateway.
-  const previousGatewayUnit = resolvePreviousGatewayUnitNameForCleanup(env, serviceName);
+  // When OPENCLAW_SYSTEMD_UNIT overrides the name, remove the previous
+  // profile-based unit file after the new unit is active.
   if (previousGatewayUnit) {
-    const prevUnit = `${previousGatewayUnit}.service`;
-    await execSystemctlUser(env, ["disable", "--now", prevUnit]);
     const prevPath = resolveSystemdUnitPathForName(env, previousGatewayUnit);
-    await unlinkSystemdUnitFileSafely(prevPath);
+    await unlinkSystemdUnitFileSafely(env, prevPath);
   }
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
@@ -559,7 +601,7 @@ export async function uninstallSystemdService({
   await execSystemctlUser(env, ["disable", "--now", unitName]);
 
   const unitPath = resolveSystemdUnitPathForName(env, serviceName);
-  const removedCurrent = await unlinkSystemdUnitFileSafely(unitPath);
+  const removedCurrent = await unlinkSystemdUnitFileSafely(env, unitPath);
   if (removedCurrent) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
   } else {
@@ -573,7 +615,7 @@ export async function uninstallSystemdService({
     const prevUnit = `${previousGatewayUnit}.service`;
     await execSystemctlUser(env, ["disable", "--now", prevUnit]);
     const prevPath = resolveSystemdUnitPathForName(env, previousGatewayUnit);
-    const removedPrevious = await unlinkSystemdUnitFileSafely(prevPath);
+    const removedPrevious = await unlinkSystemdUnitFileSafely(env, prevPath);
     if (removedPrevious) {
       stdout.write(`${formatLine("Removed previous systemd service", prevPath)}\n`);
     }
