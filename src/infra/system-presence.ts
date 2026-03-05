@@ -7,6 +7,7 @@ export type SystemPresence = {
   host?: string;
   ip?: string;
   version?: string;
+  nodeVersion?: string;
   platform?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
@@ -95,10 +96,12 @@ function initSelfPresence() {
     return p;
   })();
   const text = `Gateway: ${host}${ip ? ` (${ip})` : ""} · app ${version} · mode gateway · reason self`;
+  const nodeVersion = process.versions.node;
   const selfEntry: SystemPresence = {
     host,
     ip,
     version,
+    nodeVersion,
     platform,
     deviceFamily,
     modelIdentifier,
@@ -163,6 +166,7 @@ type SystemPresencePayload = {
   host?: string;
   ip?: string;
   version?: string;
+  nodeVersion?: string;
   platform?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
@@ -209,6 +213,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     host: payload.host ?? parsed.host ?? existing.host,
     ip: payload.ip ?? parsed.ip ?? existing.ip,
     version: payload.version ?? parsed.version ?? existing.version,
+    nodeVersion: payload.nodeVersion ?? existing.nodeVersion,
     platform: payload.platform ?? existing.platform,
     deviceFamily: payload.deviceFamily ?? existing.deviceFamily,
     modelIdentifier: payload.modelIdentifier ?? existing.modelIdentifier,

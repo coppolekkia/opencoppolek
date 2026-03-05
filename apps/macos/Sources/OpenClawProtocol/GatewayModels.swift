@@ -206,6 +206,7 @@ public struct PresenceEntry: Codable, Sendable {
     public let host: String?
     public let ip: String?
     public let version: String?
+    public let nodeversion: String?
     public let platform: String?
     public let devicefamily: String?
     public let modelidentifier: String?
@@ -224,6 +225,7 @@ public struct PresenceEntry: Codable, Sendable {
         host: String?,
         ip: String?,
         version: String?,
+        nodeversion: String?,
         platform: String?,
         devicefamily: String?,
         modelidentifier: String?,
@@ -241,6 +243,7 @@ public struct PresenceEntry: Codable, Sendable {
         self.host = host
         self.ip = ip
         self.version = version
+        self.nodeversion = nodeversion
         self.platform = platform
         self.devicefamily = devicefamily
         self.modelidentifier = modelidentifier
@@ -260,6 +263,7 @@ public struct PresenceEntry: Codable, Sendable {
         case host
         case ip
         case version
+        case nodeversion = "nodeVersion"
         case platform
         case devicefamily = "deviceFamily"
         case modelidentifier = "modelIdentifier"
