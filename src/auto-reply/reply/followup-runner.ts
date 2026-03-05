@@ -1,8 +1,5 @@
 import crypto from "node:crypto";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
-import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { lookupContextTokens } from "../../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -15,6 +12,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import { resolveContextTokens } from "./model-selection.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -53,7 +51,7 @@ export function createFollowupRunner(params: {
     sessionKey,
     storePath,
     defaultModel,
-    agentCfgContextTokens,
+    agentCfgContextTokens: _agentCfgContextTokens,
   } = params;
   const typingSignals = createTypingSignaler({
     typing,
@@ -141,11 +139,6 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
-      const activeSessionEntry =
-        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
-      let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-        activeSessionEntry?.systemPromptReport,
-      );
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -157,21 +150,16 @@ export function createFollowupRunner(params: {
             agentId: queued.run.agentId,
             sessionKey: queued.run.sessionKey,
           }),
-          run: async (provider, model) => {
+          run: (provider, model) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
-            const result = await runEmbeddedPiAgent({
+            return runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               agentId: queued.run.agentId,
-              trigger: "user",
-              messageChannel: queued.originatingChannel ?? undefined,
               messageProvider: queued.run.messageProvider,
               agentAccountId: queued.run.agentAccountId,
               messageTo: queued.originatingTo,
               messageThreadId: queued.originatingThreadId,
-              currentChannelId: queued.originatingTo,
-              currentThreadTs:
-                queued.originatingThreadId != null ? String(queued.originatingThreadId) : undefined,
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
               groupSpace: queued.run.groupSpace,
@@ -201,11 +189,6 @@ export function createFollowupRunner(params: {
               timeoutMs: queued.run.timeoutMs,
               runId,
               blockReplyBreak: queued.run.blockReplyBreak,
-              bootstrapPromptWarningSignaturesSeen,
-              bootstrapPromptWarningSignature:
-                bootstrapPromptWarningSignaturesSeen[
-                  bootstrapPromptWarningSignaturesSeen.length - 1
-                ],
               onAgentEvent: (evt) => {
                 if (evt.stream !== "compaction") {
                   return;
@@ -216,10 +199,6 @@ export function createFollowupRunner(params: {
                 }
               },
             });
-            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-              result.meta?.systemPromptReport,
-            );
-            return result;
           },
         });
         runResult = fallbackResult.result;
@@ -234,11 +213,12 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
-      const contextTokensUsed =
-        agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
-        DEFAULT_CONTEXT_TOKENS;
+      const contextTokensUsed = resolveContextTokens({
+        agentCfg: queued.run.config?.agents?.defaults,
+        cfg: queued.run.config,
+        provider: fallbackProvider,
+        model: modelUsed,
+      });
 
       if (storePath && sessionKey) {
         await persistRunSessionUsage({
@@ -250,7 +230,6 @@ export function createFollowupRunner(params: {
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,
-          systemPromptReport: runResult.meta?.systemPromptReport,
           logLabel: "followup",
         });
       }
