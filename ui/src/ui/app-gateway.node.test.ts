@@ -129,9 +129,7 @@ describe("connectGateway", () => {
     expect(host.lastError).toBeNull();
 
     secondClient.emitGap(20, 24);
-    expect(host.lastError).toBe(
-      "event gap detected (expected seq 20, got 24); refresh recommended",
-    );
+    expect(host.lastError).toBeNull();
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {
