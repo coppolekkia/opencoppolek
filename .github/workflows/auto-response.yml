@@ -69,6 +69,14 @@ jobs:
                 message:
                   "OpenClaw is not affiliated with Moltbook, and issues related to Moltbook should not be submitted here.",
               },
+              {
+                label: "r: trading-assistant",
+                close: true,
+                lock: true,
+                lockReason: "off-topic",
+                message:
+                  "OpenClaw is not affiliated with third-party trading assistant repositories. Please use those project repositories directly for recommendations or support.",
+              },
             ];
 
             const maintainerTeam = "maintainer";
@@ -343,8 +351,15 @@ jobs:
               const body = issue.body ?? "";
               const haystack = `${title}\n${body}`.toLowerCase();
               const hasMoltbookLabel = labelSet.has("r: moltbook");
+              const hasTradingAssistantLabel = labelSet.has("r: trading-assistant");
               const hasTestflightLabel = labelSet.has("r: testflight");
               const hasSecurityLabel = labelSet.has("security");
+              const tradingAssistantNeedles = [
+                "openclaw — ai trading assistant",
+                "openclaw - ai trading assistant",
+                "openclaw-trading-assistant",
+                "bankrbot/openclaw-skills",
+              ];
               if (title.toLowerCase().includes("security") && !hasSecurityLabel) {
                 await github.rest.issues.addLabels({
                   owner: context.repo.owner,
@@ -371,6 +386,18 @@ jobs:
                   labels: ["r: moltbook"],
                 });
                 labelSet.add("r: moltbook");
+              }
+              if (
+                !hasTradingAssistantLabel &&
+                tradingAssistantNeedles.some((needle) => haystack.includes(needle))
+              ) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["r: trading-assistant"],
+                });
+                labelSet.add("r: trading-assistant");
               }
             }
 
