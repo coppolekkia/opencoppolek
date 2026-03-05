@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,10 @@ import {
 } from "./systemd-unit.js";
 
 const SYSTEMD_SERVICE_NAME_PATTERN = /^[A-Za-z0-9@:_.-]+$/;
+const OPENCLAW_GATEWAY_SYSTEMD_PREFIX = "openclaw-gateway";
+const OPENCLAW_NODE_SYSTEMD_PREFIX = "openclaw-node";
+const SYSTEMD_NOFOLLOW_OPEN_FLAGS =
+  fsConstants.O_WRONLY | fsConstants.O_CREAT | (fsConstants.O_NOFOLLOW ?? 0);
 
 function normalizeSystemdServiceName(raw: string): string {
   const trimmed = raw.trim();
@@ -53,6 +58,121 @@ function assertValidSystemdServiceName(name: string): void {
   }
 }
 
+function isGatewayServiceContext(env: GatewayServiceEnv): boolean {
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim().toLowerCase();
+  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+}
+
+function assertAllowedOpenClawSystemdServiceName(name: string, env: GatewayServiceEnv): void {
+  if (isGatewayServiceContext(env)) {
+    if (
+      name === resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE) ||
+      name.startsWith(`${OPENCLAW_GATEWAY_SYSTEMD_PREFIX}-`)
+    ) {
+      return;
+    }
+    throw new Error(`Refusing to manage non-OpenClaw gateway systemd unit: ${name}`);
+  }
+
+  if (
+    name === OPENCLAW_NODE_SYSTEMD_PREFIX ||
+    name.startsWith(`${OPENCLAW_NODE_SYSTEMD_PREFIX}-`)
+  ) {
+    return;
+  }
+  throw new Error(`Refusing to manage non-OpenClaw node systemd unit: ${name}`);
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error;
+}
+
+async function assertDirectoryResolvesWithoutSymlink(
+  directoryPath: string,
+  label: string,
+): Promise<void> {
+  const expected = path.posix.resolve(directoryPath);
+  let resolved: string;
+  try {
+    resolved = path.posix.resolve(await fs.realpath(expected));
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  if (resolved !== expected) {
+    throw new Error(
+      `${label} resolves through a symlink and is unsafe: ${expected} -> ${resolved}`,
+    );
+  }
+}
+
+async function readSafeSystemdUnitFileForBackup(unitPath: string): Promise<string | null> {
+  await assertDirectoryResolvesWithoutSymlink(path.dirname(unitPath), "Systemd unit directory");
+  let stats: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stats = await fs.lstat(unitPath);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to manage symlinked systemd unit file: ${unitPath}`);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Refusing to manage non-regular systemd unit file: ${unitPath}`);
+  }
+  if (stats.nlink > 1) {
+    throw new Error(`Refusing to manage systemd unit file with hard links: ${unitPath}`);
+  }
+  return await fs.readFile(unitPath, "utf8");
+}
+
+async function writeSystemdUnitFileSafely(unitPath: string, content: string): Promise<void> {
+  await assertDirectoryResolvesWithoutSymlink(path.dirname(unitPath), "Systemd unit directory");
+  const handle = await fs.open(unitPath, SYSTEMD_NOFOLLOW_OPEN_FLAGS, 0o600);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw new Error(`Refusing to write non-regular systemd unit file: ${unitPath}`);
+    }
+    if (stats.nlink > 1) {
+      throw new Error(`Refusing to write systemd unit file with hard links: ${unitPath}`);
+    }
+    await handle.truncate(0);
+    await handle.writeFile(content, "utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function unlinkSystemdUnitFileSafely(unitPath: string): Promise<boolean> {
+  await assertDirectoryResolvesWithoutSymlink(path.dirname(unitPath), "Systemd unit directory");
+  let stats: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stats = await fs.lstat(unitPath);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to remove symlinked systemd unit file: ${unitPath}`);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Refusing to remove non-regular systemd unit file: ${unitPath}`);
+  }
+  if (stats.nlink > 1) {
+    throw new Error(`Refusing to remove systemd unit file with hard links: ${unitPath}`);
+  }
+  await fs.unlink(unitPath);
+  return true;
+}
+
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   assertValidSystemdServiceName(name);
   const home = toPosixPath(resolveHomeDir(env));
@@ -70,6 +190,7 @@ function resolveSystemdServiceName(env: GatewayServiceEnv): string {
     ? normalizeSystemdServiceName(override)
     : resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   assertValidSystemdServiceName(candidate);
+  assertAllowedOpenClawSystemdServiceName(candidate, env);
   return candidate;
 }
 
@@ -81,8 +202,7 @@ function resolvePreviousGatewayUnitNameForCleanup(
   env: GatewayServiceEnv,
   serviceName: string,
 ): string | null {
-  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim().toLowerCase();
-  if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
+  if (!isGatewayServiceContext(env)) {
     return null;
   }
   const defaultName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
@@ -361,16 +481,15 @@ export async function installSystemdService({
   const unitName = `${serviceName}.service`;
   const unitPath = resolveSystemdUnitPathForName(env, serviceName);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  await assertDirectoryResolvesWithoutSymlink(path.dirname(unitPath), "Systemd unit directory");
 
   // Preserve user customizations: back up existing unit file before overwriting.
   let backedUp = false;
-  try {
-    await fs.access(unitPath);
+  const existingUnit = await readSafeSystemdUnitFileForBackup(unitPath);
+  if (existingUnit !== null) {
     const backupPath = `${unitPath}.bak`;
-    await fs.copyFile(unitPath, backupPath);
+    await writeSystemdUnitFileSafely(backupPath, existingUnit);
     backedUp = true;
-  } catch {
-    // File does not exist yet — nothing to back up.
   }
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
@@ -381,7 +500,7 @@ export async function installSystemdService({
     environment,
     watchdog,
   });
-  await fs.writeFile(unitPath, unit, "utf8");
+  await writeSystemdUnitFileSafely(unitPath, unit);
 
   const reload = await execSystemctlUser(env, ["daemon-reload"]);
   if (reload.code !== 0) {
@@ -405,11 +524,7 @@ export async function installSystemdService({
     const prevUnit = `${previousGatewayUnit}.service`;
     await execSystemctlUser(env, ["disable", "--now", prevUnit]);
     const prevPath = resolveSystemdUnitPathForName(env, previousGatewayUnit);
-    try {
-      await fs.unlink(prevPath);
-    } catch {
-      // Previous unit may not exist — that's fine.
-    }
+    await unlinkSystemdUnitFileSafely(prevPath);
   }
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
@@ -444,10 +559,10 @@ export async function uninstallSystemdService({
   await execSystemctlUser(env, ["disable", "--now", unitName]);
 
   const unitPath = resolveSystemdUnitPathForName(env, serviceName);
-  try {
-    await fs.unlink(unitPath);
+  const removedCurrent = await unlinkSystemdUnitFileSafely(unitPath);
+  if (removedCurrent) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
-  } catch {
+  } else {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }
 
@@ -458,11 +573,9 @@ export async function uninstallSystemdService({
     const prevUnit = `${previousGatewayUnit}.service`;
     await execSystemctlUser(env, ["disable", "--now", prevUnit]);
     const prevPath = resolveSystemdUnitPathForName(env, previousGatewayUnit);
-    try {
-      await fs.unlink(prevPath);
+    const removedPrevious = await unlinkSystemdUnitFileSafely(prevPath);
+    if (removedPrevious) {
       stdout.write(`${formatLine("Removed previous systemd service", prevPath)}\n`);
-    } catch {
-      // Previous unit may not exist — that's fine.
     }
   }
 }

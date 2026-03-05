@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -10,11 +13,13 @@ import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
 import {
   _resolvePreviousGatewayUnitNameForCleanupForTests,
+  installSystemdService,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
+  uninstallSystemdService,
 } from "./systemd.js";
 
 describe("systemd availability", () => {
@@ -176,25 +181,34 @@ describe("resolveSystemdUserUnitPath", () => {
       env: {
         HOME: "/home/test",
         OPENCLAW_PROFILE: "jbphoenix",
-        OPENCLAW_SYSTEMD_UNIT: "custom-unit",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom",
       },
-      expected: "/home/test/.config/systemd/user/custom-unit.service",
+      expected: "/home/test/.config/systemd/user/openclaw-gateway-custom.service",
     },
     {
       name: "handles OPENCLAW_SYSTEMD_UNIT with .service suffix",
       env: {
         HOME: "/home/test",
-        OPENCLAW_SYSTEMD_UNIT: "custom-unit.service",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom.service",
       },
-      expected: "/home/test/.config/systemd/user/custom-unit.service",
+      expected: "/home/test/.config/systemd/user/openclaw-gateway-custom.service",
     },
     {
       name: "trims whitespace from OPENCLAW_SYSTEMD_UNIT",
       env: {
         HOME: "/home/test",
-        OPENCLAW_SYSTEMD_UNIT: "  custom-unit  ",
+        OPENCLAW_SYSTEMD_UNIT: "  openclaw-gateway-custom  ",
       },
-      expected: "/home/test/.config/systemd/user/custom-unit.service",
+      expected: "/home/test/.config/systemd/user/openclaw-gateway-custom.service",
+    },
+    {
+      name: "allows OpenClaw node override in node service context",
+      env: {
+        HOME: "/home/test",
+        OPENCLAW_SERVICE_KIND: "node",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-node-worker",
+      },
+      expected: "/home/test/.config/systemd/user/openclaw-node-worker.service",
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveSystemdUserUnitPath(env)).toBe(expected);
@@ -214,14 +228,23 @@ describe("resolveSystemdUserUnitPath", () => {
       }),
     ).toThrow("Invalid systemd unit name");
   });
+
+  it("rejects non-OpenClaw unit names", () => {
+    expect(() =>
+      resolveSystemdUserUnitPath({
+        HOME: "/home/test",
+        OPENCLAW_SYSTEMD_UNIT: "pipewire",
+      }),
+    ).toThrow("Refusing to manage non-OpenClaw");
+  });
 });
 
 describe("resolvePreviousGatewayUnitNameForCleanup", () => {
   it("returns previous gateway unit when gateway unit name is overridden", () => {
     expect(
       _resolvePreviousGatewayUnitNameForCleanupForTests(
-        { OPENCLAW_SYSTEMD_UNIT: "custom-gateway" },
-        "custom-gateway",
+        { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom" },
+        "openclaw-gateway-custom",
       ),
     ).toBe("openclaw-gateway");
   });
@@ -246,6 +269,55 @@ describe("resolvePreviousGatewayUnitNameForCleanup", () => {
         "custom-work-gateway",
       ),
     ).toBe("openclaw-gateway-work");
+  });
+});
+
+describe("systemd unit file safety guards", () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+  });
+
+  it("rejects installing over a symlinked unit file", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-symlink-"));
+    try {
+      const unitDir = path.join(home, ".config", "systemd", "user");
+      await fs.mkdir(unitDir, { recursive: true });
+      const targetPath = path.join(home, "outside-target");
+      await fs.writeFile(targetPath, "outside", "utf8");
+      await fs.symlink(targetPath, path.join(unitDir, "openclaw-gateway.service"));
+
+      await expect(
+        installSystemdService({
+          env: { HOME: home },
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        }),
+      ).rejects.toThrow("symlinked systemd unit file");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects uninstalling a hard-linked unit file", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-hardlink-"));
+    try {
+      const unitDir = path.join(home, ".config", "systemd", "user");
+      await fs.mkdir(unitDir, { recursive: true });
+      const sensitivePath = path.join(home, "sensitive-file");
+      const unitPath = path.join(unitDir, "openclaw-gateway.service");
+      await fs.writeFile(sensitivePath, "do-not-delete", "utf8");
+      await fs.link(sensitivePath, unitPath);
+
+      await expect(
+        uninstallSystemdService({
+          env: { HOME: home },
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        }),
+      ).rejects.toThrow("hard links");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 });
 
