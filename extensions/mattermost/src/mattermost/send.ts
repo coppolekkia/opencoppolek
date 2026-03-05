@@ -1,5 +1,6 @@
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
+import { getThreadRoot } from "../thread-state.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -216,10 +217,11 @@ export async function sendMessageMattermost(
     throw new Error("Mattermost message is empty");
   }
 
+  const effectiveReplyToId = opts.replyToId ?? getThreadRoot(channelId);
   const post = await createMattermostPost(client, {
     channelId,
     message,
-    rootId: opts.replyToId,
+    rootId: effectiveReplyToId,
     fileIds,
   });
 
