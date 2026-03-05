@@ -2,6 +2,7 @@ import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-statu
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { formatCliCommand } from "./command-format.js";
 
 export type SkillsListOptions = {
@@ -73,7 +74,8 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       skills: skills.map((s) => ({
         name: s.name,
         description: s.description,
-        emoji: s.emoji,
+        // Strip ANSI codes from emoji for JSON output (preserves undefined for omitted keys)
+        emoji: s.emoji != null ? stripAnsi(s.emoji) : s.emoji,
         eligible: s.eligible,
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
