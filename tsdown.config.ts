@@ -1,8 +1,25 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "tsdown";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
+const pkgVersion = (() => {
+  try {
+    const raw = fs.readFileSync(path.join(rootDir, "package.json"), "utf8");
+    return (JSON.parse(raw) as { version?: string }).version ?? "";
+  } catch {
+    return "";
+  }
+})();
 
 const env = {
   NODE_ENV: "production",
 };
+
+// Bake the version string into the bundle so openclaw --version works reliably
+// in Homebrew and other installs where package.json may not resolve at runtime.
+const define = pkgVersion ? { __OPENCLAW_VERSION__: JSON.stringify(pkgVersion) } : {};
 
 const pluginSdkEntrypoints = [
   "index",
@@ -55,12 +72,14 @@ export default defineConfig([
   {
     entry: "src/index.ts",
     env,
+    define,
     fixedExtension: false,
     platform: "node",
   },
   {
     entry: "src/entry.ts",
     env,
+    define,
     fixedExtension: false,
     platform: "node",
   },
@@ -68,6 +87,7 @@ export default defineConfig([
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     entry: "src/cli/daemon-cli.ts",
     env,
+    define,
     fixedExtension: false,
     platform: "node",
   },
@@ -92,6 +112,7 @@ export default defineConfig([
       "line/template-messages": "src/line/template-messages.ts",
     },
     env,
+    define,
     fixedExtension: false,
     platform: "node",
   },
@@ -105,6 +126,7 @@ export default defineConfig([
   {
     entry: "src/extensionAPI.ts",
     env,
+    define,
     fixedExtension: false,
     platform: "node",
   },
