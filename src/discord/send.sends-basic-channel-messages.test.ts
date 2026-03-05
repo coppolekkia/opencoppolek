@@ -324,6 +324,66 @@ describe("sendMessageDiscord", () => {
     expectReplyReference(firstBody, "orig-123");
     expectReplyReference(secondBody, "orig-123");
   });
+
+  it("falls back to DM when channel:ID yields Unknown Channel (10003)", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock
+      .mockRejectedValueOnce({ code: 10003, message: "Unknown Channel" })
+      .mockResolvedValueOnce({ id: "dm-chan-1" })
+      .mockResolvedValueOnce({ id: "dm-msg-1", channel_id: "dm-chan-1" });
+
+    const res = await sendMessageDiscord("channel:123456", "hi from DM fallback", {
+      rest,
+      token: "t",
+    });
+
+    expect(res).toEqual({ messageId: "dm-msg-1", channelId: "dm-chan-1" });
+    expect(postMock).toHaveBeenCalledTimes(3);
+    expect(postMock.mock.calls[1]?.[0]).toBe(Routes.userChannels());
+    expect(postMock.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({ body: { recipient_id: "123456" } }),
+    );
+    expect(postMock.mock.calls[2]?.[0]).toBe(Routes.channelMessages("dm-chan-1"));
+  });
+
+  it("propagates original error when DM channel creation also fails (10003)", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock
+      .mockRejectedValueOnce({ code: 10003, message: "Unknown Channel" })
+      .mockRejectedValueOnce(new Error("DM creation failed"));
+
+    await expect(
+      sendMessageDiscord("channel:123456", "hi", { rest, token: "t" }),
+    ).rejects.toMatchObject({ code: 10003 });
+  });
+
+  it("does not attempt DM fallback for non-10003 errors", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock
+      .mockResolvedValueOnce({ type: ChannelType.GuildText })
+      .mockResolvedValueOnce({
+        id: "789",
+        guild_id: "guild1",
+        type: 0,
+        permission_overwrites: [],
+      })
+      .mockResolvedValueOnce({ id: "bot1" })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [{ id: "guild1", permissions: "0" }],
+      })
+      .mockResolvedValueOnce({ roles: [] });
+    postMock.mockRejectedValueOnce(
+      Object.assign(new Error("Missing Permissions"), { code: 50013, status: 403 }),
+    );
+
+    await expect(sendMessageDiscord("channel:789", "hello", { rest, token: "t" })).rejects.toThrow(
+      /missing permissions/i,
+    );
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("reactMessageDiscord", () => {
