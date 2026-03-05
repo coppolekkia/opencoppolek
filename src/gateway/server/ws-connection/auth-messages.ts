@@ -1,8 +1,23 @@
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
+import { truncateCloseReason } from "../close-reason.js";
 
 export type AuthProvidedKind = "token" | "device-token" | "password" | "none";
+
+export function formatControlUiDeviceIdentityRequiredMessage(): string {
+  return (
+    "control ui requires device identity " +
+    "(use HTTPS/WSS on remote hosts, or localhost secure context; local HTTP dev-only fallback: gateway.controlUi.allowInsecureAuth=true)"
+  );
+}
+
+const CONTROL_UI_DEVICE_IDENTITY_REQUIRED_CLOSE_REASON =
+  "control ui requires device identity; use HTTPS/WSS or localhost; dev fallback: gateway.controlUi.allowInsecureAuth=true";
+
+export function formatControlUiDeviceIdentityRequiredCloseReason(): string {
+  return truncateCloseReason(CONTROL_UI_DEVICE_IDENTITY_REQUIRED_CLOSE_REASON);
+}
 
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
