@@ -381,7 +381,10 @@ export function stripMarkdown(text: string): string {
  * - Strips remaining markdown
  * - Returns processed text + Flex Messages
  */
-export function processLineMessage(text: string): ProcessedLineMessage {
+export function processLineMessage(
+  text: string,
+  opts?: { codeBlockDisplay?: "flex" | "inline" },
+): ProcessedLineMessage {
   const flexMessages: FlexMessage[] = [];
   let processedText = text;
 
@@ -394,13 +397,24 @@ export function processLineMessage(text: string): ProcessedLineMessage {
     flexMessages.push(toFlexMessage("Table", bubble));
   }
 
-  // 2. Extract and convert code blocks
-  const { codeBlocks, textWithoutCode } = extractCodeBlocks(processedText);
-  processedText = textWithoutCode;
+  // 2. Code blocks: extract to Flex bubbles (default) or keep inline as plain text
+  const inlineCodePlaceholders: string[] = [];
+  if (opts?.codeBlockDisplay === "inline") {
+    // Replace code blocks with placeholders to protect content from stripMarkdown
+    processedText = processedText.replace(MARKDOWN_CODE_BLOCK_REGEX, (_match, _lang, code) => {
+      const index = inlineCodePlaceholders.length;
+      inlineCodePlaceholders.push((code as string).trim());
+      return `\x00CODE_${index}\x00`;
+    });
+    MARKDOWN_CODE_BLOCK_REGEX.lastIndex = 0;
+  } else {
+    const { codeBlocks, textWithoutCode } = extractCodeBlocks(processedText);
+    processedText = textWithoutCode;
 
-  for (const block of codeBlocks) {
-    const bubble = convertCodeBlockToFlexBubble(block);
-    flexMessages.push(toFlexMessage("Code", bubble));
+    for (const block of codeBlocks) {
+      const bubble = convertCodeBlockToFlexBubble(block);
+      flexMessages.push(toFlexMessage("Code", bubble));
+    }
   }
 
   // 3. Handle links - convert [text](url) to plain text for display
@@ -410,6 +424,11 @@ export function processLineMessage(text: string): ProcessedLineMessage {
 
   // 4. Strip remaining markdown formatting
   processedText = stripMarkdown(processedText);
+
+  // 5. Restore inline code blocks after stripMarkdown
+  for (let i = 0; i < inlineCodePlaceholders.length; i++) {
+    processedText = processedText.replace(`\x00CODE_${i}\x00`, inlineCodePlaceholders[i]);
+  }
 
   return {
     text: processedText,
