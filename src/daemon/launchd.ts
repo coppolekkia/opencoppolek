@@ -362,9 +362,14 @@ async function waitForPidExit(pid: number): Promise<void> {
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  // Use `launchctl kill` instead of `launchctl bootout` so that the LaunchAgent
+  // remains registered with launchd. `bootout` unloads the service entirely,
+  // which prevents KeepAlive from triggering auto-restart and causes
+  // `gateway status` to report "service not installed" until the user runs
+  // `openclaw gateway install` or `openclaw doctor --fix` again.
+  const res = await execLaunchctl(["kill", "SIGTERM", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(`launchctl kill failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
 }
