@@ -203,6 +203,46 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
   }
 }
 
+function handleDrop(e: DragEvent, props: ChatProps) {
+  if (!props.onAttachmentsChange) {
+    return;
+  }
+
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) {
+    return;
+  }
+
+  const imageFiles: File[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (file.type.startsWith("image/")) {
+      imageFiles.push(file);
+    }
+  }
+
+  if (imageFiles.length === 0) {
+    return;
+  }
+
+  e.preventDefault();
+
+  for (const file of imageFiles) {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const dataUrl = reader.result as string;
+      const newAttachment: ChatAttachment = {
+        id: generateAttachmentId(),
+        dataUrl,
+        mimeType: file.type,
+      };
+      const current = props.attachments ?? [];
+      props.onAttachmentsChange?.([...current, newAttachment]);
+    });
+    reader.readAsDataURL(file);
+  }
+}
+
 function renderAttachmentPreview(props: ChatProps) {
   const attachments = props.attachments ?? [];
   if (attachments.length === 0) {
@@ -253,7 +293,7 @@ export function renderChat(props: ChatProps) {
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
-      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
+      : "Message (↩ to send, Shift+↩ for line breaks, paste or drag images)"
     : "Connect to the gateway to start chatting…";
 
   const splitRatio = props.splitRatio ?? 0.6;
@@ -454,6 +494,12 @@ export function renderChat(props: ChatProps) {
                 props.onDraftChange(target.value);
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+              @dragover=${(e: DragEvent) => {
+                if (e.dataTransfer?.types.includes("Files")) {
+                  e.preventDefault();
+                }
+              }}
+              @drop=${(e: DragEvent) => handleDrop(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
           </label>
