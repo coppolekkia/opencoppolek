@@ -61,6 +61,26 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 
+function extractAssistantTextFromMessageData(messageData: Record<string, unknown>): string {
+  const content = messageData.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  let text = "";
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const block = item as { type?: unknown; text?: unknown };
+    if (block.type !== "text" || typeof block.text !== "string") {
+      continue;
+    }
+    text += block.text;
+  }
+  return text;
+}
+
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
   private gateway: GatewayClient;
@@ -423,6 +443,9 @@ export class AcpGatewayAgent implements Agent {
     }
 
     if (state === "final") {
+      if (messageData) {
+        await this.handleDeltaEvent(pending.sessionId, messageData);
+      }
       const rawStopReason = payload.stopReason as string | undefined;
       const stopReason: StopReason = rawStopReason === "max_tokens" ? "max_tokens" : "end_turn";
       this.finishPrompt(pending.sessionId, pending, stopReason);
@@ -441,8 +464,7 @@ export class AcpGatewayAgent implements Agent {
     sessionId: string,
     messageData: Record<string, unknown>,
   ): Promise<void> {
-    const content = messageData.content as Array<{ type: string; text?: string }> | undefined;
-    const fullText = content?.find((c) => c.type === "text")?.text ?? "";
+    const fullText = extractAssistantTextFromMessageData(messageData);
     const pending = this.pendingPrompts.get(sessionId);
     if (!pending) {
       return;

@@ -878,6 +878,60 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain("## Exact identifiers");
     expect(summary).toContain("legacy summary without headings");
   });
+
+  it("uses a single summarization call when split-turn prefix messages are present", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("combined summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older summary candidate", timestamp: 2 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "assistant", content: "split-turn prefix", timestamp: 1 },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 5_000,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction?.summary).toContain("combined summary");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const callArgs = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(callArgs?.messages).toHaveLength(2);
+    expect(callArgs?.customInstructions).toContain("This summary covers the prefix of a split turn.");
+  });
 });
 
 describe("compaction-safeguard extension model fallback", () => {

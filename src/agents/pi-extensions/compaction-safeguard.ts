@@ -722,41 +722,34 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
+      const splitTurnMessages =
+        preparation.isSplitTurn && turnPrefixMessages.length > 0 ? turnPrefixMessages : [];
+      const combinedSummarizationMessages =
+        splitTurnMessages.length > 0
+          ? repairToolUseResultPairing([...splitTurnMessages, ...messagesToSummarize]).messages
+          : messagesToSummarize;
+      const combinedInstructions =
+        splitTurnMessages.length > 0
+          ? `${TURN_PREFIX_INSTRUCTIONS}\n\n${structuredInstructions}`
+          : structuredInstructions;
+
       const historySummary =
-        messagesToSummarize.length > 0
+        combinedSummarizationMessages.length > 0
           ? await summarizeInStages({
-              messages: messagesToSummarize,
+              messages: combinedSummarizationMessages,
               model,
               apiKey,
               signal,
               reserveTokens,
               maxChunkTokens,
               contextWindow: contextWindowTokens,
-              customInstructions: structuredInstructions,
+              customInstructions: combinedInstructions,
               summarizationInstructions,
               previousSummary: effectivePreviousSummary,
             })
           : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
       let summary = historySummary;
-      if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-        const prefixSummary = await summarizeInStages({
-          messages: turnPrefixMessages,
-          model,
-          apiKey,
-          signal,
-          reserveTokens,
-          maxChunkTokens,
-          contextWindow: contextWindowTokens,
-          customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\n${structuredInstructions}`,
-          summarizationInstructions,
-          previousSummary: undefined,
-        });
-        const splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
-        summary = historySummary.trim()
-          ? `${historySummary}\n\n---\n\n${splitTurnSection}`
-          : splitTurnSection;
-      }
       summary = appendSummarySection(summary, preservedTurnsSection);
 
       summary = appendSummarySection(summary, toolFailureSection);
