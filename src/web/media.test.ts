@@ -473,4 +473,52 @@ describe("local media root guard", () => {
       }),
     );
   });
+
+  it("allows profile-scoped workspace when OPENCLAW_PROFILE matches", async () => {
+    const originalProfile = process.env.OPENCLAW_PROFILE;
+    try {
+      process.env.OPENCLAW_PROFILE = "staging";
+      const stateDir = resolveStateDir();
+      const readFile = vi.fn(async () => Buffer.from("profile-media"));
+
+      await expect(
+        loadWebMedia(path.join(stateDir, "workspace-staging", "output", "report.bin"), {
+          maxBytes: 1024 * 1024,
+          readFile,
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          kind: "unknown",
+        }),
+      );
+    } finally {
+      if (originalProfile === undefined) {
+        delete process.env.OPENCLAW_PROFILE;
+      } else {
+        process.env.OPENCLAW_PROFILE = originalProfile;
+      }
+    }
+  });
+
+  it("still rejects workspace-* for non-matching profiles without explicit local roots", async () => {
+    const originalProfile = process.env.OPENCLAW_PROFILE;
+    try {
+      process.env.OPENCLAW_PROFILE = "staging";
+      const stateDir = resolveStateDir();
+      const readFile = vi.fn(async () => Buffer.from("other-media"));
+
+      await expect(
+        loadWebMedia(path.join(stateDir, "workspace-production", "secret.bin"), {
+          maxBytes: 1024 * 1024,
+          readFile,
+        }),
+      ).rejects.toMatchObject({ code: "path-not-allowed" });
+    } finally {
+      if (originalProfile === undefined) {
+        delete process.env.OPENCLAW_PROFILE;
+      } else {
+        process.env.OPENCLAW_PROFILE = originalProfile;
+      }
+    }
+  });
 });

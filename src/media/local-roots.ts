@@ -23,13 +23,25 @@ function buildMediaLocalRoots(
 ): string[] {
   const resolvedStateDir = path.resolve(stateDir);
   const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
-  return [
+  const roots = [
     preferredTmpDir,
     path.join(resolvedStateDir, "media"),
     path.join(resolvedStateDir, "agents"),
     path.join(resolvedStateDir, "workspace"),
     path.join(resolvedStateDir, "sandboxes"),
   ];
+  // Include profile-specific workspace when OPENCLAW_PROFILE is set,
+  // so media from the active profile's workspace passes the allowlist.
+  // Derive from resolvedStateDir so the path stays consistent when
+  // OPENCLAW_STATE_DIR is overridden.
+  const profile = process.env.OPENCLAW_PROFILE?.trim();
+  if (profile && profile.toLowerCase() !== "default") {
+    const profileWorkspace = path.join(resolvedStateDir, `workspace-${profile}`);
+    if (!roots.includes(profileWorkspace)) {
+      roots.push(profileWorkspace);
+    }
+  }
+  return roots;
 }
 
 export function getDefaultMediaLocalRoots(): readonly string[] {
