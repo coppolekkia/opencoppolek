@@ -32,6 +32,12 @@ export {
 } from "./auth-store.js";
 
 let credsSaveQueue: Promise<void> = Promise.resolve();
+
+// Export for login-qr.ts to wait for pending creds writes before restarting socket
+export async function waitForCredsSaveQueue(): Promise<void> {
+  await credsSaveQueue;
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -186,7 +192,9 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 export function getStatusCode(err: unknown) {
   return (
     (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status
+    (err as { status?: number })?.status ??
+    // Unwrap Baileys v7 lastDisconnect wrapper: { error: BoomError, date }
+    (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode
   );
 }
 
