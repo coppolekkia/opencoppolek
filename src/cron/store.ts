@@ -61,7 +61,7 @@ export async function saveCronStore(
   store: CronStoreFile,
   opts?: SaveCronStoreOptions,
 ) {
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.promises.mkdir(path.dirname(storePath), { recursive: true, mode: 0o700 });
   const json = JSON.stringify(store, null, 2);
   const cached = serializedStoreCache.get(storePath);
   if (cached === json) {
@@ -83,14 +83,15 @@ export async function saveCronStore(
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, "utf-8");
+  // Create backup BEFORE writing new content - we already have the old content in `previous`
   if (previous !== null && !opts?.skipBackup) {
     try {
-      await fs.promises.copyFile(storePath, `${storePath}.bak`);
+      await fs.promises.writeFile(`${storePath}.bak`, previous, { encoding: "utf-8", mode: 0o600 });
     } catch {
       // best-effort
     }
   }
+  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   await renameWithRetry(tmp, storePath);
   serializedStoreCache.set(storePath, json);
 }
@@ -112,6 +113,12 @@ async function renameWithRetry(src: string, dest: string): Promise<void> {
       // Windows doesn't reliably support atomic replace via rename when dest exists.
       if (code === "EPERM" || code === "EEXIST") {
         await fs.promises.copyFile(src, dest);
+        // Ensure correct permissions - copyFile doesn't preserve mode
+        try {
+          await fs.promises.chmod(dest, 0o600);
+        } catch {
+          // Best-effort: chmod may fail in some environments (e.g., Windows, some test mocks)
+        }
         await fs.promises.unlink(src).catch(() => {});
         return;
       }
