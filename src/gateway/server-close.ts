@@ -46,7 +46,11 @@ export function createGatewayCloseHandler(params: {
       }
     }
     if (params.tailscaleCleanup) {
-      await params.tailscaleCleanup();
+      try {
+        await params.tailscaleCleanup();
+      } catch {
+        /* ignore */
+      }
     }
     if (params.canvasHost) {
       try {
