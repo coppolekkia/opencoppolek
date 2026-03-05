@@ -12,12 +12,12 @@ type SeenIdEntry = {
   recordIndex: number;
 };
 
-// Precedence: config > workspace > global > bundled
+// Rank for resolving same-physical-directory conflicts (lower = higher precedence).
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
   workspace: 1,
-  global: 2,
-  bundled: 3,
+  bundled: 2,
+  global: 3,
 };
 
 export type PluginManifestRecord = {
@@ -214,9 +214,15 @@ export function loadPluginManifestRegistry(params: {
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);
       })();
+      // Cross-origin duplicates (e.g. bundled + global) are expected when a
+      // user installs a global extension that shadows a bundled plugin.
+      // Silently skip the warning — the loader handles precedence via
+      // discovery order and marks the loser as "disabled".
+      // Only warn when two different directories share the same plugin id
+      // within the same origin — that indicates a real configuration conflict.
       if (samePlugin) {
-        // Prefer higher-precedence origins even if candidates are passed in
-        // an unexpected order (config > workspace > global > bundled).
+        // Same physical directory discovered under two origins. Keep the
+        // higher-precedence record (lower rank number) and silently skip.
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = buildRecord({
             manifest,
@@ -229,12 +235,19 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      if (candidate.origin === existing.candidate.origin) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
+      // For cross-origin duplicates, fall through without warning so both
+      // records are emitted and the loader can mark the loser as "disabled".
+      // Update seenIds so subsequent same-origin duplicates compare against
+      // the latest candidate rather than the original cross-origin entry.
+      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

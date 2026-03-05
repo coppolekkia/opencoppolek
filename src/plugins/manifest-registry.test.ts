@@ -130,7 +130,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("suppresses duplicate warning for cross-origin plugins with same id", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -148,6 +148,53 @@ describe("loadPluginManifestRegistry", () => {
         rootDir: dirB,
         origin: "global",
       }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    // Both records are emitted so the loader can mark the loser as "disabled".
+    expect(registry.plugins).toHaveLength(2);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
+    expect(registry.plugins[1]?.origin).toBe("global");
+  });
+
+  it("emits duplicate warning for same-origin plugins with same id", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "test-plugin", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "test-plugin",
+        rootDir: dirA,
+        origin: "global",
+      }),
+      createPluginCandidate({
+        idHint: "test-plugin",
+        rootDir: dirB,
+        origin: "global",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
+  it("warns on same-origin duplicate even after a cross-origin entry was seen first", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const dirC = makeTempDir();
+    const manifest = { id: "test-plugin", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+    writeManifest(dirC, manifest);
+
+    // bundled → global → global: the second global is a same-origin duplicate
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({ idHint: "test-plugin", rootDir: dirA, origin: "bundled" }),
+      createPluginCandidate({ idHint: "test-plugin", rootDir: dirB, origin: "global" }),
+      createPluginCandidate({ idHint: "test-plugin", rootDir: dirC, origin: "global" }),
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
@@ -208,7 +255,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
-  it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
+  it("prefers higher-precedence origins for the same physical directory (config > workspace > bundled > global)", () => {
     const dir = makeTempDir();
     fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
     const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };
