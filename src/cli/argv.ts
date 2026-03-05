@@ -4,6 +4,7 @@ import {
   FLAG_TERMINATOR,
   isValueToken,
 } from "../infra/cli-root-options.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
@@ -126,6 +127,9 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
 
 export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
   if (hasFlag(argv, "--verbose")) {
+    return true;
+  }
+  if (isTruthyEnvValue(process.env.OPENCLAW_VERBOSE)) {
     return true;
   }
   if (options?.includeDebug && hasFlag(argv, "--debug")) {

@@ -41,6 +41,7 @@ let originalProcessArgv: string[];
 let originalProcessTitle: string;
 let originalNodeNoWarnings: string | undefined;
 let originalHideBanner: string | undefined;
+let originalOpenclawVerbose: string | undefined;
 
 beforeAll(async () => {
   ({ registerPreActionHooks } = await import("./preaction.js"));
@@ -52,8 +53,10 @@ beforeEach(() => {
   originalProcessTitle = process.title;
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+  originalOpenclawVerbose = process.env.OPENCLAW_VERBOSE;
   delete process.env.NODE_NO_WARNINGS;
   delete process.env.OPENCLAW_HIDE_BANNER;
+  delete process.env.OPENCLAW_VERBOSE;
 });
 
 afterEach(() => {
@@ -68,6 +71,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_HIDE_BANNER;
   } else {
     process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
+  }
+  if (originalOpenclawVerbose === undefined) {
+    delete process.env.OPENCLAW_VERBOSE;
+  } else {
+    process.env.OPENCLAW_VERBOSE = originalOpenclawVerbose;
   }
 });
 
@@ -182,6 +190,18 @@ describe("registerPreActionHooks", () => {
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("enables verbose preaction from OPENCLAW_VERBOSE env", async () => {
+    process.env.OPENCLAW_VERBOSE = "true";
+
+    await runPreAction({
+      parseArgv: ["status"],
+      processArgv: ["node", "openclaw", "status"],
+    });
+
+    expect(setVerboseMock).toHaveBeenCalledWith(true);
+    expect(process.env.NODE_NO_WARNINGS).toBeUndefined();
   });
 
   it("applies --json stdout suppression only for explicit JSON output commands", async () => {
