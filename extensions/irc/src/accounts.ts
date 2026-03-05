@@ -22,6 +22,8 @@ export type ResolvedIrcAccount = {
   realname: string;
   password: string;
   passwordSource: "env" | "passwordFile" | "config" | "none";
+  tlsInsecure: boolean;
+  tlsFingerprints: string[];
   config: IrcAccountConfig;
 };
 
@@ -235,6 +237,14 @@ export function resolveIrcAccount(params: {
       "OpenClaw"
     ).trim();
 
+    const tlsInsecure =
+      typeof merged.tlsInsecure === "boolean"
+        ? merged.tlsInsecure
+        : accountId === DEFAULT_ACCOUNT_ID
+          ? parseTruthy(process.env.IRC_TLS_INSECURE)
+          : false;
+    const tlsFingerprints = merged.tlsFingerprints ?? [];
+
     const passwordResolution = resolvePassword(accountId, merged);
     const nickserv = resolveNickServConfig(accountId, merged.nickserv);
 
@@ -263,6 +273,8 @@ export function resolveIrcAccount(params: {
       realname,
       password: passwordResolution.password,
       passwordSource: passwordResolution.source,
+      tlsInsecure,
+      tlsFingerprints,
       config,
     } satisfies ResolvedIrcAccount;
   };
