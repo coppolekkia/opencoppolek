@@ -8,7 +8,10 @@ import {
   makeResponse,
   toRequestUrl,
 } from "../test-utils/provider-usage-fetch.js";
-import { fetchClaudeUsage, resetClaudeUsageRateLimitForTests } from "./provider-usage.fetch.claude.js";
+import {
+  fetchClaudeUsage,
+  resetClaudeUsageRateLimitForTests,
+} from "./provider-usage.fetch.claude.js";
 
 const MISSING_SCOPE_MESSAGE = "missing scope requirement user:profile";
 

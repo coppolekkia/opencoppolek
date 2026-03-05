@@ -372,9 +372,9 @@ export async function fetchMoonshotUsage(
           ? `HTTP 429: Kimi/Moonshot usage endpoint is rate-limited; model replies may still work`
           : response.status === 404
             ? `HTTP 404: Kimi/Moonshot usage endpoint unavailable for this account/region (${endpoint})`
-        : message
-          ? `HTTP ${response.status}: ${message}`
-          : `HTTP ${response.status}`;
+            : message
+              ? `HTTP ${response.status}: ${message}`
+              : `HTTP ${response.status}`;
 
     return {
       provider: "moonshot",

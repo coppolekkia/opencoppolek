@@ -290,7 +290,9 @@ export async function fetchClaudeUsage(
       (res.status === 403 || res.status === 401 || res.status === 400) &&
       missingUserProfileScope
     ) {
-      logVerbose("[usage:claude] oauth usage missing user:profile scope; trying claude.ai fallback");
+      logVerbose(
+        "[usage:claude] oauth usage missing user:profile scope; trying claude.ai fallback",
+      );
       const sessionKeys = resolveClaudeWebSessionKeys(token);
       if (sessionKeys.length === 0) {
         return buildUsageErrorSnapshot(

@@ -1,5 +1,5 @@
-import { resolveFetch } from "./fetch.js";
 import { logVerbose } from "../globals.js";
+import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   fetchClaudeUsage,

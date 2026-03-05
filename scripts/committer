@@ -3,6 +3,26 @@
 set -euo pipefail
 # Disable glob expansion to handle brackets in file paths
 set -f
+
+# Ensure git hooks can resolve Node on Windows when run via Git Bash.
+if ! command -v node >/dev/null 2>&1; then
+  node_candidates=()
+  if [ -n "${OPENCLAW_NODE_PATH:-}" ]; then
+    node_candidates+=("$OPENCLAW_NODE_PATH")
+  fi
+  node_candidates+=(
+    "/c/nvm4w/nodejs/node.exe"
+    "/c/Program Files/nodejs/node.exe"
+  )
+
+  for candidate in "${node_candidates[@]}"; do
+    if [ -x "$candidate" ]; then
+      export PATH="$(dirname "$candidate"):$PATH"
+      break
+    fi
+  done
+fi
+
 usage() {
   printf 'Usage: %s [--force] "commit message" "file" ["file" ...]\n' "$(basename "$0")" >&2
   exit 2
