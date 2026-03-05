@@ -8,6 +8,14 @@ import type {
   PostbackEvent,
 } from "@line/bot-sdk";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
+import {
+  buildPendingHistoryContextFromMap,
+  clearConsumedHistoryEntriesIfEnabled,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+  type HistoryEntry,
+} from "../auto-reply/reply/history.js";
+import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -64,6 +72,8 @@ export interface LineHandlerContext {
   mediaMaxBytes: number;
   processMessage: (ctx: LineInboundContext) => Promise<void>;
   replayCache?: LineWebhookReplayCache;
+  groupHistories?: Map<string, HistoryEntry[]>;
+  groupHistoryLimit?: number;
 }
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
@@ -413,9 +423,32 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
   return "";
 }
 
+function resolveLineGroupHistoryLimit(params: {
+  cfg: OpenClawConfig;
+  contextLimit?: number;
+}): number {
+  const fromContext = params.contextLimit;
+  if (typeof fromContext === "number") {
+    return Math.max(0, Math.floor(fromContext));
+  }
+  const fromConfig = params.cfg.messages?.groupChat?.historyLimit;
+  if (typeof fromConfig === "number") {
+    return Math.max(0, Math.floor(fromConfig));
+  }
+  return DEFAULT_GROUP_HISTORY_LIMIT;
+}
+
 async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
   const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
   const message = event.message;
+  let pendingHistoryToClear:
+    | {
+        historyMap: Map<string, HistoryEntry[]>;
+        historyKey: string;
+        limit: number;
+        consumedCount: number;
+      }
+    | undefined;
 
   const decision = await shouldProcessLineEvent(event, context);
   if (!decision.allowed) {
@@ -456,7 +489,75 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
+  if (messageContext.isGroup) {
+    const groupConfig = resolveLineGroupConfig({
+      config: account.config,
+      groupId: messageContext.groupId,
+      roomId: messageContext.roomId,
+    });
+    const requireMention = groupConfig?.requireMention ?? true;
+    if (requireMention) {
+      const mentionRegexes = buildMentionRegexes(cfg, messageContext.route.agentId);
+      const canDetectMention = mentionRegexes.length > 0;
+      const rawText = resolveEventRawText(event);
+      const shouldBypassMentionGate = decision.commandAuthorized && hasControlCommand(rawText, cfg);
+      const wasMentioned = matchesMentionWithExplicit({
+        text: rawText,
+        mentionRegexes,
+      });
+      const historyMap = context.groupHistories;
+      const historyLimit = resolveLineGroupHistoryLimit({
+        cfg,
+        contextLimit: context.groupHistoryLimit,
+      });
+      const historyKey = messageContext.route.sessionKey;
+      if (canDetectMention && !wasMentioned && !shouldBypassMentionGate) {
+        if (historyMap) {
+          recordPendingHistoryEntryIfEnabled({
+            historyMap,
+            historyKey,
+            limit: historyLimit,
+            entry: {
+              sender: messageContext.userId ? `user:${messageContext.userId}` : "unknown",
+              body: messageContext.ctxPayload.RawBody ?? "",
+              timestamp: event.timestamp,
+              messageId: message.id,
+            },
+          });
+        }
+        logVerbose(`line: stored group message for context (no mention) session=${historyKey}`);
+        return;
+      }
+      const pendingEntries = historyMap?.get(historyKey);
+      if (historyMap && historyLimit > 0 && (pendingEntries?.length ?? 0) > 0) {
+        const bodyWithPendingHistory = buildPendingHistoryContextFromMap({
+          historyMap,
+          historyKey,
+          limit: historyLimit,
+          currentMessage: messageContext.ctxPayload.Body ?? "",
+          formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
+        });
+        messageContext.ctxPayload.Body = bodyWithPendingHistory;
+        messageContext.ctxPayload.BodyForAgent = bodyWithPendingHistory;
+        pendingHistoryToClear = {
+          historyMap,
+          historyKey,
+          limit: historyLimit,
+          consumedCount: pendingEntries.length,
+        };
+      }
+    }
+  }
+
   await processMessage(messageContext);
+  if (pendingHistoryToClear) {
+    clearConsumedHistoryEntriesIfEnabled({
+      historyMap: pendingHistoryToClear.historyMap,
+      historyKey: pendingHistoryToClear.historyKey,
+      limit: pendingHistoryToClear.limit,
+      consumedCount: pendingHistoryToClear.consumedCount,
+    });
+  }
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {

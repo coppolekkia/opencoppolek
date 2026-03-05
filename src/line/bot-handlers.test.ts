@@ -1,5 +1,6 @@
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { HISTORY_CONTEXT_MARKER, type HistoryEntry } from "../auto-reply/reply/history.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
@@ -33,10 +34,17 @@ vi.mock("./send.js", () => ({
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
   buildLineMessageContextMock: vi.fn(async () => ({
-    ctxPayload: { From: "line:group:group-1" },
+    ctxPayload: {
+      From: "line:group:group-1",
+      Body: "current",
+      BodyForAgent: "current",
+      RawBody: "current",
+    },
     replyToken: "reply-token",
-    route: { agentId: "default" },
+    route: { agentId: "default", sessionKey: "line:group:group-1" },
     isGroup: true,
+    userId: "user-1",
+    groupId: "group-1",
     accountId: "default",
   })),
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
@@ -639,5 +647,369 @@ describe("handleLineWebhookEvents", () => {
     expect(context.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("line: event handler failed: Error: transient failure"),
     );
+  });
+
+  it("stores unmentioned LINE group messages in pending history when requireMention is enabled", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-1",
+        Body: "hello team",
+        BodyForAgent: "hello team",
+        RawBody: "hello team",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-1" },
+      isGroup: true,
+      userId: "user-1",
+      groupId: "group-1",
+      accountId: "default",
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-1", type: "text", text: "hello team" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-1" },
+      mode: "active",
+      webhookEventId: "evt-mention-1",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: {
+            groupPolicy: "open",
+            groups: { "group-1": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      groupHistories,
+      groupHistoryLimit: 5,
+    });
+
+    expect(processMessage).not.toHaveBeenCalled();
+    const entries = groupHistories.get("line:group:group-1") ?? [];
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.body).toBe("hello team");
+  });
+
+  it("allows control commands in mention-gated LINE groups without storing pending history", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-1",
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-1" },
+      isGroup: true,
+      userId: "user-1",
+      groupId: "group-1",
+      accountId: "default",
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-command", type: "text", text: "/status" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-1" },
+      mode: "active",
+      webhookEventId: "evt-mention-command",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: {
+            groupPolicy: "open",
+            groups: { "group-1": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      groupHistories,
+      groupHistoryLimit: 5,
+    });
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(groupHistories.get("line:group:group-1")).toBeUndefined();
+  });
+
+  it("injects pending LINE group history into context when mention matches", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    groupHistories.set("line:group:group-1", [{ sender: "user:old", body: "previous message" }]);
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-1",
+        Body: "@openclaw current",
+        BodyForAgent: "@openclaw current",
+        RawBody: "@openclaw current",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-1" },
+      isGroup: true,
+      userId: "user-1",
+      groupId: "group-1",
+      accountId: "default",
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-2", type: "text", text: "@openclaw current" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-1" },
+      mode: "active",
+      webhookEventId: "evt-mention-2",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: {
+            groupPolicy: "open",
+            groups: { "group-1": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      groupHistories,
+      groupHistoryLimit: 5,
+    });
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    const dispatched = processMessage.mock.calls[0]?.[0];
+    expect(String(dispatched?.ctxPayload?.Body ?? "")).toContain(HISTORY_CONTEXT_MARKER);
+    expect(String(dispatched?.ctxPayload?.BodyForAgent ?? "")).toContain(HISTORY_CONTEXT_MARKER);
+    expect(String(dispatched?.ctxPayload?.Body ?? "")).toContain("previous message");
+    expect(groupHistories.get("line:group:group-1")).toEqual([]);
+  });
+
+  it("keeps pending LINE history when mentioned turn processing fails", async () => {
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    groupHistories.set("line:group:group-1", [{ sender: "user:old", body: "previous message" }]);
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-1",
+        Body: "@openclaw current",
+        BodyForAgent: "@openclaw current",
+        RawBody: "@openclaw current",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-1" },
+      isGroup: true,
+      userId: "user-1",
+      groupId: "group-1",
+      accountId: "default",
+    });
+    const processMessage = vi.fn(async () => {
+      throw new Error("transient failure");
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-3", type: "text", text: "@openclaw current" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-1" },
+      mode: "active",
+      webhookEventId: "evt-mention-3",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await expect(
+      handleLineWebhookEvents([event], {
+        cfg: {
+          channels: {
+            line: {
+              groupPolicy: "open",
+              groups: { "group-1": { requireMention: true } },
+            },
+          },
+          messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+        },
+        account: {
+          accountId: "default",
+          enabled: true,
+          channelAccessToken: "token",
+          channelSecret: "secret",
+          tokenSource: "config",
+          config: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+        },
+        runtime: createRuntime(),
+        mediaMaxBytes: 1,
+        processMessage,
+        groupHistories,
+        groupHistoryLimit: 5,
+      }),
+    ).rejects.toThrow("transient failure");
+
+    const retained = groupHistories.get("line:group:group-1") ?? [];
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.body).toBe("previous message");
+  });
+
+  it("does not create empty pending-history keys for mentioned turns without pending entries", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-2",
+        Body: "@openclaw hello",
+        BodyForAgent: "@openclaw hello",
+        RawBody: "@openclaw hello",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-2" },
+      isGroup: true,
+      userId: "user-2",
+      groupId: "group-2",
+      accountId: "default",
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-4", type: "text", text: "@openclaw hello" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-2", userId: "user-2" },
+      mode: "active",
+      webhookEventId: "evt-mention-4",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: {
+            groupPolicy: "open",
+            groups: { "group-2": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-2": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      groupHistories,
+      groupHistoryLimit: 5,
+    });
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(groupHistories.has("line:group:group-2")).toBe(false);
+  });
+
+  it("preserves newly appended pending history entries during mentioned turn processing", async () => {
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    groupHistories.set("line:group:group-3", [{ sender: "user:old", body: "older context" }]);
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-3",
+        Body: "@openclaw current",
+        BodyForAgent: "@openclaw current",
+        RawBody: "@openclaw current",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-3" },
+      isGroup: true,
+      userId: "user-3",
+      groupId: "group-3",
+      accountId: "default",
+    });
+    const processMessage = vi.fn(async () => {
+      const current = groupHistories.get("line:group:group-3") ?? [];
+      groupHistories.set("line:group:group-3", [
+        ...current,
+        { sender: "user:new", body: "arrived during processing" },
+      ]);
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-5", type: "text", text: "@openclaw current" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-3", userId: "user-3" },
+      mode: "active",
+      webhookEventId: "evt-mention-5",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: {
+            groupPolicy: "open",
+            groups: { "group-3": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-3": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      groupHistories,
+      groupHistoryLimit: 5,
+    });
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(groupHistories.get("line:group:group-3")).toEqual([
+      { sender: "user:new", body: "arrived during processing" },
+    ]);
   });
 });
