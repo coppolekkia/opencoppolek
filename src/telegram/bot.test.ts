@@ -1,3 +1,4 @@
+import type { LookupAddress, LookupAllOptions, LookupOneOptions, LookupOptions } from "node:dns";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
@@ -6,6 +7,7 @@ import {
   listNativeCommandSpecsForConfig,
 } from "../auto-reply/commands-registry.js";
 import { normalizeTelegramCommandName } from "../config/telegram-custom-commands.js";
+import * as ssrf from "../infra/net/ssrf.js";
 import {
   answerCallbackQuerySpy,
   commandSpy,
@@ -26,6 +28,42 @@ import { createTelegramBot } from "./bot.js";
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
+const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
+
+function mockPinnedTelegramLookup(hostname: string): Promise<LookupAddress>;
+function mockPinnedTelegramLookup(hostname: string, family: number): Promise<LookupAddress>;
+function mockPinnedTelegramLookup(
+  hostname: string,
+  options: LookupOneOptions,
+): Promise<LookupAddress>;
+function mockPinnedTelegramLookup(
+  hostname: string,
+  options: LookupAllOptions,
+): Promise<LookupAddress[]>;
+function mockPinnedTelegramLookup(
+  hostname: string,
+  options: LookupOptions,
+): Promise<LookupAddress | LookupAddress[]>;
+function mockPinnedTelegramLookup(
+  hostname: string,
+  options?: number | LookupOneOptions | LookupAllOptions | LookupOptions,
+): Promise<LookupAddress | LookupAddress[]> {
+  void hostname;
+  if (typeof options === "object" && options?.all === true) {
+    return Promise.resolve([{ address: "93.184.216.34", family: 4 }]);
+  }
+  return Promise.resolve({ address: "93.184.216.34", family: 4 });
+}
+
+function mockTelegramDnsResolution() {
+  return vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(
+    async (hostname, params = {}) =>
+      await resolvePinnedHostnameWithPolicy(hostname, {
+        ...params,
+        lookupFn: mockPinnedTelegramLookup,
+      }),
+  );
+}
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
   void config;
@@ -558,6 +596,7 @@ describe("createTelegramBot", () => {
     replySpy.mockClear();
     getFileSpy.mockClear();
 
+    const resolvePinnedHostnameSpy = mockTelegramDnsResolution();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
@@ -595,6 +634,55 @@ describe("createTelegramBot", () => {
       expect(payload.MediaPath).toBe(payload.MediaPaths?.[0]);
       expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
     } finally {
+      resolvePinnedHostnameSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("includes external reply media in inbound context for text replies", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+
+    const resolvePinnedHostnameSpy = mockTelegramDnsResolution();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "what is in this image?",
+          date: 1736380800,
+          external_reply: {
+            message_id: 9002,
+            photo: [{ file_id: "external-reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0] as {
+        MediaPath?: string;
+        MediaPaths?: string[];
+        ReplyToBody?: string;
+      };
+      expect(payload.ReplyToBody).toBe("<media:image>");
+      expect(payload.MediaPaths).toHaveLength(1);
+      expect(payload.MediaPath).toBe(payload.MediaPaths?.[0]);
+      expect(getFileSpy).toHaveBeenCalledWith("external-reply-photo-1");
+    } finally {
+      resolvePinnedHostnameSpy.mockRestore();
       fetchSpy.mockRestore();
     }
   });
@@ -662,6 +750,7 @@ describe("createTelegramBot", () => {
       },
     });
 
+    const resolvePinnedHostnameSpy = mockTelegramDnsResolution();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
@@ -698,8 +787,8 @@ describe("createTelegramBot", () => {
           message_id: 102,
           from: { id: 42, first_name: "Ada" },
           reply_to_message: {
-            message_id: 9001,
-            photo: [{ file_id: "reply-photo-1" }],
+            message_id: 9002,
+            photo: [{ file_id: "reply-photo-2" }],
             from: { first_name: "Ada" },
           },
         },
@@ -729,8 +818,11 @@ describe("createTelegramBot", () => {
       });
 
       expect(getFileSpy).toHaveBeenCalledTimes(1);
-      expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+      expect(getFileSpy).toHaveBeenCalledWith("reply-photo-2");
+      const payload = replySpy.mock.calls[0][0] as { ReplyToId?: string };
+      expect(payload.ReplyToId).toBe("9002");
     } finally {
+      resolvePinnedHostnameSpy.mockRestore();
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();
     }
