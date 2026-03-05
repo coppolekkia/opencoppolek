@@ -347,6 +347,9 @@ export function resolveTtsAutoMode(params: {
   if (sessionAuto) {
     return sessionAuto;
   }
+  if (params.config.auto === "off") {
+    return "off";
+  }
   const prefsAuto = resolveTtsAutoModeFromPrefs(readPrefs(params.prefsPath));
   if (prefsAuto) {
     return prefsAuto;
