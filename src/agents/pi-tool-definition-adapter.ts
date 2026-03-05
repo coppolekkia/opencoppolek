@@ -4,6 +4,7 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { logDebug, logError } from "../logger.js";
 import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
@@ -164,6 +165,16 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             toolName: normalizedName,
             result: rawResult,
           });
+
+          // Bridge to internal hook system
+          void triggerInternalHook(
+            createInternalHookEvent("tool", "after_call", "", {
+              toolName: normalizedName,
+              params: isPlainObject(executeParams) ? executeParams : {},
+              result,
+            }),
+          );
+
           return result;
         } catch (err) {
           if (signal?.aborted) {
@@ -181,6 +192,15 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
+
+          // Bridge to internal hook system
+          void triggerInternalHook(
+            createInternalHookEvent("tool", "after_call", "", {
+              toolName: normalizedName,
+              params: isPlainObject(params) ? params : {},
+              error: described.message,
+            }),
+          );
 
           return jsonResult({
             status: "error",
