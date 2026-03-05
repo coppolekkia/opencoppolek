@@ -9,14 +9,17 @@ import {
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "@buape/carbon";
-import type { APISelectMenuOption } from "discord-api-types/v10";
-import { ButtonStyle } from "discord-api-types/v10";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import {
   buildModelsProviderData,
   type ModelsProviderData,
 } from "../../auto-reply/reply/commands-models.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  ButtonStyle,
+  type APISelectMenuOption,
+  type DiscordButtonStyle,
+} from "../api-types-runtime.js";
 
 export const DISCORD_MODEL_PICKER_CUSTOM_ID_KEY = "mdlpk";
 export const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
@@ -90,7 +93,7 @@ export type DiscordModelPickerLayout = "v2" | "classic";
 type DiscordModelPickerButtonOptions = {
   label: string;
   customId: string;
-  style?: ButtonStyle;
+  style?: DiscordButtonStyle;
   disabled?: boolean;
 };
 

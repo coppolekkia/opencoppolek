@@ -24,7 +24,12 @@ import {
   type ComponentParserResult,
   type TopLevelComponents,
 } from "@buape/carbon";
-import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
+import {
+  ButtonStyle,
+  MessageFlags,
+  TextInputStyle,
+  type DiscordButtonStyle,
+} from "./api-types-runtime.js";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
@@ -293,7 +298,7 @@ export function resolveDiscordComponentAttachmentName(value: string): string {
   return attachmentName;
 }
 
-function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
+function mapButtonStyle(style?: DiscordComponentButtonStyle): DiscordButtonStyle {
   switch ((style ?? "primary").toLowerCase()) {
     case "secondary":
       return ButtonStyle.Secondary;
