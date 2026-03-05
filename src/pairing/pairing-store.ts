@@ -69,11 +69,26 @@ function safeChannelKey(channel: PairingChannel): string {
   if (!safe || safe === "_") {
     throw new Error("invalid pairing channel");
   }
+  // Additional validation: ensure no path separators remain after sanitization
+  if (safe.includes("/") || safe.includes("\\") || safe.includes(path.sep)) {
+    throw new Error("invalid pairing channel");
+  }
   return safe;
 }
 
 function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveCredentialsDir(env), `${safeChannelKey(channel)}-pairing.json`);
+  const credentialsDir = resolveCredentialsDir(env);
+  const filename = `${safeChannelKey(channel)}-pairing.json`;
+  const fullPath = path.join(credentialsDir, filename);
+
+  // Verify resolved path is within credentials directory (prevent path traversal)
+  const normalizedPath = path.normalize(fullPath);
+  const normalizedCredsDir = path.normalize(credentialsDir + path.sep);
+  if (!normalizedPath.startsWith(normalizedCredsDir)) {
+    throw new Error("invalid pairing channel: path traversal detected");
+  }
+
+  return fullPath;
 }
 
 function safeAccountKey(accountId: string): string {
@@ -85,6 +100,10 @@ function safeAccountKey(accountId: string): string {
   if (!safe || safe === "_") {
     throw new Error("invalid pairing account id");
   }
+  // Additional validation: ensure no path separators remain
+  if (safe.includes("/") || safe.includes("\\") || safe.includes(path.sep)) {
+    throw new Error("invalid pairing account id");
+  }
   return safe;
 }
 
@@ -93,15 +112,24 @@ function resolveAllowFromPath(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
 ): string {
+  const credentialsDir = resolveCredentialsDir(env);
   const base = safeChannelKey(channel);
   const normalizedAccountId = typeof accountId === "string" ? accountId.trim() : "";
-  if (!normalizedAccountId) {
-    return path.join(resolveCredentialsDir(env), `${base}-allowFrom.json`);
+
+  const filename = !normalizedAccountId
+    ? `${base}-allowFrom.json`
+    : `${base}-${safeAccountKey(normalizedAccountId)}-allowFrom.json`;
+
+  const fullPath = path.join(credentialsDir, filename);
+
+  // Verify resolved path is within credentials directory
+  const normalizedPath = path.normalize(fullPath);
+  const normalizedCredsDir = path.normalize(credentialsDir + path.sep);
+  if (!normalizedPath.startsWith(normalizedCredsDir)) {
+    throw new Error("invalid pairing path: path traversal detected");
   }
-  return path.join(
-    resolveCredentialsDir(env),
-    `${base}-${safeAccountKey(normalizedAccountId)}-allowFrom.json`,
-  );
+
+  return fullPath;
 }
 
 async function readJsonFile<T>(

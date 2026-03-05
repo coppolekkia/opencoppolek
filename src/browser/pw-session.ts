@@ -101,7 +101,7 @@ const observedPages = new WeakSet<Page>();
 // Best-effort cache to make role refs stable even if Playwright returns a different Page object
 // for the same CDP target across requests.
 const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
-const MAX_ROLE_REFS_CACHE = 50;
+const MAX_ROLE_REFS_CACHE = 500;
 
 const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;

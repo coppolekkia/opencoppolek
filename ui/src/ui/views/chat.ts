@@ -13,6 +13,8 @@ import type { SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
+import { renderErrorDisplay } from "../components/error-display.ts";
+import { exportConversation, downloadExport } from "../export-conversations.ts";
 import "../components/resizable-divider.ts";
 
 export type CompactionIndicatorStatus = {
@@ -318,7 +320,7 @@ export function renderChat(props: ChatProps) {
     <section class="card chat">
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
-      ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+      ${props.error ? renderErrorDisplay({ error: props.error, context: { component: "chat", action: "send" } }) : nothing}
 
       ${
         props.focusMode
@@ -458,6 +460,31 @@ export function renderChat(props: ChatProps) {
             ></textarea>
           </label>
           <div class="chat-compose__actions">
+            <button
+              class="btn"
+              title="Export conversation"
+              ?disabled=${!props.connected || props.messages.length === 0}
+              @click=${async () => {
+                try {
+                  const { filename, content, mimeType } = await exportConversation(
+                    props.messages,
+                    props.sessionKey,
+                    {
+                      format: "markdown",
+                      includeThinking: props.showThinking,
+                      includeToolCalls: true,
+                      includeMetadata: true,
+                      redactSensitive: false,
+                    },
+                  );
+                  downloadExport(filename, content, mimeType);
+                } catch (err) {
+                  console.error("Export failed:", err);
+                }
+              }}
+            >
+              💾
+            </button>
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}

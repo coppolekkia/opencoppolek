@@ -2,8 +2,11 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { isFileMissingError } from "./fs-utils.js";
+
+const log = createSubsystemLogger("memory");
 
 export type MemoryFileEntry = {
   path: string;
@@ -23,7 +26,9 @@ export type MemoryChunk = {
 export function ensureDir(dir: string): string {
   try {
     fsSync.mkdirSync(dir, { recursive: true });
-  } catch {}
+  } catch (error) {
+    log.debug("Failed to ensure directory (may already exist)", { error, dir });
+  }
   return dir;
 }
 

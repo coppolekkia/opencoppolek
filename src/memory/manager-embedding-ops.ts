@@ -727,14 +727,26 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
           .run(entry.path, options.source);
-      } catch {}
+      } catch (error) {
+        log.warn("Failed to delete from vector table", {
+          error,
+          path: entry.path,
+          source: options.source,
+        });
+      }
     }
     if (this.fts.enabled && this.fts.available) {
       try {
         this.db
           .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
           .run(entry.path, options.source, this.provider.model);
-      } catch {}
+      } catch (error) {
+        log.warn("Failed to delete from FTS table", {
+          error,
+          path: entry.path,
+          source: options.source,
+        });
+      }
     }
     this.db
       .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
@@ -771,7 +783,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (vectorReady && embedding.length > 0) {
         try {
           this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
-        } catch {}
+        } catch (error) {
+          log.warn("Failed to delete vector entry before insert", { error, id });
+        }
         this.db
           .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
           .run(id, vectorToBlob(embedding));

@@ -229,7 +229,9 @@ async function callBrowserProxy(params: {
       ? (JSON.parse(payload.payloadJSON) as BrowserProxyResult)
       : null);
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
-    throw new Error("browser proxy failed");
+    throw new Error(
+      `browser proxy failed (node: ${params.nodeId}, method: ${params.method}, path: ${params.path})`,
+    );
   }
   return parsed;
 }
@@ -326,6 +328,11 @@ export function createBrowserTool(opts?: {
             allowHostControl: opts?.allowHostControl,
           });
 
+      // Load config to get browser start timeout
+      const config = await loadConfig();
+      const browserConfig = resolveBrowserConfig(config.browser, config);
+      const startTimeoutMs = browserConfig.startTimeoutMs;
+
       const proxyRequest = nodeTarget
         ? async (opts: {
             method: string;
@@ -368,6 +375,7 @@ export function createBrowserTool(opts?: {
               method: "POST",
               path: "/start",
               profile,
+              timeoutMs: startTimeoutMs,
             });
             return jsonResult(
               await proxyRequest({
@@ -377,7 +385,7 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          await browserStart(baseUrl, { profile });
+          await browserStart(baseUrl, { profile, timeoutMs: startTimeoutMs });
           return jsonResult(await browserStatus(baseUrl, { profile }));
         case "stop":
           if (proxyRequest) {
@@ -385,6 +393,7 @@ export function createBrowserTool(opts?: {
               method: "POST",
               path: "/stop",
               profile,
+              timeoutMs: startTimeoutMs,
             });
             return jsonResult(
               await proxyRequest({
@@ -394,7 +403,7 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          await browserStop(baseUrl, { profile });
+          await browserStop(baseUrl, { profile, timeoutMs: startTimeoutMs });
           return jsonResult(await browserStatus(baseUrl, { profile }));
         case "profiles":
           if (proxyRequest) {
@@ -418,7 +427,7 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
+          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile, timeoutMs: startTimeoutMs }));
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {

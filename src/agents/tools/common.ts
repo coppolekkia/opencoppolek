@@ -239,6 +239,103 @@ export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   };
 }
 
+const DISCORD_MESSAGE_LIMIT = 2000;
+const CHUNK_SAFETY_MARGIN = 100;
+
+/**
+ * Splits large text into Discord-friendly chunks with metadata markers.
+ * Each chunk stays under Discord's 2000-char limit.
+ */
+export function chunkLargeText(
+  text: string,
+  maxLength: number = DISCORD_MESSAGE_LIMIT - CHUNK_SAFETY_MARGIN,
+): string[] {
+  if (text.length <= maxLength) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let remaining = text;
+  let chunkIndex = 0;
+
+  while (remaining.length > 0) {
+    chunkIndex++;
+    let chunk: string;
+
+    if (remaining.length <= maxLength) {
+      // Last chunk
+      chunk = remaining;
+      remaining = "";
+    } else {
+      // Find a good break point (newline, space, punctuation)
+      let breakPoint = maxLength;
+      const searchStart = Math.max(0, maxLength - 200);
+      const searchText = remaining.slice(searchStart, maxLength + 50);
+
+      const newlineIdx = searchText.lastIndexOf("\n");
+      const spaceIdx = searchText.lastIndexOf(" ");
+      const periodIdx = searchText.lastIndexOf(".");
+
+      if (newlineIdx >= 0 && newlineIdx > searchText.length / 2) {
+        breakPoint = searchStart + newlineIdx + 1;
+      } else if (spaceIdx >= 0 && spaceIdx > searchText.length / 2) {
+        breakPoint = searchStart + spaceIdx + 1;
+      } else if (periodIdx >= 0 && periodIdx > searchText.length / 2) {
+        breakPoint = searchStart + periodIdx + 1;
+      }
+
+      chunk = remaining.slice(0, breakPoint);
+      remaining = remaining.slice(breakPoint);
+    }
+
+    chunks.push(chunk);
+  }
+
+  // Add chunk markers if multiple chunks
+  if (chunks.length > 1) {
+    return chunks.map((chunk, idx) => {
+      const header = `[Part ${idx + 1}/${chunks.length}]\n`;
+      const maxChunkLength = maxLength - header.length;
+      const trimmedChunk = chunk.length > maxChunkLength ? chunk.slice(0, maxChunkLength) : chunk;
+      return `${header}${trimmedChunk}`;
+    });
+  }
+
+  return chunks;
+}
+
+/**
+ * Creates a chunked text result for large outputs (e.g., browser snapshots).
+ * Useful for Discord where messages are limited to 2000 characters.
+ */
+export function chunkedTextResult(payload: {
+  text: string;
+  details?: unknown;
+  externalContent?: {
+    untrusted?: boolean;
+    source?: string;
+    kind?: string;
+    wrapped?: boolean;
+  };
+}): AgentToolResult<unknown> {
+  const chunks = chunkLargeText(payload.text);
+
+  return {
+    content: chunks.map((chunk) => ({
+      type: "text" as const,
+      text: chunk,
+    })),
+    details: {
+      ...(typeof payload.details === "object" && payload.details !== null
+        ? payload.details
+        : { raw: payload.details }),
+      chunked: chunks.length > 1,
+      totalChunks: chunks.length,
+      ...(payload.externalContent && { externalContent: payload.externalContent }),
+    },
+  };
+}
+
 export function wrapOwnerOnlyToolExecution(
   tool: AnyAgentTool,
   senderIsOwner: boolean,

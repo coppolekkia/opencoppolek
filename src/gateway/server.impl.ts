@@ -471,6 +471,40 @@ export async function startGatewayServer(
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
+  // Auto-configure Control UI for Tailscale Serve mode
+  if (tailscaleMode === "serve") {
+    const currentConfig = loadConfig();
+    let configModified = false;
+
+    // Check if we need to auto-enable controlUi device auth bypass
+    if (
+      !currentConfig.gateway?.controlUi?.dangerouslyDisableDeviceAuth &&
+      !currentConfig.gateway?.controlUi?.allowInsecureAuth
+    ) {
+      log.info(
+        "gateway.tailscale.mode=serve: auto-enabling Control UI device auth bypass (dangerouslyDisableDeviceAuth + allowInsecureAuth)",
+      );
+
+      // Deep clone config to modify it
+      const newConfig = JSON.parse(JSON.stringify(currentConfig)) as OpenClawConfig;
+      if (!newConfig.gateway) newConfig.gateway = {};
+      if (!newConfig.gateway.controlUi) newConfig.gateway.controlUi = {};
+
+      newConfig.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+      newConfig.gateway.controlUi.allowInsecureAuth = true;
+
+      // Write the updated config
+      await writeConfigFile(CONFIG_PATH, newConfig);
+      configModified = true;
+    }
+
+    if (configModified) {
+      log.info(
+        "gateway.tailscale.mode=serve: config auto-updated for Tailscale Serve compatibility. Restart recommended for changes to take full effect.",
+      );
+    }
+  }
+
   // Create auth rate limiters used by connect/auth flows.
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =

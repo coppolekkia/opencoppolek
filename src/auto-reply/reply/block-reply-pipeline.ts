@@ -11,6 +11,8 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  getFailedCount: () => number;
+  getLastError: () => Error | undefined;
 };
 
 export type BlockReplyBuffer = {
@@ -89,6 +91,8 @@ export function createBlockReplyPipeline(params: {
   let aborted = false;
   let didStream = false;
   let didLogTimeout = false;
+  let failedCount = 0;
+  let lastError: Error | undefined;
 
   const sendPayload = (payload: ReplyPayload, bypassSeenCheck: boolean = false) => {
     if (aborted) {
@@ -133,6 +137,8 @@ export function createBlockReplyPipeline(params: {
         didStream = true;
       })
       .catch((err) => {
+        failedCount += 1;
+        lastError = err instanceof Error ? err : new Error(String(err));
         if (err === timeoutError) {
           abortController.abort();
           aborted = true;
@@ -241,5 +247,7 @@ export function createBlockReplyPipeline(params: {
       const payloadKey = createBlockReplyPayloadKey(payload);
       return sentKeys.has(payloadKey);
     },
+    getFailedCount: () => failedCount,
+    getLastError: () => lastError,
   };
 }

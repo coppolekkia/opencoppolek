@@ -17,6 +17,8 @@ import {
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { setupKeyboardShortcuts, getTabForIndex } from "./keyboard-shortcuts.ts";
+import { addRecentSession } from "./recent-sessions.ts";
 import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
@@ -40,6 +42,17 @@ type LifecycleHost = {
   logsEntries: unknown[];
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
+  keyboardShortcutsCleanup?: (() => void) | null;
+  settings: { navCollapsed: boolean };
+  configMode: "form" | "raw";
+  configRaw: string;
+  configOriginalRaw: string;
+  cronFormState: unknown;
+  setTab: (tab: Tab) => void;
+  applySettings: (settings: Partial<typeof host.settings>) => void;
+  handleConfigSave?: () => void | Promise<void>;
+  handleConfigApply?: () => void | Promise<void>;
+  handleCronSave?: () => void | Promise<void>;
 };
 
 export function handleConnected(host: LifecycleHost) {
@@ -64,6 +77,30 @@ export function handleConnected(host: LifecycleHost) {
   if (host.tab === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   }
+
+  // Setup keyboard shortcuts
+  host.keyboardShortcutsCleanup = setupKeyboardShortcuts({
+    onSave: async () => {
+      // Save based on current tab
+      if (host.tab === "config") {
+        await host.handleConfigSave?.();
+      } else if (host.tab === "cron") {
+        await host.handleCronSave?.();
+      }
+    },
+    onToggleSidebar: () => {
+      host.applySettings({ navCollapsed: !host.settings.navCollapsed });
+    },
+    onSwitchTab: (tabIndex: number) => {
+      const tab = getTabForIndex(tabIndex);
+      if (tab) {
+        host.setTab(tab);
+      }
+    },
+    onEscape: () => {
+      // Future: close modals, cancel operations
+    },
+  });
 }
 
 export function handleFirstUpdated(host: LifecycleHost) {
@@ -82,6 +119,10 @@ export function handleDisconnected(host: LifecycleHost) {
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;
+  
+  // Cleanup keyboard shortcuts
+  host.keyboardShortcutsCleanup?.();
+  host.keyboardShortcutsCleanup = null;
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {

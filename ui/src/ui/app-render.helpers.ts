@@ -8,6 +8,7 @@ import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { getShortcutHint } from "./keyboard-shortcuts.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -49,6 +50,11 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
 
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
+  // Get tab index for keyboard shortcut (1-9)
+  const tabIndex = ["chat", "overview", "channels", "instances", "sessions", "usage", "cron", "agents", "skills", "nodes", "config", "debug", "logs"].indexOf(tab) + 1;
+  const shortcutHint = tabIndex > 0 && tabIndex <= 9 ? getShortcutHint(`tab${tabIndex}`) : "";
+  const title = shortcutHint ? `${titleForTab(tab)} (${shortcutHint})` : titleForTab(tab);
+  
   return html`
     <a
       href=${href}
@@ -74,7 +80,7 @@ export function renderTab(state: AppViewState, tab: Tab) {
         }
         state.setTab(tab);
       }}
-      title=${titleForTab(tab)}
+      title=${title}
     >
       <span class="nav-item__icon" aria-hidden="true">${icons[iconForTab(tab)]}</span>
       <span class="nav-item__text">${titleForTab(tab)}</span>

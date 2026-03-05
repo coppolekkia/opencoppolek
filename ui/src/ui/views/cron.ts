@@ -21,6 +21,9 @@ import type {
   CronSortDir,
 } from "../types.ts";
 import type { CronFormState } from "../ui-types.ts";
+import { renderErrorDisplay } from "../components/error-display.ts";
+import { CRON_TEMPLATES, getTemplatesByCategory, applyTemplate } from "../cron-templates.ts";
+import { validateField, debounce } from "../validation-preview.ts";
 
 export type CronProps = {
   basePath: string;
@@ -420,7 +423,7 @@ export function renderCron(props: CronProps) {
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? t("cron.summary.refreshing") : t("cron.summary.refresh")}
         </button>
-        ${props.error ? html`<span class="muted">${props.error}</span>` : nothing}
+        ${renderErrorDisplay({ error: props.error, context: { component: "cron", action: "load" }, compact: true })}
       </div>
     </section>
 
@@ -759,6 +762,70 @@ export function renderCron(props: CronProps) {
           <section class="cron-form-section">
             <div class="cron-form-section__title">${t("cron.form.schedule")}</div>
             <div class="cron-form-section__sub">${t("cron.form.scheduleSub")}</div>
+            
+            <!-- Template Selector -->
+            <div class="form-grid cron-form-grid">
+              <label class="field cron-span-2">
+                <span>📋 ${t("cron.form.template", "Quick Start Template")}</span>
+                <select
+                  @change=${(e: Event) => {
+                    const templateId = (e.target as HTMLSelectElement).value;
+                    if (templateId) {
+                      const template = CRON_TEMPLATES.find(t => t.id === templateId);
+                      if (template) {
+                        const updated = applyTemplate(template, props.form, {
+                          agentId: props.form.agentId,
+                          deliveryChannel: props.form.deliveryChannel,
+                          deliveryTo: props.form.deliveryTo,
+                        });
+                        props.onFormChange(updated);
+                        // Reset select
+                        (e.target as HTMLSelectElement).value = '';
+                      }
+                    }
+                  }}
+                >
+                  <option value="">-- Select a template --</option>
+                  ${getTemplatesByCategory('backup').length > 0 ? html`
+                    <optgroup label="💾 Backup">
+                      ${getTemplatesByCategory('backup').map(t => html`
+                        <option value=${t.id}>${t.icon} ${t.name}</option>
+                      `)}
+                    </optgroup>
+                  ` : nothing}
+                  ${getTemplatesByCategory('monitoring').length > 0 ? html`
+                    <optgroup label="📊 Monitoring">
+                      ${getTemplatesByCategory('monitoring').map(t => html`
+                        <option value=${t.id}>${t.icon} ${t.name}</option>
+                      `)}
+                    </optgroup>
+                  ` : nothing}
+                  ${getTemplatesByCategory('reporting').length > 0 ? html`
+                    <optgroup label="📈 Reporting">
+                      ${getTemplatesByCategory('reporting').map(t => html`
+                        <option value=${t.id}>${t.icon} ${t.name}</option>
+                      `)}
+                    </optgroup>
+                  ` : nothing}
+                  ${getTemplatesByCategory('scraping').length > 0 ? html`
+                    <optgroup label="🔍 Scraping">
+                      ${getTemplatesByCategory('scraping').map(t => html`
+                        <option value=${t.id}>${t.icon} ${t.name}</option>
+                      `)}
+                    </optgroup>
+                  ` : nothing}
+                  ${getTemplatesByCategory('maintenance').length > 0 ? html`
+                    <optgroup label="🔧 Maintenance">
+                      ${getTemplatesByCategory('maintenance').map(t => html`
+                        <option value=${t.id}>${t.icon} ${t.name}</option>
+                      `)}
+                    </optgroup>
+                  ` : nothing}
+                </select>
+                <div class="cron-help">Choose a template to quickly set up a common task</div>
+              </label>
+            </div>
+            
             <div class="form-grid cron-form-grid">
               <label class="field cron-span-2">
                 ${renderFieldLabel(t("cron.form.schedule"))}
@@ -1458,10 +1525,32 @@ function renderScheduleFields(props: CronProps) {
           aria-describedby=${ifDefined(
             props.fieldErrors.cronExpr ? errorIdForField("cronExpr") : undefined,
           )}
-          @input=${(e: Event) =>
-            props.onFormChange({ cronExpr: (e.target as HTMLInputElement).value })}
+          @input=${(e: Event) => {
+            const value = (e.target as HTMLInputElement).value;
+            props.onFormChange({ cronExpr: value });
+            
+            // Real-time validation
+            const debouncedValidate = debounce(() => {
+              const result = validateField("cron", value);
+              const input = e.target as HTMLInputElement;
+              if (result.valid) {
+                input.style.borderColor = "var(--color-success, #10b981)";
+              } else if (value.trim()) {
+                input.style.borderColor = "var(--color-danger, #dc2626)";
+              } else {
+                input.style.borderColor = "";
+              }
+            }, 300);
+            debouncedValidate();
+          }}
           placeholder=${t("cron.form.expressionPlaceholder")}
         />
+        <div class="cron-help">
+          ${t("cron.form.jitterHelp")}
+          ${form.cronExpr && !props.fieldErrors.cronExpr ? html`
+            <span style="color: var(--color-success, #10b981);"> ✓ Valid cron expression</span>
+          ` : nothing}
+        </div>
         ${renderFieldError(props.fieldErrors.cronExpr, errorIdForField("cronExpr"))}
       </label>
       <label class="field">
@@ -1475,7 +1564,6 @@ function renderScheduleFields(props: CronProps) {
         />
         <div class="cron-help">${t("cron.form.timezoneHelp")}</div>
       </label>
-      <div class="cron-help cron-span-2">${t("cron.form.jitterHelp")}</div>
     </div>
   `;
 }

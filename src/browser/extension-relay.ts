@@ -84,6 +84,9 @@ type ConnectedTarget = {
 const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
 const DEFAULT_EXTENSION_RECONNECT_GRACE_MS = 20_000;
 const DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS = 3_000;
+const DEFAULT_EXTENSION_COMMAND_TIMEOUT_MS = 30_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 30_000;
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (!value) {
@@ -247,6 +250,18 @@ export async function ensureChromeExtensionRelayServer(opts: {
     "OPENCLAW_EXTENSION_RELAY_COMMAND_RECONNECT_WAIT_MS",
     DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS,
   );
+  const extensionCommandTimeoutMs = envMsOrDefault(
+    "OPENCLAW_EXTENSION_COMMAND_TIMEOUT_MS",
+    DEFAULT_EXTENSION_COMMAND_TIMEOUT_MS,
+  );
+  const heartbeatIntervalMs = envMsOrDefault(
+    "OPENCLAW_EXTENSION_HEARTBEAT_INTERVAL_MS",
+    DEFAULT_HEARTBEAT_INTERVAL_MS,
+  );
+  const heartbeatTimeoutMs = envMsOrDefault(
+    "OPENCLAW_EXTENSION_HEARTBEAT_TIMEOUT_MS",
+    DEFAULT_HEARTBEAT_TIMEOUT_MS,
+  );
 
   const initPromise = (async (): Promise<ChromeExtensionRelayServer> => {
     const relayAuthToken = resolveRelayAuthTokenForPort(info.port);
@@ -258,6 +273,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
     const extensionConnected = () => extensionWs?.readyState === WebSocket.OPEN;
     const hasConnectedTargets = () => connectedTargets.size > 0;
     let extensionDisconnectCleanupTimer: NodeJS.Timeout | null = null;
+    let heartbeatIntervalTimer: NodeJS.Timeout | null = null;
+    let heartbeatResponseTimer: NodeJS.Timeout | null = null;
     const extensionReconnectWaiters = new Set<(connected: boolean) => void>();
 
     const flushExtensionReconnectWaiters = (connected: boolean) => {
@@ -277,6 +294,51 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
       clearTimeout(extensionDisconnectCleanupTimer);
       extensionDisconnectCleanupTimer = null;
+    };
+
+    const stopHeartbeat = () => {
+      if (heartbeatIntervalTimer) {
+        clearTimeout(heartbeatIntervalTimer);
+        heartbeatIntervalTimer = null;
+      }
+      if (heartbeatResponseTimer) {
+        clearTimeout(heartbeatResponseTimer);
+        heartbeatResponseTimer = null;
+      }
+    };
+
+    const startHeartbeat = () => {
+      stopHeartbeat();
+      const sendPing = () => {
+        const ws = extensionWs;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          stopHeartbeat();
+          return;
+        }
+        try {
+          ws.send(JSON.stringify({ method: "ping" } satisfies ExtensionPingMessage));
+          // Set timeout for pong response
+          heartbeatResponseTimer = setTimeout(() => {
+            if (extensionWs === ws && ws.readyState === WebSocket.OPEN) {
+              // No pong received, connection might be stale
+              ws.close(1000, "heartbeat timeout");
+            }
+          }, heartbeatTimeoutMs);
+        } catch {
+          // Ignore errors, connection likely already closed
+        }
+      };
+      // Send initial ping
+      sendPing();
+      // Schedule recurring pings
+      heartbeatIntervalTimer = setInterval(sendPing, heartbeatIntervalMs);
+    };
+
+    const resetHeartbeat = () => {
+      if (heartbeatResponseTimer) {
+        clearTimeout(heartbeatResponseTimer);
+        heartbeatResponseTimer = null;
+      }
     };
 
     const closeCdpClientsAfterExtensionDisconnect = () => {
@@ -344,8 +406,12 @@ export async function ensureChromeExtensionRelayServer(opts: {
       return await new Promise<unknown>((resolve, reject) => {
         const timer = setTimeout(() => {
           pendingExtension.delete(payload.id);
-          reject(new Error(`extension request timeout: ${payload.params.method}`));
-        }, 30_000);
+          reject(
+            new Error(
+              `extension request timeout (${extensionCommandTimeoutMs}ms): ${payload.params.method}`,
+            ),
+          );
+        }, extensionCommandTimeoutMs);
         pendingExtension.set(payload.id, { resolve, reject, timer });
       });
     };
@@ -739,13 +805,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       extensionWs = ws;
       clearExtensionDisconnectCleanupTimer();
       flushExtensionReconnectWaiters(true);
-
-      const ping = setInterval(() => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          return;
-        }
-        ws.send(JSON.stringify({ method: "ping" } satisfies ExtensionPingMessage));
-      }, 5000);
+      startHeartbeat();
 
       ws.on("message", (data) => {
         if (extensionWs !== ws) {
@@ -780,6 +840,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
         if (parsed && typeof parsed === "object" && "method" in parsed) {
           if ((parsed as ExtensionPongMessage).method === "pong") {
+            resetHeartbeat();
             return;
           }
           if ((parsed as ExtensionForwardEventMessage).method !== "forwardCDPEvent") {
@@ -867,7 +928,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       });
 
       ws.on("close", () => {
-        clearInterval(ping);
+        stopHeartbeat();
         if (extensionWs !== ws) {
           return;
         }
@@ -1003,6 +1064,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       extensionConnected,
       stop: async () => {
         relayRuntimeByPort.delete(port);
+        stopHeartbeat();
         clearExtensionDisconnectCleanupTimer();
         flushExtensionReconnectWaiters(false);
         for (const [, pending] of pendingExtension) {

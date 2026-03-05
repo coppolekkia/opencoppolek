@@ -3,6 +3,7 @@ import type { ConfigUiHints } from "../types.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 import { getTagFilters, replaceTagFilters } from "./config-search.ts";
+import { renderErrorDisplay } from "../components/error-display.ts";
 
 export type ConfigProps = {
   raw: string;

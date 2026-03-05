@@ -6,11 +6,16 @@ import type { OpenClawConfig } from "../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import type { MsgContext } from "./templating.js";
 
+// Track warned entries to prevent console spam
+const warnedInvalidEntries = new Set<string>();
+
 export type CommandAuthorization = {
   providerId?: ChannelId;
   ownerList: string[];
   senderId?: string;
   senderIsOwner: boolean;
+  systemAccessLevel: number;  // RBAC level (0-4)
+  systemAccessIsOwner: boolean;  // Whether sender is owner
   isAuthorizedSender: boolean;
   from?: string;
   to?: string;
@@ -116,6 +121,14 @@ function resolveOwnerAllowFromList(params: {
     if (!trimmed) {
       continue;
     }
+    // Wildcard is explicitly ignored for ownership
+    if (trimmed === "*") {
+      if (!warnedInvalidEntries.has("*")) {
+        console.warn("[security] ownerAllowFrom: wildcard '*' is not allowed for System Owner");
+        warnedInvalidEntries.add("*");
+      }
+      continue;
+    }
     const separatorIndex = trimmed.indexOf(":");
     if (separatorIndex > 0) {
       const prefix = trimmed.slice(0, separatorIndex);
@@ -124,14 +137,75 @@ function resolveOwnerAllowFromList(params: {
         if (params.providerId && channel !== params.providerId) {
           continue;
         }
-        const remainder = trimmed.slice(separatorIndex + 1).trim();
-        if (remainder) {
+        let remainder = trimmed.slice(separatorIndex + 1).trim();
+
+        // For Discord/Telegram, normalize IDs (strip mentions, prefixes) before validation
+        const isNumericOnlyChannel = channel === "discord" || channel === "telegram";
+        if (isNumericOnlyChannel && channel === "discord") {
+          // Normalize Discord mention formats: <@123>, <@!123>, user:123, discord:123, pk:123
+          remainder = remainder
+            .replace(/^<@!?/, "")
+            .replace(/>$/, "")
+            .replace(/^discord:/i, "")
+            .replace(/^user:/i, "")
+            .replace(/^pk:/i, "")
+            .trim();
+        }
+
+        // For Discord/Telegram, only accept numeric IDs to prevent nickname spoofing
+        // For other channels (WhatsApp, Signal, Slack, etc), allow native ID formats
+        if (remainder && (isNumericOnlyChannel ? /^\d+$/.test(remainder) : true)) {
           filtered.push(remainder);
+        } else if (remainder && isNumericOnlyChannel) {
+          const warnKey = `prefix:${channel}:${remainder}`;
+          if (!warnedInvalidEntries.has(warnKey)) {
+            console.warn(
+              `[security] ownerAllowFrom: ignoring non-numeric entry '${remainder}' for ${channel} (use numeric user ID, not nickname)`,
+            );
+            warnedInvalidEntries.add(warnKey);
+          }
         }
         continue;
       }
     }
-    filtered.push(trimmed);
+    // For unprefixed entries in Discord/Telegram context, normalize then validate numeric IDs
+    // For other channels or unknown context, accept as-is (will be validated by channel logic)
+    const isNumericOnlyContext =
+      params.providerId === "discord" || params.providerId === "telegram";
+
+    if (isNumericOnlyContext) {
+      let normalized = trimmed;
+
+      // Normalize mention formats for unprefixed entries
+      if (params.providerId === "discord") {
+        // Discord: Strip mention formats and prefixes
+        normalized = normalized
+          .replace(/^<@!?/, "")
+          .replace(/>$/, "")
+          .replace(/^discord:/i, "")
+          .replace(/^user:/i, "")
+          .replace(/^pk:/i, "")
+          .trim();
+      } else if (params.providerId === "telegram") {
+        // Telegram: Strip tg: prefix
+        normalized = normalized.replace(/^tg:/i, "").trim();
+      }
+
+      if (/^\d+$/.test(normalized)) {
+        filtered.push(normalized);
+      } else {
+        const warnKey = `bare:${params.providerId}:${trimmed}`;
+        if (!warnedInvalidEntries.has(warnKey)) {
+          console.warn(
+            `[security] ownerAllowFrom: ignoring non-numeric entry '${trimmed}' for ${params.providerId} (use user ID, not nickname)`,
+          );
+          warnedInvalidEntries.add(warnKey);
+        }
+      }
+    } else {
+      // Non-numeric-only channels: accept as-is
+      filtered.push(trimmed);
+    }
   }
   return formatAllowFromList({
     dock: params.dock,
@@ -372,6 +446,8 @@ export function resolveCommandAuthorization(params: {
     ownerList,
     senderId: senderId || undefined,
     senderIsOwner,
+    systemAccessLevel: (ctx as { SystemAccessLevel?: number }).SystemAccessLevel ?? 0,
+    systemAccessIsOwner: (ctx as { SystemAccessIsOwner?: boolean }).SystemAccessIsOwner ?? false,
     isAuthorizedSender,
     from: from || undefined,
     to: to || undefined,
