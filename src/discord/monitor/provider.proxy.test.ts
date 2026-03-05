@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -34,6 +35,7 @@ const {
   class GatewayPlugin {
     options: unknown;
     gatewayInfo: unknown;
+    emitter = new EventEmitter();
     constructor(options?: unknown, gatewayInfo?: unknown) {
       this.options = options;
       this.gatewayInfo = gatewayInfo;
@@ -151,6 +153,15 @@ describe("createDiscordGatewayPlugin", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
     expect(runtime.error).not.toHaveBeenCalled();
+    expect((plugin as { emitter?: EventEmitter }).emitter?.listenerCount("error")).toBeGreaterThan(
+      0,
+    );
+    expect(() =>
+      (plugin as { emitter?: EventEmitter }).emitter?.emit(
+        "error",
+        new Error("proxy mode fallback listener check"),
+      ),
+    ).not.toThrow();
   });
 
   it("falls back to the default gateway plugin when proxy is invalid", async () => {
@@ -164,6 +175,15 @@ describe("createDiscordGatewayPlugin", () => {
     expect(Object.getPrototypeOf(plugin)).toBe(GatewayPlugin.prototype);
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
+    expect((plugin as { emitter?: EventEmitter }).emitter?.listenerCount("error")).toBeGreaterThan(
+      0,
+    );
+    expect(() =>
+      (plugin as { emitter?: EventEmitter }).emitter?.emit(
+        "error",
+        new Error("invalid proxy fallback listener check"),
+      ),
+    ).not.toThrow();
   });
 
   it("uses proxy fetch for gateway metadata lookup before registering", async () => {
@@ -193,5 +213,21 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches a fallback gateway error listener in default mode", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    }) as unknown as { emitter?: EventEmitter };
+
+    expect(plugin.emitter?.listenerCount("error")).toBeGreaterThan(0);
+    expect(() =>
+      plugin.emitter?.emit(
+        "error",
+        new Error("Max reconnect attempts (0) reached after code 1006"),
+      ),
+    ).not.toThrow();
   });
 });
