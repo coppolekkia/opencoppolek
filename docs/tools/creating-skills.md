@@ -39,11 +39,47 @@ description: A simple skill that says hello.
 When the user asks for a greeting, use the `echo` tool to say "Hello from your custom skill!".
 ```
 
-### 3. Add Tools (Optional)
+### 3. Declare Capabilities
+
+If your skill uses system tools, declare them in the `metadata.openclaw.capabilities` field:
+
+```markdown
+---
+name: deploy_helper
+description: Automate deployment workflows.
+metadata: { "openclaw": { "capabilities": ["shell", "filesystem"] } }
+---
+```
+
+Available capabilities: `shell`, `filesystem`, `network`, `browser`, `sessions`, `messaging`, `scheduling`.
+
+You can use either a flat list or a 2-layer object shape under the same key:
+
+```markdown
+---
+name: deploy_helper
+description: Automate deployment workflows.
+metadata:
+  {
+    "openclaw":
+      {
+        "capabilities":
+          {
+            "shell": { "mode": "restricted", "allow": ["git", "gh"] },
+            "network": { "web_search": true, "web_fetch": true },
+          },
+      },
+  }
+---
+```
+
+Skills without capabilities are treated as read-only (model-only instructions). Community skills published to ClawHub should declare capabilities matching their tool usage so policy checks and command-dispatch safety can be applied consistently.
+
+### 4. Add Tools (Optional)
 
 You can define custom tools in the frontmatter or instruct the agent to use existing system tools (like `bash` or `browser`).
 
-### 4. Refresh OpenClaw
+### 5. Refresh OpenClaw
 
 Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discover the new directory and index the `SKILL.md`.
 

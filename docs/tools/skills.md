@@ -68,11 +68,201 @@ that up as `<workspace>/skills` on the next session.
 
 ## Security notes
 
-- Treat third-party skills as **untrusted code**. Read them before enabling.
+- Treat third-party skills as **untrusted** until you have reviewed them. Runtime safeguards reduce blast radius but do not eliminate risk — read a skill's SKILL.md and declared capabilities before enabling it.
+- **Capabilities**: Community skills (from ClawHub) should declare `capabilities` in `metadata.openclaw` to describe required system access. Skills without capabilities are treated as read-only metadata declarations. SKILL.md content is scanned for prompt injection before entering the system prompt.
+- **Current rollout scope**: capability declarations are used for visibility, review, and command-dispatch safety checks in this phase. Broader runtime per-tool capability gating is being rolled out in stages.
+- Local and workspace skills are treated as trusted by default. If someone can write to your skill folders, they can inject instructions into the system prompt — restrict who can modify them.
 - Prefer sandboxed runs for untrusted inputs and risky tools. See [Sandboxing](/gateway/sandboxing).
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process
   for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 - For a broader threat model and checklists, see [Security](/gateway/security).
+
+### Tool enforcement matrix
+
+Capability declarations map to three policy tiers below. This matrix is the enforcement model and migration target for staged rollout.
+
+**Always denied** — blocked unconditionally when community skills are loaded, regardless of capability declarations:
+
+| Tool      | Reason                                                          |
+| --------- | --------------------------------------------------------------- |
+| `gateway` | Control-plane reconfiguration (restart, shutdown, auth changes) |
+| `nodes`   | Cluster node management (add/remove compute, redirect traffic)  |
+
+**Capability-gated** — tools intended to be governed by capability declarations in `metadata.openclaw.capabilities`:
+
+| Capability   | Tools                                          | What it unlocks                           |
+| ------------ | ---------------------------------------------- | ----------------------------------------- |
+| `shell`      | `exec`, `process`                              | Run shell commands and manage processes   |
+| `filesystem` | `write`, `edit`, `apply_patch`                 | File mutations (`read` is always allowed) |
+| `network`    | `web_fetch`, `web_search`                      | Outbound HTTP requests                    |
+| `browser`    | `browser`                                      | Browser automation                        |
+| `sessions`   | `sessions_spawn`, `sessions_send`, `subagents` | Cross-session orchestration               |
+| `messaging`  | `message`                                      | Send messages to configured channels      |
+| `scheduling` | `cron`                                         | Schedule recurring jobs                   |
+
+**Always allowed** — safe read-only or output-only tools, no capability required:
+
+| Tool                                                  | Why safe                          |
+| ----------------------------------------------------- | --------------------------------- |
+| `read`                                                | Read-only file access             |
+| `memory_search`, `memory_get`                         | Read-only memory access           |
+| `agents_list`                                         | List agents (read-only)           |
+| `sessions_list`, `sessions_history`, `session_status` | Session introspection (read-only) |
+| `canvas`                                              | UI rendering (output-only)        |
+| `image`                                               | Image generation (output-only)    |
+| `tts`                                                 | Text-to-speech (output-only)      |
+
+A community skill with no capabilities declared gets access only to the always-allowed tier.
+
+### Example: correct capability declaration
+
+This skill runs shell commands and makes HTTP requests. It declares both capabilities, so operators and tooling can clearly see intended access:
+
+```markdown
+---
+name: git-autopush
+description: Automate git commit, push, and PR workflows.
+metadata:
+  { "openclaw": { "capabilities": ["shell", "network"], "requires": { "bins": ["git", "gh"] } } }
+---
+
+# git-autopush
+
+When the user asks to push their changes:
+
+1. Run `git add -A && git commit` via the exec tool.
+2. Run `git push` via the exec tool.
+3. If requested, create a PR using `gh pr create`.
+```
+
+`openclaw skills info git-autopush` shows:
+
+```
+git-autopush + Ready
+
+  Automate git commit, push, and PR workflows.
+
+  Source        openclaw-managed
+  Path          ~/.openclaw/skills/git-autopush/SKILL.md
+
+  Capabilities
+  >_ shell        Run shell commands
+  🌐 network      Make outbound HTTP requests
+
+  Security
+  Scan          + clean
+```
+
+### Example: missing capability declaration
+
+This skill runs shell commands but doesn't declare `shell`:
+
+```markdown
+---
+name: deploy-helper
+description: Deploy to production.
+metadata: { "openclaw": { "requires": { "bins": ["rsync"] } } }
+---
+
+# deploy-helper
+
+When the user asks to deploy, run `rsync -avz ./dist/ user@host:/var/www/` via the exec tool.
+```
+
+This skill has no `capabilities` declared, so it's flagged as incomplete capability metadata. `openclaw skills info deploy-helper` shows:
+
+```
+deploy-helper + Ready
+
+  Deploy to production.
+
+  Source        openclaw-managed
+  Path          ~/.openclaw/skills/deploy-helper/SKILL.md
+
+  Capabilities
+  (none — read-only skill)
+
+  Security
+  Scan          + clean
+```
+
+The fix is to add `"capabilities": ["shell"]` to the metadata.
+
+### Example: blocked skill (failed security scan)
+
+If a SKILL.md contains prompt injection patterns, the scan blocks it from loading entirely:
+
+```
+evil-injector x Blocked (security)
+
+  Totally harmless skill.
+
+  Source        openclaw-managed
+  Path          ~/.openclaw/skills/evil-injector/SKILL.md
+
+  Capabilities
+  >_ shell        Run shell commands
+
+  Security
+  Scan          [blocked] prompt injection detected
+```
+
+This skill never enters the system prompt. It shows as `x blocked` in `openclaw skills list`.
+
+### How the model sees skills
+
+The model does not see the full SKILL.md in the system prompt. It only sees a compact XML listing with three fields per skill: `name`, `description`, and `location` (the file path). The model then uses the `read` tool to load the full SKILL.md on demand when the task matches.
+
+This is what the model receives in the system prompt:
+
+```
+## Skills (mandatory)
+Before replying: scan <available_skills> <description> entries.
+- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.
+- If multiple could apply: choose the most specific one, then read/follow it.
+- If none clearly apply: do not read any SKILL.md.
+Constraints: never read more than one skill up front; only read after selecting.
+
+The following skills provide specialized instructions for specific tasks.
+Use the read tool to load a skill's file when the task matches its description.
+When a skill file references a relative path, resolve it against the skill
+directory (parent of SKILL.md / dirname of the path) and use that absolute
+path in tool commands.
+
+<available_skills>
+  <skill>
+    <name>git-autopush</name>
+    <description>Automate git commit, push, and PR workflows.</description>
+    <location>/home/user/.openclaw/skills/git-autopush/SKILL.md</location>
+  </skill>
+  <skill>
+    <name>todoist-cli</name>
+    <description>Manage Todoist tasks, projects, and labels.</description>
+    <location>/home/user/.openclaw/skills/todoist-cli/SKILL.md</location>
+  </skill>
+</available_skills>
+```
+
+**What this means for skill authors:**
+
+- **`description` is your pitch** — it's the only thing the model reads to decide whether to load your skill. Make it specific and task-oriented. "Manage Todoist tasks, projects, and labels from the command line" is better than "Todoist integration."
+- **`name` must be lowercase `[a-z0-9-]`**, max 64 characters, must match the parent directory name.
+- **`description` max 1024 characters.**
+- **Your SKILL.md body is loaded on demand** — it needs to be self-contained instructions the model can follow after reading.
+- **Relative paths in SKILL.md** are resolved against the skill directory. Use relative paths to reference supporting files.
+
+The `Skill` type from `@mariozechner/pi-coding-agent`:
+
+```typescript
+interface Skill {
+  name: string; // from frontmatter (or parent dir name)
+  description: string; // from frontmatter (required, max 1024 chars)
+  filePath: string; // absolute path to SKILL.md
+  baseDir: string; // parent directory of SKILL.md
+  source: string; // origin identifier
+  disableModelInvocation: boolean; // if true, excluded from prompt
+}
+```
 
 ## Format (AgentSkills + Pi-compatible)
 
@@ -116,6 +306,7 @@ metadata:
       {
         "requires": { "bins": ["uv"], "env": ["GEMINI_API_KEY"], "config": ["browser.enabled"] },
         "primaryEnv": "GEMINI_API_KEY",
+        "capabilities": ["browser", "network"],
       },
   }
 ---
@@ -125,14 +316,82 @@ Fields under `metadata.openclaw`:
 
 - `always: true` — always include the skill (skip other gates).
 - `emoji` — optional emoji used by the macOS Skills UI.
-- `homepage` — optional URL shown as “Website” in the macOS Skills UI.
+- `homepage` — optional URL shown as "Website" in the macOS Skills UI.
 - `os` — optional list of platforms (`darwin`, `linux`, `win32`). If set, the skill is only eligible on those OSes.
+- `capabilities` — list of system access the skill needs. Used for security enforcement and user-facing display. Allowed values:
+  - `shell` — run shell commands (maps to `exec`, `process`)
+  - `filesystem` — read/write/edit files (maps to `write`, `edit`, `apply_patch`; `read` is always allowed)
+  - `network` — outbound HTTP (maps to `web_search`, `web_fetch`)
+  - `browser` — browser automation (maps to `browser`)
+  - `sessions` — cross-session orchestration (maps to `sessions_spawn`, `sessions_send`, `subagents`)
+  - `messaging` — send messages to configured channels (maps to `message`)
+  - `scheduling` — schedule recurring jobs (maps to `cron`)
+
+  No capabilities declared = read-only, model-only skill metadata. See [Tool enforcement matrix](#tool-enforcement-matrix) below and [Security](/gateway/security) for rollout and hardening details.
+
+### Capability shape and normalization
+
+OpenClaw accepts both styles under the same `capabilities` key:
+
+Flat list:
+
+```json
+{
+  "openclaw": {
+    "capabilities": ["shell", "network", "sessions"]
+  }
+}
+```
+
+Two-layer object with optional constraints:
+
+```jsonc
+{
+  "openclaw": {
+    "capabilities": {
+      "shell": { "mode": "restricted", "allow": ["git", "gh"] }, // key/value constraints
+      "network": { "web_search": true, "web_fetch": true }, // granular switches
+      "sessions": { "maxDepth": 2 }, // future-safe metadata
+    },
+  },
+}
+```
+
+Array-of-objects also works:
+
+```json
+{
+  "openclaw": {
+    "capabilities": [
+      { "type": "network.search", "constraints": { "provider": "brave" } },
+      { "name": "shell.exec", "constraints": { "mode": "restricted" } }
+    ]
+  }
+}
+```
+
+Normalization behavior:
+
+- OpenClaw normalizes external naming to canonical values (`shell`, `filesystem`, `network`, `browser`, `sessions`, `messaging`, `scheduling`).
+- Examples:
+  - `web_fetch`, `web_search`, `webfetch` -> `network`
+  - `terminal`, `bash`, `exec` -> `shell`
+  - `subagent`, `sessions_spawn` -> `sessions`
+  - `message` -> `messaging`
+  - `cron`, `schedule` -> `scheduling`
+- Constraints are currently advisory metadata (not enforced by the runtime gate yet). Keep them simple key/value pairs for forward compatibility.
+
 - `requires.bins` — list; each must exist on `PATH`.
 - `requires.anyBins` — list; at least one must exist on `PATH`.
 - `requires.env` — list; env var must exist **or** be provided in config.
 - `requires.config` — list of `openclaw.json` paths that must be truthy.
 - `primaryEnv` — env var name associated with `skills.entries.<name>.apiKey`.
 - `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/uv/download).
+- `cliHelp` — optional CLI help output captured for richer skill details in registry/UI surfaces.
+- `envVars` — optional structured environment declarations (`name`, `required`, `description`).
+- `dependencies` — optional structured dependency declarations (`name`, `type`, optional version/url/repository).
+- `author` — optional author string for display/attribution.
+- `links` — optional link metadata (`homepage`, `repository`, `documentation`, `changelog`).
 
 Note on sandboxing:
 
@@ -195,7 +454,7 @@ Bundled/managed skills can be toggled and supplied with env values:
     entries: {
       "nano-banana-pro": {
         enabled: true,
-        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
+        apiKey: "GEMINI_KEY_HERE",
         env: {
           GEMINI_API_KEY: "GEMINI_KEY_HERE",
         },
@@ -221,7 +480,6 @@ Rules:
 - `enabled: false` disables the skill even if it’s bundled/installed.
 - `env`: injected **only if** the variable isn’t already set in the process.
 - `apiKey`: convenience for skills that declare `metadata.openclaw.primaryEnv`.
-  Supports plaintext string or SecretRef object (`{ source, provider, id }`).
 - `config`: optional bag for custom per-skill fields; custom keys must live here.
 - `allowBundled`: optional allowlist for **bundled** skills only. If set, only
   bundled skills in the list are eligible (managed/workspace skills unaffected).

@@ -374,6 +374,14 @@ OpenClaw can refresh the skills list mid-session:
 - **Skills watcher**: changes to `SKILL.md` can update the skills snapshot on the next agent turn.
 - **Remote nodes**: connecting a macOS node can make macOS-only skills eligible (based on bin probing).
 
+Community skills (installed from ClawHub) are subject to runtime security controls:
+
+- **Capabilities**: skills declare required system access (`shell`, `filesystem`, `network`, `browser`, `sessions`, `messaging`, `scheduling`) in `metadata.openclaw.capabilities`. No capabilities means read-only metadata declaration; capability rollout is staged and currently used for visibility and policy checks.
+- **SKILL.md scanning**: content is scanned for prompt injection patterns, capability inflation, and boundary spoofing before entering the system prompt. Skills with critical findings are blocked from loading.
+- **Trust tiers**: `community` skills are enforced, while `builtin` and local/workspace skills are treated as trusted by default.
+- **Command dispatch gating**: community skills using `command-dispatch: tool` cannot dispatch to dangerous tools without declaring the matching capability.
+- **Audit logging**: security events are tagged with `category: "security"` and include session context.
+
 Treat skill folders as **trusted code** and restrict who can modify them.
 
 ## The Threat Model
@@ -745,10 +753,10 @@ Set a token so **all** WS clients must authenticate:
 
 Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 
-Note: `gateway.remote.token` / `.password` are client credential sources. They
-do **not** protect local WS access by themselves.
-Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*`
-is unset.
+Note: in local mode, OpenClaw still accepts `gateway.remote.token` /
+`gateway.remote.password` as fallback credentials when `gateway.auth.*` is
+unset. Prefer setting `gateway.auth.token` (or password mode) explicitly so
+auth behavior is clear.
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 Plaintext `ws://` is loopback-only by default. For trusted private-network
 paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
