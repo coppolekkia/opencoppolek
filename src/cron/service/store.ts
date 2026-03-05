@@ -6,7 +6,6 @@ import {
 } from "../legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
-import { coerceFiniteScheduleNumber } from "../schedule.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -223,6 +222,21 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
 }
 
+function parseFiniteScheduleNumber(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
     const stats = await fs.promises.stat(path);
@@ -412,18 +426,18 @@ export async function ensureLoaded(
       }
 
       const everyMsRaw = sched.everyMs;
-      const everyMsCoerced = coerceFiniteScheduleNumber(everyMsRaw);
-      const everyMs = everyMsCoerced !== undefined ? Math.floor(everyMsCoerced) : null;
-      if (everyMs !== null && everyMsRaw !== everyMs) {
+      const everyMsRawParsed = parseFiniteScheduleNumber(everyMsRaw);
+      const everyMs = everyMsRawParsed !== null ? Math.max(1, Math.floor(everyMsRawParsed)) : null;
+      if (everyMsRawParsed !== null && everyMs !== everyMsRaw) {
         sched.everyMs = everyMs;
         mutated = true;
       }
       if ((kind === "every" || sched.kind === "every") && everyMs !== null) {
         const anchorRaw = sched.anchorMs;
-        const anchorCoerced = coerceFiniteScheduleNumber(anchorRaw);
+        const parsedAnchor = parseFiniteScheduleNumber(anchorRaw);
         const normalizedAnchor =
-          anchorCoerced !== undefined
-            ? Math.max(0, Math.floor(anchorCoerced))
+          parsedAnchor !== null
+            ? Math.max(0, Math.floor(parsedAnchor))
             : typeof raw.createdAtMs === "number" && Number.isFinite(raw.createdAtMs)
               ? Math.max(0, Math.floor(raw.createdAtMs))
               : typeof raw.updatedAtMs === "number" && Number.isFinite(raw.updatedAtMs)
@@ -547,7 +561,7 @@ export async function ensureLoaded(
   }
 
   if (mutated) {
-    await persist(state, { skipBackup: true });
+    await persist(state);
   }
 }
 
@@ -565,11 +579,11 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
+export async function persist(state: CronServiceState) {
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store, opts);
+  await saveCronStore(state.deps.storePath, state.store);
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }
