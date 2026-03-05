@@ -560,6 +560,17 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
+  // Generic JavaScript runtime errors (e.g. TypeError thrown when an aborted stream leaves a
+  // null/undefined result that downstream code tries to process). These are internal errors and
+  // not meaningful to display verbatim.
+  if (
+    /^(?:cannot (?:read (?:propert(?:ies|y)|access)|convert undefined or null to)|typeerror\b)/i.test(
+      raw,
+    )
+  ) {
+    return "LLM request failed (the request was interrupted or produced an unexpected internal error).";
+  }
+
   // Never return raw unhandled errors - log for debugging but return safe message
   if (raw.length > 600) {
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
