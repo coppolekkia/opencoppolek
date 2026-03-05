@@ -1,6 +1,14 @@
 import type { Command } from "commander";
 import { dashboardCommand } from "../../commands/dashboard.js";
 import { doctorCommand } from "../../commands/doctor.js";
+import {
+  guardianDiff,
+  guardianList,
+  guardianPrune,
+  guardianRestore,
+  guardianSnapshot,
+  guardianStatus,
+} from "../../commands/guardian.js";
 import { resetCommand } from "../../commands/reset.js";
 import { uninstallCommand } from "../../commands/uninstall.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -77,6 +85,77 @@ export function registerMaintenanceCommands(program: Command) {
           nonInteractive: Boolean(opts.nonInteractive),
           dryRun: Boolean(opts.dryRun),
         });
+      });
+    });
+
+  // ── guardian ──────────────────────────────────────────────────────────────
+  const guardian = program
+    .command("guardian")
+    .description("Snapshot, restore, and diff config for disaster recovery");
+
+  guardian
+    .command("snapshot")
+    .description("Save a snapshot of the current config (health-checked)")
+    .option("--tag <tag>", "Label this snapshot for easy retrieval")
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await guardianSnapshot(defaultRuntime, { tag: opts.tag });
+        defaultRuntime.exit(0);
+      });
+    });
+
+  guardian
+    .command("restore [target]")
+    .description("Restore config from a snapshot (default: latest healthy)")
+    .option("--yes", "Skip confirmation prompt", false)
+    .option("--non-interactive", "Disable prompts", false)
+    .action(async (target, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await guardianRestore(defaultRuntime, {
+          target,
+          yes: Boolean(opts.yes),
+          nonInteractive: Boolean(opts.nonInteractive),
+        });
+        defaultRuntime.exit(0);
+      });
+    });
+
+  guardian
+    .command("list")
+    .description("List all snapshots")
+    .action(() => {
+      guardianList(defaultRuntime);
+    });
+
+  guardian
+    .command("diff [target]")
+    .description("Diff current config against a snapshot (default: latest healthy)")
+    .action((target) => {
+      guardianDiff(defaultRuntime, { target });
+    });
+
+  guardian
+    .command("prune")
+    .description("Remove old snapshots, keeping the most recent N")
+    .option("--keep <n>", "Number of snapshots to keep", "10")
+    .option("--yes", "Skip confirmation prompt", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await guardianPrune(defaultRuntime, {
+          keep: Number(opts.keep),
+          yes: Boolean(opts.yes),
+        });
+        defaultRuntime.exit(0);
+      });
+    });
+
+  guardian
+    .command("status")
+    .description("Show gateway health and snapshot summary")
+    .action(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await guardianStatus(defaultRuntime);
+        defaultRuntime.exit(0);
       });
     });
 
