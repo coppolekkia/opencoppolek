@@ -5,7 +5,9 @@ import {
   createMattermostClient,
   createMattermostDirectChannel,
   createMattermostPost,
+  fetchMattermostChannelByName,
   fetchMattermostMe,
+  fetchMattermostMyTeams,
   fetchMattermostUserByUsername,
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
@@ -116,13 +118,84 @@ async function resolveUserIdByUsername(params: {
   return user.id;
 }
 
+/**
+ * Mattermost channel IDs are 26-character alphanumeric strings.
+ * If the value doesn't match this pattern, treat it as a channel name
+ * that needs to be resolved via the API.
+ */
+/** @internal Exported for testing. */
+export function isMattermostId(value: string): boolean {
+  return /^[a-z0-9]{26}$/i.test(value);
+}
+
+/** TTL-bounded cache for resolved channel name → ID mappings. */
+const CHANNEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CHANNEL_CACHE_MAX_SIZE = 200;
+const channelNameCache = new Map<string, { id: string; expiresAt: number }>();
+
+/** Strip leading '#' or '~' and lowercase for consistent cache keys. */
+function normalizeChannelName(raw: string): string {
+  return raw.replace(/^[#~]/, "").toLowerCase();
+}
+
+async function resolveChannelNameToId(params: {
+  channelName: string;
+  baseUrl: string;
+  token: string;
+}): Promise<string> {
+  const normalized = normalizeChannelName(params.channelName);
+  const key = `${cacheKey(params.baseUrl, params.token)}::channel::${normalized}`;
+  const cached = channelNameCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.id;
+  }
+  // Evict expired or enforce max size
+  if (channelNameCache.size >= CHANNEL_CACHE_MAX_SIZE) {
+    const now = Date.now();
+    for (const [k, v] of channelNameCache) {
+      if (v.expiresAt <= now || channelNameCache.size >= CHANNEL_CACHE_MAX_SIZE) {
+        channelNameCache.delete(k);
+      }
+    }
+  }
+  const client = createMattermostClient({ baseUrl: params.baseUrl, botToken: params.token });
+  const teams = await fetchMattermostMyTeams(client);
+  if (teams.length === 0) {
+    throw new Error(
+      `Cannot resolve channel name "${params.channelName}": bot is not a member of any team`,
+    );
+  }
+  for (const team of teams) {
+    try {
+      const channel = await fetchMattermostChannelByName(client, team.id, normalized);
+      if (channel?.id) {
+        channelNameCache.set(key, { id: channel.id, expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS });
+        return channel.id;
+      }
+    } catch {
+      // Channel not found on this team, try next
+    }
+  }
+  throw new Error(
+    `Cannot resolve channel name "${params.channelName}": channel not found in any of the bot's teams`,
+  );
+}
+
 async function resolveTargetChannelId(params: {
   target: MattermostTarget;
   baseUrl: string;
   token: string;
 }): Promise<string> {
   if (params.target.kind === "channel") {
-    return params.target.id;
+    if (isMattermostId(params.target.id)) {
+      return params.target.id;
+    }
+    // Channel name provided instead of ID — resolve via API
+    return resolveChannelNameToId({
+      channelName: params.target.id,
+      baseUrl: params.baseUrl,
+      token: params.token,
+    });
   }
   const userId = params.target.id
     ? params.target.id
