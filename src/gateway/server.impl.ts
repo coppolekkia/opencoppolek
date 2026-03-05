@@ -458,6 +458,7 @@ export async function startGatewayServer(
   const {
     bindHost,
     controlUiEnabled,
+    controlUiOriginPolicyWarning,
     openAiChatCompletionsEnabled,
     openResponsesEnabled,
     openResponsesConfig,
@@ -470,6 +471,9 @@ export async function startGatewayServer(
   } = runtimeConfig;
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
+  if (controlUiOriginPolicyWarning) {
+    log.warn(`gateway: ${controlUiOriginPolicyWarning}`);
+  }
 
   // Create auth rate limiters used by connect/auth flows.
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
