@@ -22,6 +22,11 @@ export function registerNodesPairingCommands(nodes: Command) {
           if (pending.length === 0) {
             const { muted } = getNodesTheme();
             defaultRuntime.log(muted("No pending pairing requests."));
+            defaultRuntime.log(
+              muted(
+                "Looking for node-host/gateway approvals? Use `openclaw devices list` and `openclaw devices approve <requestId>`.",
+              ),
+            );
             return;
           }
           const { heading, warn, muted } = getNodesTheme();

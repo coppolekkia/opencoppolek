@@ -12,7 +12,11 @@ import {
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import { loadNodeHostConfig } from "../../node-host/config.js";
+import {
+  ensureNodeHostConfig,
+  loadNodeHostConfig,
+  saveNodeHostConfig,
+} from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
@@ -37,6 +41,7 @@ import {
 type NodeDaemonInstallOptions = {
   host?: string;
   port?: string | number;
+  token?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
@@ -150,11 +155,30 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const tlsFingerprint = opts.tlsFingerprint?.trim() || config?.gateway?.tlsFingerprint;
   const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
+  const gatewayToken = opts.token?.trim() || config?.token;
+  const nodeConfig = await ensureNodeHostConfig();
+  nodeConfig.gateway = {
+    host,
+    port: port ?? 18789,
+    tls,
+    tlsFingerprint: tlsFingerprint || undefined,
+  };
+  if (opts.nodeId?.trim()) {
+    nodeConfig.nodeId = opts.nodeId.trim();
+  }
+  if (opts.displayName?.trim()) {
+    nodeConfig.displayName = opts.displayName.trim();
+  }
+  if (gatewayToken) {
+    nodeConfig.token = gatewayToken;
+  }
+  await saveNodeHostConfig(nodeConfig);
   const { programArguments, workingDirectory, environment, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
       port: port ?? 18789,
+      pinGatewayArgs: false,
       tls,
       tlsFingerprint: tlsFingerprint || undefined,
       nodeId: opts.nodeId,

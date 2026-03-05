@@ -20,6 +20,7 @@ export async function buildNodeInstallPlan(params: {
   env: Record<string, string | undefined>;
   host: string;
   port: number;
+  pinGatewayArgs?: boolean;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
@@ -37,8 +38,8 @@ export async function buildNodeInstallPlan(params: {
       runtime: params.runtime,
     }));
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
-    host: params.host,
-    port: params.port,
+    host: params.pinGatewayArgs === false ? undefined : params.host,
+    port: params.pinGatewayArgs === false ? undefined : params.port,
     tls: params.tls,
     tlsFingerprint: params.tlsFingerprint,
     nodeId: params.nodeId,

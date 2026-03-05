@@ -27,8 +27,9 @@ import {
 export { buildNodeInvokeResultParams };
 
 type NodeHostRunOptions = {
-  gatewayHost: string;
-  gatewayPort: number;
+  gatewayHost?: string;
+  gatewayPort?: number;
+  gatewayToken?: string;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
   nodeId?: string;
@@ -147,6 +148,8 @@ async function resolveNodeHostSecretInputString(params: {
 export async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  nodeToken?: string;
+  overrideToken?: string;
 }): Promise<{ token?: string; password?: string }> {
   const env = params.env ?? process.env;
   const isRemoteMode = params.config.gateway?.mode === "remote";
@@ -161,7 +164,9 @@ export async function resolveNodeHostGatewayCredentials(params: {
     : params.config.gateway?.auth?.password;
 
   const token =
+    normalizeSecretInputString(params.overrideToken) ??
     normalizeSecretInputString(env.OPENCLAW_GATEWAY_TOKEN) ??
+    normalizeSecretInputString(params.nodeToken) ??
     (await resolveNodeHostSecretInputString({
       config: params.config,
       value: configuredToken,
@@ -190,6 +195,17 @@ export async function resolveNodeHostGatewayCredentials(params: {
   return { token, password };
 }
 
+function resolveNodeGatewayAuthHint(message: string): string | null {
+  const lower = message.toLowerCase();
+  if (lower.includes("token mismatch") || lower.includes("token missing")) {
+    return "Set a shared gateway token with `openclaw node install --token <token>` (or `openclaw node run --token <token>`), or set OPENCLAW_GATEWAY_TOKEN.";
+  }
+  if (lower.includes("pairing required") || lower.includes("device token rejected")) {
+    return "Approve pairing on the gateway host with `openclaw devices list` then `openclaw devices approve <requestId>`.";
+  }
+  return null;
+}
+
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const config = await ensureNodeHostConfig();
   const nodeId = opts.nodeId?.trim() || config.nodeId;
@@ -200,22 +216,33 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
   config.displayName = displayName;
 
+  const cfg = loadConfig();
   const gateway: NodeHostGatewayConfig = {
-    host: opts.gatewayHost,
-    port: opts.gatewayPort,
-    tls: opts.gatewayTls ?? loadConfig().gateway?.tls?.enabled ?? false,
-    tlsFingerprint: opts.gatewayTlsFingerprint,
+    host: opts.gatewayHost?.trim() || config.gateway?.host || "127.0.0.1",
+    port:
+      (typeof opts.gatewayPort === "number" && Number.isFinite(opts.gatewayPort)
+        ? opts.gatewayPort
+        : undefined) ??
+      config.gateway?.port ??
+      18789,
+    tls: opts.gatewayTls ?? config.gateway?.tls ?? cfg.gateway?.tls?.enabled ?? false,
+    tlsFingerprint: opts.gatewayTlsFingerprint?.trim() || config.gateway?.tlsFingerprint,
   };
+  const gatewayToken = opts.gatewayToken?.trim();
+  if (gatewayToken) {
+    config.token = gatewayToken;
+  }
   config.gateway = gateway;
   await saveNodeHostConfig(config);
 
-  const cfg = loadConfig();
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,
     env: process.env,
+    nodeToken: config.token,
+    overrideToken: gatewayToken,
   });
 
   const host = gateway.host ?? "127.0.0.1";
@@ -262,10 +289,20 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       // keep retrying (handled by GatewayClient)
       // eslint-disable-next-line no-console
       console.error(`node host gateway connect failed: ${err.message}`);
+      const hint = resolveNodeGatewayAuthHint(err.message);
+      if (hint) {
+        // eslint-disable-next-line no-console
+        console.error(`node host hint: ${hint}`);
+      }
     },
     onClose: (code, reason) => {
       // eslint-disable-next-line no-console
       console.error(`node host gateway closed (${code}): ${reason}`);
+      const hint = resolveNodeGatewayAuthHint(reason);
+      if (hint) {
+        // eslint-disable-next-line no-console
+        console.error(`node host hint: ${hint}`);
+      }
     },
   });
 

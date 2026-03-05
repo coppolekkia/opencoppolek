@@ -12,7 +12,7 @@ vi.mock("node:fs/promises", () => ({
   realpath: fsMocks.realpath,
 }));
 
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 
 const originalArgv = [...process.argv];
 
@@ -86,5 +86,18 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+  });
+});
+
+describe("resolveNodeProgramArguments", () => {
+  it("omits host/port flags when not provided", async () => {
+    const entryPath = path.resolve("/tmp/openclaw/dist/entry.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveNodeProgramArguments({});
+
+    expect(result.programArguments).toEqual([process.execPath, entryPath, "node", "run"]);
   });
 });

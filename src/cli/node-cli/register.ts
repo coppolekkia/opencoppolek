@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { runNodeHost } from "../../node-host/runner.js";
+import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { parsePort } from "../daemon-cli/shared.js";
@@ -12,11 +13,6 @@ import {
   runNodeDaemonStop,
   runNodeDaemonUninstall,
 } from "./daemon.js";
-
-function parsePortWithFallback(value: unknown, fallback: number): number {
-  const parsed = parsePort(value);
-  return parsed ?? fallback;
-}
 
 export function registerNodeCli(program: Command) {
   const node = program
@@ -41,22 +37,28 @@ export function registerNodeCli(program: Command) {
     .description("Run the headless node host (foreground)")
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
+    .option("--token <token>", "Gateway token")
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
     .action(async (opts) => {
       const existing = await loadNodeHostConfig();
-      const host =
-        (opts.host as string | undefined)?.trim() || existing?.gateway?.host || "127.0.0.1";
-      const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
+      const host = (opts.host as string | undefined)?.trim() || undefined;
+      const port = parsePort(opts.port);
+      if (opts.port !== undefined && port === null) {
+        defaultRuntime.error("Invalid --port");
+        defaultRuntime.exit(1);
+        return;
+      }
       await runNodeHost({
         gatewayHost: host,
-        gatewayPort: port,
+        gatewayPort: port ?? undefined,
+        gatewayToken: (opts.token as string | undefined)?.trim() || undefined,
         gatewayTls: Boolean(opts.tls) || Boolean(opts.tlsFingerprint),
-        gatewayTlsFingerprint: opts.tlsFingerprint,
-        nodeId: opts.nodeId,
-        displayName: opts.displayName,
+        gatewayTlsFingerprint: (opts.tlsFingerprint as string | undefined)?.trim() || undefined,
+        nodeId: (opts.nodeId as string | undefined) ?? existing?.nodeId,
+        displayName: (opts.displayName as string | undefined) ?? existing?.displayName,
       });
     });
 
@@ -73,6 +75,7 @@ export function registerNodeCli(program: Command) {
     .description("Install the node host service (launchd/systemd/schtasks)")
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
+    .option("--token <token>", "Gateway token")
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")

@@ -58,6 +58,53 @@ describe("resolveNodeHostGatewayCredentials", () => {
     );
   });
 
+  it("uses node config token when env/config token is missing", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        auth: {},
+      },
+    } as OpenClawConfig;
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        const credentials = await resolveNodeHostGatewayCredentials({
+          config,
+          nodeToken: "token-from-node-json",
+        });
+        expect(credentials.token).toBe("token-from-node-json");
+      },
+    );
+  });
+
+  it("prefers explicit run/install token override", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        auth: {
+          token: "token-from-config",
+        },
+      },
+    } as OpenClawConfig;
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "token-from-env",
+      },
+      async () => {
+        const credentials = await resolveNodeHostGatewayCredentials({
+          config,
+          nodeToken: "token-from-node-json",
+          overrideToken: "token-from-cli-option",
+        });
+        expect(credentials.token).toBe("token-from-cli-option");
+      },
+    );
+  });
+
   it("throws when a configured remote token ref cannot resolve", async () => {
     const config = {
       secrets: {
