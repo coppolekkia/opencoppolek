@@ -727,7 +727,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       runIds: res.aborted ? [runId] : [],
     });
   },
-  "chat.send": async ({ params, respond, context, client }) => {
+  "chat.send": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (!validateChatSendParams(params)) {
       respond(
         false,
@@ -890,6 +890,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         !isChannelScopedSession &&
         typeof sessionScopeParts[1] === "string" &&
         sessionChannelHint === routeChannelCandidate;
+      // Messages arriving through the webchat/control-ui chat endpoint should
+      // never inherit prior external route metadata -- the response must go
+      // back to the webchat surface, not to the channel stored on the session.
+      const isWebchatOrigin = Boolean(client?.connect && isWebchatConnect(client.connect));
       const clientMode = client?.connect?.client?.mode;
       const isFromWebchatClient =
         isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
@@ -900,6 +904,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       // stale routes across surfaces. Allow configured main sessions from
       // non-Webchat/UI clients (e.g., CLI, backend) to keep the last external route.
       const canInheritDeliverableRoute = Boolean(
+        !isWebchatOrigin &&
         sessionChannelHint &&
         sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
         ((!isChannelAgnosticSessionScope &&

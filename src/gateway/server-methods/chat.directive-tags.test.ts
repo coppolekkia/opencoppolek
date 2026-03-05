@@ -155,6 +155,7 @@ async function runNonStreamingChatSend(params: {
   sessionKey?: string;
   deliver?: boolean;
   client?: unknown;
+  isWebchatConnect?: boolean;
   expectBroadcast?: boolean;
 }) {
   const sendParams: {
@@ -177,7 +178,7 @@ async function runNonStreamingChatSend(params: {
     >[0]["respond"],
     req: {} as never,
     client: (params.client ?? null) as never,
-    isWebchatConnect: () => false,
+    isWebchatConnect: () => params.isWebchatConnect ?? false,
     context: params.context as GatewayRequestContext,
   });
 
@@ -712,6 +713,47 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-no-deliver-internal-surface",
       sessionKey: "agent:main:discord:direct:1234567890",
       deliver: false,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send does not inherit channel routing for webchat connections on channel-scoped sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-webchat-no-inherit-channel-route-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "slack",
+        to: "slack:U12345678",
+        accountId: "default",
+      },
+      lastChannel: "slack",
+      lastTo: "slack:U12345678",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    // Webchat/control-ui connection sending to a channel-scoped session:
+    // OriginatingChannel must remain "webchat" so responses go back to the
+    // web dashboard instead of leaking to the external channel (Slack).
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-webchat-no-inherit-channel-route",
+      sessionKey: "agent:main:slack:direct:U12345678",
+      isWebchatConnect: true,
+      client: {
+        connId: "conn-webchat",
+        connect: { client: { id: "openclaw-control-ui" } },
+      },
       expectBroadcast: false,
     });
 
