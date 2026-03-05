@@ -21,7 +21,10 @@ export const handleHelpCommand: CommandHandler = async (params, allowTextCommand
     logVerbose(
       `Ignoring /help from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
   return {
     shouldContinue: false,
@@ -40,7 +43,10 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     logVerbose(
       `Ignoring /commands from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
   const skillCommands =
     params.skillCommands ??
@@ -129,7 +135,10 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     logVerbose(
       `Ignoring /status from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
   const reply = await buildStatusReply({
     cfg: params.cfg,
@@ -165,7 +174,10 @@ export const handleContextCommand: CommandHandler = async (params, allowTextComm
     logVerbose(
       `Ignoring /context from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
   return { shouldContinue: false, reply: await buildContextReply(params) };
 };
@@ -187,7 +199,10 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
     logVerbose(
       `Ignoring /export-session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
 };
@@ -203,7 +218,10 @@ export const handleWhoamiCommand: CommandHandler = async (params, allowTextComma
     logVerbose(
       `Ignoring /whoami from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
   const senderId = params.ctx.SenderId ?? "";
   const senderUsername = params.ctx.SenderUsername ?? "";

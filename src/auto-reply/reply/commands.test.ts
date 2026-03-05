@@ -375,7 +375,8 @@ describe("/compact command", () => {
       true,
     );
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("You are not authorized to use this command.");
     expect(vi.mocked(compactEmbeddedPiSession)).not.toHaveBeenCalled();
   });
 
@@ -462,7 +463,8 @@ describe("abort trigger command", () => {
       },
     });
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toBe("You are not authorized to use this command.");
     expect(sessionStore[params.sessionKey]?.abortedLastRun).toBe(false);
     expect(vi.mocked(abortEmbeddedPiRun)).not.toHaveBeenCalled();
   });
@@ -786,7 +788,8 @@ describe("/models command", () => {
         senderId: "unauthorized",
       },
     });
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toBe("You are not authorized to use this command.");
   });
 
   it("lists providers on telegram (buttons)", async () => {

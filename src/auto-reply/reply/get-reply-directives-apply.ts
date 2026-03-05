@@ -146,7 +146,7 @@ export async function applyInlineDirectiveOverrides(params: {
   ) {
     if (!command.isAuthorizedSender) {
       typing.cleanup();
-      return { kind: "reply", reply: undefined };
+      return { kind: "reply", reply: { text: "You are not authorized to use this command." } };
     }
     const {
       currentThinkLevel: resolvedDefaultThinkLevel,

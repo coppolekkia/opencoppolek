@@ -198,15 +198,15 @@ describe("/subagents spawn command", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledOnce();
   });
 
-  it("ignores unauthorized sender (silent, no reply)", async () => {
+  it("rejects unauthorized sender with visible reply", async () => {
     const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg, {
       CommandAuthorized: false,
     });
     params.command.isAuthorizedSender = false;
     const result = await handleSubagentsCommand(params, true);
     expect(result).not.toBeNull();
-    expect(result?.reply).toBeUndefined();
     expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("You are not authorized to use this command.");
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 

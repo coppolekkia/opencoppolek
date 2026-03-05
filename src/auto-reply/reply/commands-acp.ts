@@ -68,7 +68,10 @@ export const handleAcpCommand: CommandHandler = async (params, allowTextCommands
 
   if (!params.command.isAuthorizedSender) {
     logVerbose(`Ignoring /acp from unauthorized sender: ${params.command.senderId || "<unknown>"}`);
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
 
   const rest = normalized.slice(COMMAND.length).trim();

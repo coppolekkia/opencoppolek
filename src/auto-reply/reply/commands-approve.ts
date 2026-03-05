@@ -79,7 +79,10 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     logVerbose(
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
 
   if (!parsed.ok) {

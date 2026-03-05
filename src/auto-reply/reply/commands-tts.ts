@@ -81,7 +81,10 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     logVerbose(
       `Ignoring TTS command from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
 
   const config = resolveTtsConfig(params.cfg);

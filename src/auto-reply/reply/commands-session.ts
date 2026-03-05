@@ -71,7 +71,10 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
     logVerbose(
       `Ignoring /activation from unauthorized sender in group: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
   if (!activationCommand.mode) {
     return {
@@ -104,7 +107,10 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
     logVerbose(
       `Ignoring /send from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
   if (!sendPolicyCommand.mode) {
     return {
@@ -144,7 +150,10 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     logVerbose(
       `Ignoring /usage from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
 
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
@@ -230,7 +239,10 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     logVerbose(
       `Ignoring /session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
 
   const rest = normalized.slice(SESSION_COMMAND_PREFIX.length).trim();
@@ -429,7 +441,10 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     logVerbose(
       `Ignoring /restart from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
   if (!isRestartEnabled(params.cfg)) {
     return {

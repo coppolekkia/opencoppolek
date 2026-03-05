@@ -188,7 +188,7 @@ export async function handleInlineActions(params: {
         `Ignoring /${skillInvocation.command.name} from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       typing.cleanup();
-      return { kind: "reply", reply: undefined };
+      return { kind: "reply", reply: { text: "You are not authorized to use this command." } };
     }
 
     const dispatch = skillInvocation.command.dispatch;
