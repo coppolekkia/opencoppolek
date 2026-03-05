@@ -629,6 +629,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Doctor/Memory search: fix false positive "no local model file found" when using `local` provider without an explicit `modelPath` by checking `node-llama-cpp` availability (the runtime resolves a default model from its own cache). (#28944) Thanks @stevecoffee for reporting.
 - FS tools/workspaceOnly: honor `tools.fs.workspaceOnly=false` for host write and edit operations so FS tools can access paths outside the workspace when sandbox is off. (#28822) thanks @lailoo. Fixes #28763. Thanks @cjscld for reporting.
 - Telegram/DM allowlist runtime inheritance: enforce `dmPolicy: "allowlist"` `allowFrom` requirements using effective account-plus-parent config across account-capable channels (Telegram, Discord, Slack, Signal, iMessage, IRC, BlueBubbles, WhatsApp), and align `openclaw doctor` checks to the same inheritance logic so DM traffic is not silently dropped after upgrades. (#27936) Thanks @widingmarcus-cyber.
 - Delivery queue/recovery backoff: prevent retry starvation by persisting `lastAttemptAt` on failed sends and deferring recovery retries until each entry's `lastAttemptAt + backoff` window is eligible, while continuing to recover ready entries behind deferred ones. Landed from contributor PR #27710 by @Jimmy-xuzimo. Thanks @Jimmy-xuzimo.

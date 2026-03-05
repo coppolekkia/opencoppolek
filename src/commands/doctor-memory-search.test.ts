@@ -8,6 +8,7 @@ const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const importNodeLlamaCpp = vi.hoisted(() => vi.fn());
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -28,6 +29,10 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../memory/backend-config.js", () => ({
   resolveMemoryBackendConfig,
+}));
+
+vi.mock("../memory/node-llama.js", () => ({
+  importNodeLlamaCpp,
 }));
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
@@ -58,6 +63,8 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     resolveMemoryBackendConfig.mockReset();
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    importNodeLlamaCpp.mockReset();
+    importNodeLlamaCpp.mockRejectedValue(new Error("ERR_MODULE_NOT_FOUND"));
   });
 
   it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
