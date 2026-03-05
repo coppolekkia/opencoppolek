@@ -742,6 +742,7 @@ async function sendSubagentAnnounceDirectly(params: {
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterIsSubagent: boolean;
+  announceType?: SubagentAnnounceType;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -805,7 +806,15 @@ async function sendSubagentAnnounceDirectly(params: {
         }
         // Keep non-bound completion announcements coordinated via requester
         // session routing while sibling or descendant runs are still pending.
-        if (pendingDescendantRuns > 0) {
+        // Also route through parent when configured, so the orchestrator
+        // can synthesize every sub-agent result before delivery.
+        // Cron job completions are excluded from completionRouteViaParent:
+        // they must stay on the direct-send path so delivery state is truthful
+        // (the agent path returns success even without outbound payload).
+        const alwaysRouteViaParent =
+          cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true &&
+          params.announceType !== "cron job";
+        if (pendingDescendantRuns > 0 || alwaysRouteViaParent) {
           shouldSendCompletionDirectly = false;
         }
       }
@@ -847,20 +856,32 @@ async function sendSubagentAnnounceDirectly(params: {
       }
     }
 
-    const directOrigin = normalizeDeliveryContext(params.directOrigin);
+    // When completionRouteViaParent forced us off the direct-send path,
+    // prefer completionDirectOrigin (from hooks like subagent_delivery_target)
+    // over directOrigin (requester origin). This ensures hook-selected
+    // completion targets are respected even on the agent delivery path.
+    // Only apply this for completion-mode delivery (expectsCompletionMessage),
+    // because non-completion announces set completionDirectOrigin to the raw
+    // requester origin rather than the hook result, which would bypass
+    // session-derived routing (e.g. webchat hints or partial origins).
+    const routeViaParent = cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true;
+    const effectiveOrigin =
+      routeViaParent && params.expectsCompletionMessage && completionDirectOrigin
+        ? completionDirectOrigin
+        : normalizeDeliveryContext(params.directOrigin);
     const directChannelRaw =
-      typeof directOrigin?.channel === "string" ? directOrigin.channel.trim() : "";
+      typeof effectiveOrigin?.channel === "string" ? effectiveOrigin.channel.trim() : "";
     const directChannel =
       directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
-    const directTo = typeof directOrigin?.to === "string" ? directOrigin.to.trim() : "";
+    const directTo = typeof effectiveOrigin?.to === "string" ? effectiveOrigin.to.trim() : "";
     const hasDeliverableDirectTarget =
       !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
     const shouldDeliverExternally =
       !params.requesterIsSubagent &&
       (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
     const threadId =
-      directOrigin?.threadId != null && directOrigin.threadId !== ""
-        ? String(directOrigin.threadId)
+      effectiveOrigin?.threadId != null && effectiveOrigin.threadId !== ""
+        ? String(effectiveOrigin.threadId)
         : undefined;
     if (params.signal?.aborted) {
       return {
@@ -881,7 +902,7 @@ async function sendSubagentAnnounceDirectly(params: {
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
             channel: shouldDeliverExternally ? directChannel : undefined,
-            accountId: shouldDeliverExternally ? directOrigin?.accountId : undefined,
+            accountId: shouldDeliverExternally ? effectiveOrigin?.accountId : undefined,
             to: shouldDeliverExternally ? directTo : undefined,
             threadId: shouldDeliverExternally ? threadId : undefined,
             idempotencyKey: params.directIdempotencyKey,
@@ -924,6 +945,7 @@ async function deliverSubagentAnnouncement(params: {
   announceType?: SubagentAnnounceType;
   directIdempotencyKey: string;
   currentRunId?: string;
+  announceType?: SubagentAnnounceType;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
@@ -955,6 +977,7 @@ async function deliverSubagentAnnouncement(params: {
         directOrigin: params.directOrigin,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        announceType: params.announceType,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),
@@ -1414,6 +1437,7 @@ export async function runSubagentAnnounceFlow(params: {
       announceType,
       directIdempotencyKey,
       currentRunId: params.childRunId,
+      announceType,
       signal: params.signal,
     });
     // Cron delivery state should only be marked as delivered when we have a
