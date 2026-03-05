@@ -233,6 +233,172 @@ describe("extractAssistantText", () => {
     expect(result).toBe("I'll help you with that.\nHere are the results.");
   });
 
+  it("strips leaked legacy tool_call snippets rendered as text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Before<tool_call>exec tool="exec" command="ls -la /tmp" />After',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("BeforeAfter");
+  });
+
+  it("strips leaked legacy tool_call snippets regardless of tag case", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Before<TOOL_CALL>exec tool="exec" command="ls -la /tmp" />After',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("BeforeAfter");
+  });
+
+  it("strips multiple leaked legacy tool_call snippets in one text block", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'A<tool_call>exec tool="exec" command="ls" />B<tool_call>exec tool="read" command="cat /tmp/f" />C',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("ABC");
+  });
+
+  it("strips leaked legacy tool_call snippets with '<' inside quoted arguments", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Before<tool_call>exec tool="exec" command="cat < /tmp/in" />After',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("BeforeAfter");
+  });
+
+  it("strips both minimax markers and legacy tool_call snippets when both are present", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Before<tool_call>exec tool="exec" command="ls" />Mid<invoke name="Bash">pwd</invoke></minimax:tool_call>After',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("BeforeMidAfter");
+  });
+
+  it("keeps literal tool_call explanations with unrelated self-closing tags", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "To use the legacy format, write <tool_call> followed by args.\nHere is a JSX snippet: <Component />",
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(
+      "To use the legacy format, write <tool_call> followed by args.\nHere is a JSX snippet: <Component />",
+    );
+  });
+
+  it("keeps inline code examples of legacy tool_call snippets", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Use `<tool_call>exec tool="exec" command="ls -la /tmp" />` to describe the legacy format.',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(
+      'Use `<tool_call>exec tool="exec" command="ls -la /tmp" />` to describe the legacy format.',
+    );
+  });
+
+  it("keeps tilde-fenced code examples of legacy tool_call snippets", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: '~~~\n<tool_call>exec tool="exec" command="ls -la /tmp" />\n~~~',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe('~~~\n<tool_call>exec tool="exec" command="ls -la /tmp" />\n~~~');
+  });
+
+  it("keeps triple-backtick fenced code examples of legacy tool_call snippets", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: '```\n<tool_call>exec tool="exec" command="ls -la /tmp" />\n```',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe('```\n<tool_call>exec tool="exec" command="ls -la /tmp" />\n```');
+  });
+
+  it("does not strip invoke examples when no Minimax marker is present", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Use `<tool_call>exec tool="exec" command="ls -la /tmp" />` and <invoke name="Bash">pwd</invoke> in the docs.',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(
+      'Use `<tool_call>exec tool="exec" command="ls -la /tmp" />` and <invoke name="Bash">pwd</invoke> in the docs.',
+    );
+  });
+
   it("handles multiple invoke blocks in one message", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

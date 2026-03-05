@@ -9,29 +9,45 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
   return msg?.role === "assistant";
 }
 
+const LEGACY_TOOL_CALL_SNIPPET_RE = /<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/i;
+const MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE =
+  /```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`|<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/gi;
+
 /**
- * Strip malformed Minimax tool invocations that leak into text content.
- * Minimax sometimes embeds tool calls as XML in text blocks instead of
- * proper structured tool calls. This removes:
- * - <invoke name="...">...</invoke> blocks
- * - </minimax:tool_call> closing tags
+ * Strip leaked tool-call syntax that shows up as plain assistant text.
+ * This removes both:
+ * - Minimax XML markers (<invoke ...>...</invoke>, </minimax:tool_call>)
+ * - legacy inline <tool_call ... /> snippets
  */
-export function stripMinimaxToolCallXml(text: string): string {
+export function stripLeakedToolCallSyntax(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/minimax:tool_call/i.test(text)) {
+  const hasMinimaxMarkers = /minimax:tool_call/i.test(text);
+  const hasLegacyToolCallSnippet = LEGACY_TOOL_CALL_SNIPPET_RE.test(text);
+  if (!hasMinimaxMarkers && !hasLegacyToolCallSnippet) {
     return text;
   }
 
-  // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
-  let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
+  let cleaned = text;
+  if (hasMinimaxMarkers) {
+    // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
+    cleaned = cleaned.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
 
-  // Remove stray minimax tool tags.
-  cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
+    // Remove stray minimax tool tags.
+    cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
+  }
+  if (hasLegacyToolCallSnippet) {
+    // Remove legacy self-closing tool call snippets that can leak into user text.
+    cleaned = cleaned.replace(MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE, (match) =>
+      /^<tool_call\b/i.test(match) ? "" : match,
+    );
+  }
 
   return cleaned;
 }
+
+export const stripMinimaxToolCallXml = stripLeakedToolCallSyntax;
 
 /**
  * Strip downgraded tool call text representations that leak into text content.
@@ -212,7 +228,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+          stripDowngradedToolCallText(stripLeakedToolCallSyntax(text)),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
