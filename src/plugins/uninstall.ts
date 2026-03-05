@@ -62,7 +62,7 @@ export function resolveUninstallDirectoryTarget(params: {
 
 /**
  * Remove plugin references from config (pure config mutation).
- * Returns a new config with the plugin removed from entries, installs, allow, load.paths, and slots.
+ * Returns a new config with the plugin removed from entries, installs, allow, load.paths, slots, and channels.
  */
 export function removePluginFromConfig(
   cfg: OpenClawConfig,
