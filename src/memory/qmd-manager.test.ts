@@ -642,7 +642,7 @@ describe("QmdMemoryManager", () => {
       throw new Error("manager missing");
     }
     const syncPromise = manager.sync({ reason: "manual" });
-    const rejected = expect(syncPromise).rejects.toThrow("qmd update timed out after 20ms");
+    const rejected = expect(syncPromise).rejects.toThrow("qmd timed out after 20ms");
     await vi.advanceTimersByTimeAsync(20);
     await rejected;
     await manager.close();
@@ -2352,6 +2352,65 @@ describe("QmdMemoryManager", () => {
           await manager.close();
         }
       }
+    });
+  });
+
+  describe("runSubprocess delegation", () => {
+    it("runQmd delegates to spawn with qmd command and label", async () => {
+      const { manager } = await createManager({ mode: "status" });
+
+      const capturedCalls: Array<{ cmd: string; args: string[] }> = [];
+      spawnMock.mockImplementation((cmd: string, args: string[]) => {
+        capturedCalls.push({ cmd, args });
+        return createMockChild();
+      });
+
+      await manager.sync({ reason: "manual" });
+      await manager.close();
+
+      // At least one spawn call should use the qmd command (not mcporter).
+      const qmdCalls = capturedCalls.filter((c) => !isMcporterCommand(c.cmd));
+      expect(qmdCalls.length).toBeGreaterThan(0);
+    });
+
+    it("runMcporter delegates to spawn with mcporter command and label", async () => {
+      cfg = {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+          },
+        },
+      } as OpenClawConfig;
+
+      spawnMock.mockImplementation((cmd: string, args: string[]) => {
+        const child = createMockChild({ autoClose: false });
+        if (isMcporterCommand(cmd) && args[0] === "call") {
+          emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+          return child;
+        }
+        return createMockChild();
+      });
+
+      const { manager } = await createManager();
+      await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+      // Verify runMcporter went through spawn with "mcporter" as command.
+      const mcporterCalls = spawnMock.mock.calls.filter((call: unknown[]) =>
+        isMcporterCommand(call[0]),
+      );
+      expect(mcporterCalls.length).toBeGreaterThan(0);
+      // The call args should be a "call" subcommand invocation.
+      const callInvocation = mcporterCalls.find(
+        (call: unknown[]) => (call[1] as string[])[0] === "call",
+      );
+      expect(callInvocation).toBeDefined();
+
+      await manager.close();
     });
   });
 });
