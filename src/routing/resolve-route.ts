@@ -27,6 +27,8 @@ export type ResolveAgentRouteInput = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
+  /** Optional inbound text for mention-based explicit agent routing (e.g. "@tim"). */
+  text?: string | null;
   peer?: RoutePeer | null;
   /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
   parentPeer?: RoutePeer | null;
@@ -53,6 +55,7 @@ export type ResolvedAgentRoute = {
     | "binding.team"
     | "binding.account"
     | "binding.channel"
+    | "mention"
     | "default";
 };
 
@@ -70,6 +73,89 @@ function normalizeId(value: unknown): string {
     return String(value).trim();
   }
   return "";
+}
+
+function normalizeMentionAlias(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return normalizeToken(value);
+}
+
+type AgentMentionAliasCache = {
+  agentsRef: OpenClawConfig["agents"] | undefined;
+  aliases: Map<string, string>;
+};
+
+const agentMentionAliasCacheByCfg = new WeakMap<OpenClawConfig, AgentMentionAliasCache>();
+const STANDALONE_MENTION_TOKEN_REGEX =
+  /(^|[^\p{L}\p{N}_@])@([a-zA-Z0-9_-]+)(?!\.[\p{L}\p{N}_-])(?=$|[^\p{L}\p{N}_-])/gu;
+
+function extractStandaloneMentionTokens(text: string): string[] {
+  const tokens: string[] = [];
+  for (const match of text.matchAll(STANDALONE_MENTION_TOKEN_REGEX)) {
+    const token = match[2];
+    if (token) {
+      tokens.push(token);
+    }
+  }
+  return tokens;
+}
+
+function buildAgentMentionAliasMap(cfg: OpenClawConfig): Map<string, string> {
+  const agentsRef = cfg.agents;
+  const existing = agentMentionAliasCacheByCfg.get(cfg);
+  if (existing && existing.agentsRef === agentsRef) {
+    return existing.aliases;
+  }
+
+  const aliases = new Map<string, string>();
+  const addAlias = (alias: unknown, agentId: string) => {
+    const normalized = normalizeMentionAlias(alias);
+    if (!normalized || aliases.has(normalized)) {
+      return;
+    }
+    aliases.set(normalized, sanitizeAgentId(agentId));
+  };
+
+  for (const agent of listAgents(cfg)) {
+    const rawId = agent.id?.trim();
+    if (!rawId) {
+      continue;
+    }
+    addAlias(rawId, rawId);
+    addAlias(agent.name, rawId);
+    addAlias(agent.name?.replace(/\s+/g, ""), rawId);
+    addAlias(agent.identity?.name, rawId);
+    addAlias(agent.identity?.name?.replace(/\s+/g, ""), rawId);
+  }
+  agentMentionAliasCacheByCfg.set(cfg, { agentsRef, aliases });
+  return aliases;
+}
+
+function resolveMentionTargetAgentId(
+  cfg: OpenClawConfig,
+  text: string | null | undefined,
+): string | null {
+  if (!text || !text.includes("@")) {
+    return null;
+  }
+  const aliases = buildAgentMentionAliasMap(cfg);
+  if (aliases.size === 0) {
+    return null;
+  }
+
+  for (const token of extractStandaloneMentionTokens(text)) {
+    const key = normalizeMentionAlias(token);
+    if (!key) {
+      continue;
+    }
+    const matched = aliases.get(key);
+    if (matched) {
+      return matched;
+    }
+  }
+  return null;
 }
 
 function matchesAccountId(match: string | undefined, actual: string): boolean {
@@ -543,6 +629,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
+  const mentionTargetAgentId = resolveMentionTargetAgentId(input.cfg, input.text);
   const parentPeer = input.parentPeer
     ? {
         kind: normalizeChatType(input.parentPeer.kind) ?? input.parentPeer.kind,
@@ -551,7 +638,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     : null;
 
   const routeCache =
-    !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
+    !shouldLogDebug && !identityLinks && !mentionTargetAgentId
+      ? resolveRouteCacheForConfig(input.cfg)
+      : null;
   const routeCacheKey = routeCache
     ? buildResolvedRouteCacheKey({
         channel,
@@ -574,7 +663,12 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
   const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
 
-  const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
+  const choose = (
+    agentId: string,
+    matchedBy: ResolvedAgentRoute["matchedBy"],
+    opts?: { cache?: boolean },
+  ) => {
+    const shouldCache = opts?.cache !== false;
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
@@ -596,7 +690,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       mainSessionKey,
       matchedBy,
     };
-    if (routeCache && routeCacheKey) {
+    if (shouldCache && routeCache && routeCacheKey) {
       routeCache.set(routeCacheKey, route);
       if (routeCache.size > MAX_RESOLVED_ROUTE_CACHE_KEYS) {
         routeCache.clear();
@@ -618,6 +712,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     return `${value.kind}:${value.id}`;
   };
 
+  if (mentionTargetAgentId) {
+    if (shouldLogDebug) {
+      logDebug(`[routing] match: matchedBy=mention agentId=${mentionTargetAgentId}`);
+    }
+    return choose(mentionTargetAgentId, "mention", { cache: false });
+  }
+
   if (shouldLogDebug) {
     logDebug(
       `[routing] resolveAgentRoute: channel=${channel} accountId=${accountId} peer=${formatPeer(peer)} guildId=${guildId || "none"} teamId=${teamId || "none"} bindings=${bindings.length}`,
@@ -636,7 +737,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   };
 
   const tiers: Array<{
-    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">;
+    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default" | "mention">;
     enabled: boolean;
     scopePeer: RoutePeer | null;
     candidates: EvaluatedBinding[];

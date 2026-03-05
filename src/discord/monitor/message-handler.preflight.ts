@@ -339,6 +339,7 @@ export async function preflightDiscordMessage(
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
     memberRoleIds,
+    text: baseText,
     peer: {
       kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? author.id : messageChannelId,
