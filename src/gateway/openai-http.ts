@@ -131,6 +131,8 @@ function extractTextContent(content: unknown): string {
  * OpenAI message shape (`role`, `content`, `name`) are returned.
  * Returns `undefined` when there are no extras.
  */
+const USER_MESSAGE_BASE_KEYS = new Set(["role", "content", "name"]);
+
 function extractLastUserMessageExtras(
   messagesUnknown: unknown,
 ): Record<string, unknown> | undefined {
@@ -144,11 +146,10 @@ function extractLastUserMessageExtras(
   if (!lastUser) {
     return undefined;
   }
-  const BASE_KEYS = new Set(["role", "content", "name"]);
   const extras: Record<string, unknown> = {};
   let hasExtras = false;
   for (const key of Object.keys(lastUser)) {
-    if (!BASE_KEYS.has(key)) {
+    if (!USER_MESSAGE_BASE_KEYS.has(key)) {
       extras[key] = (lastUser as Record<string, unknown>)[key];
       hasExtras = true;
     }
