@@ -122,6 +122,14 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for undici stale keep-alive TLS TypeError (setServername on null socket)", () => {
+    // Reproduces: TypeError: Cannot read properties of null (reading 'setServername')
+    // thrown by node:_tls_wrap when undici tries to reuse a pooled TLS connection
+    // that was already closed by the remote server.
+    const error = new TypeError("Cannot read properties of null (reading 'setServername')");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns false for regular errors without network codes", () => {
     expect(isTransientNetworkError(new Error("Something went wrong"))).toBe(false);
     expect(isTransientNetworkError(new TypeError("Cannot read property"))).toBe(false);

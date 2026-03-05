@@ -28,7 +28,10 @@ import {
   PortInUseError,
 } from "./infra/ports.js";
 import { assertSupportedRuntime } from "./infra/runtime-guard.js";
-import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
+import {
+  installUnhandledRejectionHandler,
+  isTransientNetworkError,
+} from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
 import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
@@ -82,6 +85,13 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    // Transient network errors (e.g. undici stale keep-alive TLS connections) should
+    // not crash the gateway — log a warning and continue, matching the behaviour of
+    // the unhandledRejection handler for the same class of errors.
+    if (isTransientNetworkError(error)) {
+      console.warn("[openclaw] Suppressed transient network error:", formatUncaughtError(error));
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });

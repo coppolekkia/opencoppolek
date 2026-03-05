@@ -58,6 +58,9 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "network error",
   "network is unreachable",
   "temporary failure in name resolution",
+  // undici stale keep-alive: TLSSocket is null when a pooled connection has been
+  // closed by the remote end; reused on the next request before undici detects it
+  "setservername",
 ];
 
 function getErrorCause(err: unknown): unknown {
