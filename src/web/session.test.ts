@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
+const { createWaSocket, formatError, getStatusCode, logWebSelfId, waitForWaConnection } =
   await import("./session.js");
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
@@ -151,6 +151,30 @@ describe("web session", () => {
     expect(formatError(err)).toContain("status=408");
     expect(formatError(err)).toContain("Request Time-out");
     expect(formatError(err)).toContain("QR refs attempts ended");
+  });
+
+  it("getStatusCode unwraps lastDisconnect .error wrapper (Baileys v7)", () => {
+    // waitForWaConnection rejects with the whole lastDisconnect object:
+    // { error: BoomError, date }. getStatusCode must reach into .error.
+    expect(getStatusCode({ error: { output: { statusCode: 515 } } })).toBe(515);
+    expect(getStatusCode({ error: { output: { statusCode: 408 } } })).toBe(408);
+  });
+
+  it("getStatusCode still works with a direct BoomError (backward compat)", () => {
+    expect(getStatusCode({ output: { statusCode: 401 } })).toBe(401);
+    expect(getStatusCode({ output: { statusCode: 515 } })).toBe(515);
+  });
+
+  it("getStatusCode falls back to .status (backward compat)", () => {
+    expect(getStatusCode({ status: 200 })).toBe(200);
+    expect(getStatusCode({ status: 503 })).toBe(503);
+  });
+
+  it("getStatusCode returns undefined for unrecognized shapes", () => {
+    expect(getStatusCode(null)).toBeUndefined();
+    expect(getStatusCode(undefined)).toBeUndefined();
+    expect(getStatusCode("string error")).toBeUndefined();
+    expect(getStatusCode({ message: "no code" })).toBeUndefined();
   });
 
   it("does not clobber creds backup when creds.json is corrupted", async () => {

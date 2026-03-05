@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
-import { createWaSocket, logoutWeb, waitForWaConnection } from "./session.js";
+import {
+  createWaSocket,
+  logoutWeb,
+  waitForCredsSaveQueue,
+  waitForWaConnection,
+} from "./session.js";
 
 vi.mock("./session.js", () => {
   const createWaSocket = vi.fn(
@@ -17,8 +22,10 @@ vi.mock("./session.js", () => {
   const getStatusCode = vi.fn(
     (err: unknown) =>
       (err as { output?: { statusCode?: number } })?.output?.statusCode ??
+      (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode ??
       (err as { status?: number })?.status,
   );
+  const waitForCredsSaveQueue = vi.fn(async () => {});
   const webAuthExists = vi.fn(async () => false);
   const readWebSelfId = vi.fn(() => ({ e164: null, jid: null }));
   const logoutWeb = vi.fn(async () => true);
@@ -27,6 +34,7 @@ vi.mock("./session.js", () => {
     waitForWaConnection,
     formatError,
     getStatusCode,
+    waitForCredsSaveQueue,
     webAuthExists,
     readWebSelfId,
     logoutWeb,
@@ -39,6 +47,7 @@ vi.mock("./qr-image.js", () => ({
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
+const waitForCredsSaveQueueMock = vi.mocked(waitForCredsSaveQueue);
 const logoutWebMock = vi.mocked(logoutWeb);
 
 describe("login-qr", () => {
@@ -58,6 +67,24 @@ describe("login-qr", () => {
 
     expect(result.connected).toBe(true);
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+    expect(waitForCredsSaveQueueMock).toHaveBeenCalledTimes(1);
     expect(logoutWebMock).not.toHaveBeenCalled();
+  });
+
+  it("restarts login on wrapped 515 error (Baileys v7 lastDisconnect shape)", async () => {
+    // Baileys v7 wraps the BoomError under .error in lastDisconnect,
+    // and waitForWaConnection rejects with the whole lastDisconnect object.
+    waitForWaConnectionMock
+      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } }, date: new Date() })
+      .mockResolvedValueOnce(undefined);
+
+    const start = await startWebLoginWithQr({ timeoutMs: 5000 });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,base64");
+
+    const result = await waitForWebLogin({ timeoutMs: 5000 });
+
+    expect(result.connected).toBe(true);
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+    expect(waitForCredsSaveQueueMock).toHaveBeenCalledTimes(1);
   });
 });

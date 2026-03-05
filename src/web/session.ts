@@ -32,6 +32,12 @@ export {
 } from "./auth-store.js";
 
 let credsSaveQueue: Promise<void> = Promise.resolve();
+
+/** Wait for any in-flight creds writes to complete before reading from disk. */
+export function waitForCredsSaveQueue(): Promise<void> {
+  return credsSaveQueue;
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -186,6 +192,9 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 export function getStatusCode(err: unknown) {
   return (
     (err as { output?: { statusCode?: number } })?.output?.statusCode ??
+    // Baileys wraps BoomErrors under `.error` in lastDisconnect objects —
+    // unwrap so callers that pass the whole lastDisconnect still get the code.
+    (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode ??
     (err as { status?: number })?.status
   );
 }
