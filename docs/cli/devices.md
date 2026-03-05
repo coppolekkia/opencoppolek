@@ -92,3 +92,51 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 - These commands require `operator.pairing` (or `operator.admin`) scope.
 - `devices clear` is intentionally gated by `--yes`.
 - If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.
+
+## Troubleshooting playbook
+
+### `pairing required` when running `openclaw status`
+
+Symptoms:
+
+- `gateway connect failed: Error: pairing required`
+- Gateway logs show `reason=scope-upgrade`
+
+Repair:
+
+```bash
+openclaw devices list
+openclaw devices approve --latest
+openclaw devices list
+openclaw status
+```
+
+If pairing keeps recurring for the same device, verify auth/token alignment:
+
+```bash
+cat ~/.openclaw/identity/device-auth.json
+openclaw config get gateway.auth.token
+openclaw gateway status
+```
+
+### `device token mismatch` after updates/restarts
+
+Symptoms:
+
+- `unauthorized: device token mismatch (rotate/reissue device token)`
+
+Repair:
+
+```bash
+openclaw devices approve --latest
+openclaw status
+```
+
+If still broken, regenerate/sync gateway auth and reinstall service metadata:
+
+```bash
+openclaw doctor --generate-gateway-token --repair --non-interactive
+openclaw gateway install --force
+openclaw gateway restart
+openclaw status
+```
