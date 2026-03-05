@@ -32,6 +32,15 @@ const TIER_FREE = "free-tier";
 const TIER_LEGACY = "legacy-tier";
 const TIER_STANDARD = "standard-tier";
 
+type LoadCodeAssistFailure = {
+  endpoint: string;
+  status?: number;
+  statusText?: string;
+  message?: string;
+  reason?: string;
+  transient: boolean;
+};
+
 export type GeminiCliOAuthCredentials = {
   access: string;
   refresh: string;
@@ -494,7 +503,8 @@ async function discoverProject(accessToken: string): Promise<string> {
     allowedTiers?: Array<{ id?: string; isDefault?: boolean }>;
   } = {};
   let activeEndpoint = CODE_ASSIST_ENDPOINT_PROD;
-  let loadError: Error | undefined;
+  const loadFailures: LoadCodeAssistFailure[] = [];
+  let hasSuccessfulLoadCodeAssistResponse = false;
   for (const endpoint of LOAD_CODE_ASSIST_ENDPOINTS) {
     try {
       const response = await fetchWithTimeout(`${endpoint}/v1internal:loadCodeAssist`, {
@@ -508,19 +518,31 @@ async function discoverProject(accessToken: string): Promise<string> {
         if (isVpcScAffected(errorPayload)) {
           data = { currentTier: { id: TIER_STANDARD } };
           activeEndpoint = endpoint;
-          loadError = undefined;
           break;
         }
-        loadError = new Error(`loadCodeAssist failed: ${response.status} ${response.statusText}`);
+        loadFailures.push(
+          buildLoadCodeAssistFailure({
+            endpoint,
+            status: response.status,
+            statusText: response.statusText,
+            payload: errorPayload,
+          }),
+        );
         continue;
       }
 
       data = (await response.json()) as typeof data;
       activeEndpoint = endpoint;
-      loadError = undefined;
+      hasSuccessfulLoadCodeAssistResponse = true;
       break;
     } catch (err) {
-      loadError = err instanceof Error ? err : new Error("loadCodeAssist failed", { cause: err });
+      loadFailures.push(
+        buildLoadCodeAssistFailure({
+          endpoint,
+          transient: true,
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
     }
   }
 
@@ -528,11 +550,21 @@ async function discoverProject(accessToken: string): Promise<string> {
     Boolean(data.currentTier) ||
     Boolean(data.cloudaicompanionProject) ||
     Boolean(data.allowedTiers?.length);
-  if (!hasLoadCodeAssistData && loadError) {
-    if (envProject) {
-      return envProject;
+
+  if (!hasLoadCodeAssistData && loadFailures.length > 0) {
+    const hasPermanentFailure = loadFailures.some((failure) => !failure.transient);
+    const hasPermanentProdFailure = loadFailures.some(
+      (failure) => !failure.transient && failure.endpoint === CODE_ASSIST_ENDPOINT_PROD,
+    );
+    const hasSilentNonTransientFailure = hasSuccessfulLoadCodeAssistResponse && hasPermanentFailure;
+    const shouldSurfaceFailure =
+      !hasSuccessfulLoadCodeAssistResponse || hasSilentNonTransientFailure;
+    if (shouldSurfaceFailure) {
+      if (envProject && (!hasPermanentFailure || !hasPermanentProdFailure)) {
+        return envProject;
+      }
+      throw buildLoadCodeAssistFailureError(loadFailures, Boolean(envProject));
     }
-    throw loadError;
   }
 
   if (data.currentTier) {
@@ -621,6 +653,163 @@ function isVpcScAffected(payload: unknown): boolean {
       item &&
       (item as { reason?: string }).reason === "SECURITY_POLICY_VIOLATED",
   );
+}
+
+function extractApiError(payload: unknown): { message?: string; reason?: string } {
+  if (!payload || typeof payload !== "object") {
+    return {};
+  }
+  const error = (payload as { error?: unknown }).error;
+  if (!error || typeof error !== "object") {
+    return {};
+  }
+  const message =
+    typeof (error as { message?: unknown }).message === "string"
+      ? (error as { message: string }).message
+      : undefined;
+  const details = (error as { details?: unknown[] }).details;
+  if (!Array.isArray(details)) {
+    return { message };
+  }
+  const reason = details.find(
+    (detail): detail is { reason: string } =>
+      detail != null &&
+      typeof detail === "object" &&
+      typeof (detail as { reason?: unknown }).reason === "string",
+  ) as { reason: string } | undefined;
+  return {
+    message,
+    reason: reason?.reason,
+  };
+}
+
+function isLoadCodeAssistFailureTransient(params: {
+  status?: number;
+  reason?: string;
+  message?: string;
+}): boolean {
+  if (params.status === 429) {
+    return true;
+  }
+  if (typeof params.status === "number" && params.status >= 500) {
+    return true;
+  }
+  if (params.status === 400 || params.status === 401 || params.status === 403) {
+    return false;
+  }
+
+  const reason = (params.reason ?? "").toUpperCase();
+  if (reason.includes("PERMISSION") || reason.includes("AUTH")) {
+    return false;
+  }
+
+  const message = (params.message ?? "").toLowerCase();
+  if (
+    message.includes("permission denied") ||
+    message.includes("does not have permission") ||
+    message.includes("access denied")
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildLoadCodeAssistFailure(params: {
+  endpoint: string;
+  status?: number;
+  statusText?: string;
+  payload?: unknown;
+  transient?: boolean;
+  message?: string;
+}): LoadCodeAssistFailure {
+  const extracted = extractApiError(params.payload);
+  const message = params.message ?? extracted.message;
+  const reason = extracted.reason;
+  const transient =
+    typeof params.transient === "boolean"
+      ? params.transient
+      : isLoadCodeAssistFailureTransient({
+          status: params.status,
+          reason,
+          message,
+        });
+  return {
+    endpoint: params.endpoint,
+    status: params.status,
+    statusText: params.statusText,
+    message,
+    reason,
+    transient,
+  };
+}
+
+function summarizeLoadCodeAssistFailure(failure: LoadCodeAssistFailure): string {
+  const host = new URL(failure.endpoint).host;
+  const status =
+    typeof failure.status === "number"
+      ? `${failure.status} ${failure.statusText ?? ""}`.trim()
+      : "";
+  const reason = failure.reason ? ` reason=${failure.reason}` : "";
+  const message = failure.message ? ` msg=${failure.message}` : "";
+  return `${host}${status ? ` -> HTTP ${status}` : " -> network error"}${reason}${message}`;
+}
+
+function buildLoadCodeAssistFailureError(
+  failures: LoadCodeAssistFailure[],
+  hasEnvProject: boolean,
+): Error {
+  const lines: string[] = ["Gemini CLI OAuth project discovery failed (loadCodeAssist)."];
+  lines.push(...failures.map((failure) => `- ${summarizeLoadCodeAssistFailure(failure)}`));
+
+  const hasAuthLikeFailure = failures.some(
+    (failure) =>
+      failure.status === 401 ||
+      failure.status === 403 ||
+      (failure.reason ?? "").toUpperCase().includes("PERMISSION") ||
+      (failure.reason ?? "").toUpperCase().includes("AUTH") ||
+      (failure.message ?? "").toLowerCase().includes("permission denied") ||
+      (failure.message ?? "").toLowerCase().includes("does not have permission") ||
+      (failure.message ?? "").toLowerCase().includes("access denied"),
+  );
+  const hasNonTransientFailure = failures.some((failure) => !failure.transient);
+  if (hasNonTransientFailure) {
+    if (hasAuthLikeFailure) {
+      lines.push(
+        "Detected non-retryable auth/permission error. This account likely lacks Gemini CLI (Cloud Code Assist) access.",
+      );
+    } else {
+      lines.push(
+        "Detected non-retryable loadCodeAssist error (request/config mismatch). Re-auth may not fix this immediately.",
+      );
+    }
+    if (hasEnvProject) {
+      lines.push(
+        "GOOGLE_CLOUD_PROJECT is set, but non-retryable errors cannot be bypassed with project fallback.",
+      );
+    } else {
+      lines.push(
+        "Set GOOGLE_CLOUD_PROJECT only if your account already has access but requires project binding.",
+      );
+    }
+    if (hasAuthLikeFailure) {
+      lines.push(
+        "Try signing in with a Google account that can use Gemini CLI, or use provider `google` with API key auth.",
+      );
+    } else {
+      lines.push(
+        "Verify the request/config for loadCodeAssist and use provider `google` with API key auth as a temporary workaround.",
+      );
+    }
+  } else {
+    lines.push("All loadCodeAssist endpoints failed transiently.");
+    if (!hasEnvProject) {
+      lines.push(
+        "If this account is project-bound, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID and retry.",
+      );
+    }
+  }
+  return new Error(lines.join("\n"));
 }
 
 function getDefaultTier(
