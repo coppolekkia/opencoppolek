@@ -28,6 +28,54 @@ import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
 
+/**
+ * Merge a caller-supplied config override with the global config.
+ *
+ * When a plugin (or any external caller) passes a partial / empty config
+ * object, the previous `configOverride ?? loadConfig()` expression treated
+ * the empty object as truthy and skipped the global config entirely.
+ * This caused the model-selection pipeline to fall back to the hard-coded
+ * DEFAULT_PROVIDER ("anthropic") instead of honouring the user's configured
+ * `agents.defaults.model`.
+ *
+ * The merge strategy:
+ * 1. No override → return global config as-is.
+ * 2. Override already carries `agents.defaults` → trust it fully (existing
+ *    callers such as Telegram / Discord pass a complete config).
+ * 3. Override is partial (e.g. `{}`) → shallow-merge top-level keys with the
+ *    global config, and deep-merge the `agents` and `models` subtrees so that
+ *    the user's model / provider / alias settings are inherited.
+ */
+function resolveEffectiveConfig(override?: OpenClawConfig): OpenClawConfig {
+  if (!override) {
+    return loadConfig();
+  }
+  // Fast path: if the override already contains agent defaults, treat it as
+  // authoritative — this is the common case for built-in channel dispatchers.
+  if (override.agents?.defaults !== undefined) {
+    return override;
+  }
+  const base = loadConfig();
+  const baseDefaults = base.agents?.defaults ?? {};
+  const overrideDefaults = override.agents?.defaults ?? {};
+  return {
+    ...base,
+    ...override,
+    agents: {
+      ...base.agents,
+      ...override.agents,
+      defaults: {
+        ...baseDefaults,
+        ...overrideDefaults,
+      },
+    },
+    models: {
+      ...base.models,
+      ...override.models,
+    },
+  };
+}
+
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
     if (!Array.isArray(list)) {
@@ -59,7 +107,7 @@ export async function getReplyFromConfig(
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
-  const cfg = configOverride ?? loadConfig();
+  const cfg = resolveEffectiveConfig(configOverride);
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
