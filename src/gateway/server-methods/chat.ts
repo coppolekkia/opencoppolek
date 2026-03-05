@@ -1142,7 +1142,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
-      createIfMissing: false,
+      // createIfMissing: true so that ACP oneshot/run sessions that never wrote
+      // a transcript file don't hard-fail injection (#36170).
+      createIfMissing: true,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(
